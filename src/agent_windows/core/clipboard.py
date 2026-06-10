@@ -1,0 +1,1 @@
+"""Clipboard operations: get, set."""
