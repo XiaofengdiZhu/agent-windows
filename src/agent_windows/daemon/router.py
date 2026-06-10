@@ -157,6 +157,36 @@ def _observe(params: dict) -> dict[str, Any]:
     return {"output": "\n".join(parts)}
 
 
+# ── Grounding handler ─────────────────────────────────────────────
+
+
+@handler("ground")
+def _ground(params: dict) -> dict[str, Any]:
+    """Visual grounding: locate element coordinates."""
+    from agent_windows.core.grounding import ground_element
+
+    description = params.get("description", "")
+    if not description:
+        raise ValueError("description is required")
+
+    result = ground_element(description)
+    return {
+        "output": (
+            f"## Grounding Result\n"
+            f"Target: \"{description}\"\n"
+            f"Coordinate: ({result['x']}, {result['y']})\n"
+            f"Confidence: {result['confidence']}\n"
+            f"Method: {result['method']}\n"
+            f"Screenshot: {result['screenshot_path']} (marked)"
+        ),
+        "x": result["x"],
+        "y": result["y"],
+        "confidence": result["confidence"],
+        "method": result["method"],
+        "screenshot_path": result["screenshot_path"],
+    }
+
+
 # ── Input handlers ────────────────────────────────────────────────
 
 
