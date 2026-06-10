@@ -408,38 +408,21 @@ def _control_type_name(type_id: int) -> str:
     global _CONTROL_TYPE_MAP
 
     if not _CONTROL_TYPE_MAP:
-        # Build the map from the enums module
+        # Build the map from the uia module's ControlType class
         try:
             from agent_windows.uia.core import ControlType
             for attr in dir(ControlType):
-                if attr.startswith("UIA_") and attr.endswith("ControlTypeId"):
-                    name = attr[4:-14] + "Control"  # e.g. "ButtonControl"
-                    _CONTROL_TYPE_MAP[getattr(ControlType, attr)] = name
+                if attr.endswith("Control"):
+                    val = getattr(ControlType, attr)
+                    if isinstance(val, int):
+                        _CONTROL_TYPE_MAP[val] = attr
         except Exception:
-            # Fallback: common types
-            _CONTROL_TYPE_MAP = {
-                50000: "ButtonControl", 50001: "CalendarControl",
-                50002: "CheckBoxControl", 50003: "ComboBoxControl",
-                50004: "EditControl", 50005: "HyperlinkControl",
-                50006: "ImageControl", 50007: "ListItemControl",
-                50008: "ListControl", 50009: "MenuBarControl",
-                50010: "MenuControl", 50011: "MenuItemControl",
-                50012: "ProgressBarControl", 50013: "RadioButtonControl",
-                50014: "ScrollBarControl", 50015: "SliderControl",
-                50016: "SpinnerControl", 50017: "StatusBarControl",
-                50018: "TabControl", 50019: "TabItemControl",
-                50020: "TextControl", 50021: "ToolBarControl",
-                50022: "ToolTipControl", 50023: "TreeControl",
-                50024: "TreeItemControl", 50025: "CustomControl",
-                50026: "GroupControl", 50027: "ThumbControl",
-                50028: "DataGridControl", 50029: "DataItemControl",
-                50030: "DocumentControl", 50031: "SplitButtonControl",
-                50032: "WindowControl", 50033: "PaneControl",
-                50034: "HeaderControl", 50035: "HeaderItemControl",
-                50036: "TableControl", 50037: "TitleBarControl",
-                50038: "SeparatorControl", 50039: "SemanticZoomControl",
-                50040: "AppBarControl",
-            }
+            pass
+
+        # Fill in any gaps with hardcoded fallback
+        _CONTROL_TYPE_MAP.setdefault(50000, "ButtonControl")
+        _CONTROL_TYPE_MAP.setdefault(50032, "WindowControl")
+        _CONTROL_TYPE_MAP.setdefault(50033, "PaneControl")
 
     return _CONTROL_TYPE_MAP.get(type_id, f"Unknown({type_id})")
 

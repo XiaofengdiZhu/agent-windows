@@ -64,22 +64,35 @@ def dispatch(
 
 
 def print_result(result: dict[str, Any], ctx: typer.Context | None = None) -> None:
-    """Print a result dict as formatted text or JSON."""
+    """Print a result dict as formatted text or JSON.
+
+    Handles Windows console encoding (GBK) gracefully by writing directly
+    to stdout buffer with UTF-8 encoding.
+    """
     fmt = "text"
     if ctx and ctx.obj:
         fmt = ctx.obj.get("format", "text")
 
     if fmt == "json":
         import json
-        typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+        text = json.dumps(result, ensure_ascii=False, indent=2)
     else:
-        # Text format: render the "output" field if present, else dump keys
         output = result.get("output")
         if output:
-            typer.echo(output)
+            text = output
         else:
-            # Fallback: render key-value pairs
+            lines = []
             for key, value in result.items():
                 if key == "output":
                     continue
-                typer.echo(f"{key}: {value}")
+                lines.append(f"{key}: {value}")
+            text = "\n".join(lines)
+
+    # Write to stdout buffer with UTF-8, bypassing Windows GBK console encoding
+    try:
+        sys.stdout.buffer.write(text.encode("utf-8", errors="replace"))
+        sys.stdout.buffer.write(b"\n")
+        sys.stdout.buffer.flush()
+    except Exception:
+        # Fallback: let typer handle it (may fail on non-UTF-8 characters)
+        typer.echo(text)
