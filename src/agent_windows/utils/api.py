@@ -73,7 +73,7 @@ def _call_openai_compatible(image: Image.Image, prompt: str, config: dict) -> st
     client = OpenAI(
         api_key=api_key,
         base_url=config.get("api_base", "https://api.openai.com/v1"),
-        timeout=30.0,
+        timeout=float(config.get("timeout", 30)),
     )
 
     b64 = encode_image(image)
@@ -107,7 +107,7 @@ def _call_anthropic(image: Image.Image, prompt: str, config: dict) -> str:
     import anthropic
 
     api_key = config.get("api_key", "") or _get_api_key_env()
-    client = anthropic.Anthropic(api_key=api_key, timeout=30.0)
+    client = anthropic.Anthropic(api_key=api_key, timeout=float(config.get("timeout", 30)))
 
     b64 = encode_image(image)
     model = config.get("model", "claude-sonnet-4-6-20250514")

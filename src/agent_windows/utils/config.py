@@ -60,6 +60,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "model": "gpt-4o-mini",
         "api_base": "https://api.openai.com/v1",
         "api_key": "",
+        "timeout": 30,
         "width": 1000,
         "height": 1000,
         "crop_size": 400,
