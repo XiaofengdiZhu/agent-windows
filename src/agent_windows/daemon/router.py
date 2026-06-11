@@ -218,6 +218,58 @@ def _ask_vision(params: dict) -> dict[str, Any]:
     }
 
 
+@handler("detect")
+def _detect(params: dict) -> dict[str, Any]:
+    """Visual detection: detect multiple targets with bounding boxes."""
+    from agent_windows.core.grounding import detect_elements
+
+    description = params.get("description", "")
+    if not description:
+        raise ValueError("description is required")
+
+    result = detect_elements(
+        description=description,
+        image_path=params.get("image"),
+        model=params.get("model"),
+        max_targets=params.get("max_targets", 20),
+        output_path=params.get("output"),
+    )
+
+    targets = result["targets"]
+    if targets:
+        lines = [
+            "## Detection Result",
+            f'Description: "{result["description"]}"',
+            f"Count: {result['count']}",
+            f"Screenshot: {result['screenshot_path']} (marked)",
+            "",
+            "Targets:",
+        ]
+        for t in targets:
+            b = t["box"]
+            lines.append(
+                f"  #{t['index']}: label=\"{t['label']}\", "
+                f"box=({b['x1']}, {b['y1']}, {b['x2']}, {b['y2']})"
+            )
+        text_output = "\n".join(lines)
+    else:
+        text_output = (
+            "## Detection Result\n"
+            f'Description: "{result["description"]}"\n'
+            f"Count: 0\n"
+            "No targets found.\n"
+            f"Screenshot: {result['screenshot_path']}"
+        )
+
+    return {
+        "output": text_output,
+        "description": result["description"],
+        "count": result["count"],
+        "targets": result["targets"],
+        "screenshot_path": result["screenshot_path"],
+    }
+
+
 # ── Input handlers ────────────────────────────────────────────────
 
 

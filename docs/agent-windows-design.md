@@ -151,6 +151,7 @@ COM STA（单线程单元）要求初始化 COM 的线程必须有 Windows 消�
 | `snapshot` | UIA 无障碍树遍历，返回语义化文本 |
 | `screenshot [--output PATH]` | 截图返回图片路径 |
 | `ground <description>` | 视觉模型定位元素坐标 |
+| `detect <description>` | 视觉模型检测目标范围（支持多目标，返回 bounding box 列表） |
 | `ask-vision <prompt> [--image PATH] [--model MODEL]` | 自由视觉问答：将截图（或指定图片）+ 自定义提示词发给视觉模型，返回模型的原始文本响应 |
 
 #### `ask-vision` 详细设计
@@ -199,6 +200,132 @@ agent-windows ask-vision "当前活动窗口的标题是什么？窗口中是否
 - 复用 `grounding` 的视觉模型 API 客户端和配置（engine / api_base / api_key / timeout）
 - 不进行坐标解析，直接返回模型响应文本
 - 如果 agent 需要坐标，使用 `ground`；如果需要语义理解、OCR、状态判断等，使用 `ask-vision`
+
+#### `detect` 详细设计
+
+**用途：** 检测屏幕上所有匹配描述的目标，返回每个目标的 bounding box（坐标范围）。支持多目标检测，填补 `ground`（单点）与 `ask-vision`（无结构化坐标）之间的空白。
+
+**参数：**
+
+| 参数 | 说明 |
+|------|------|
+| `<description>` | 目标描述（如 "桌面上的 PDF 文件图标"） |
+| `--image PATH` | 指定图片文件路径（默认：自动截取当前屏幕） |
+| `--model MODEL` | 覆盖配置文件中的视觉模型（可选） |
+| `--max-targets N` | 最大返回目标数（默认 20，避免输出过大） |
+| `--output PATH` | 保存标注后的截图（可选） |
+
+**示例：**
+
+```bash
+# 检测桌面上的所有 PDF 文件图标
+agent-windows detect "桌面上的 PDF 文件图标"
+
+# 检测指定图片中的表格
+agent-windows detect "表格区域" --image report.png
+
+# 检测所有复选框，最多返回 10 个
+agent-windows detect "复选框控件" --max-targets 10
+
+# 检测错误弹窗
+agent-windows detect "错误对话框"
+```
+
+**输出格式：**
+
+正常结果（3 个目标）：
+```
+## Detection Result
+Description: "桌面上的 PDF 文件图标"
+Count: 3
+Screenshot: C:\Users\...\detection-1234567890.png (marked)
+
+Targets:
+  #1: label="report.pdf", box=(120, 340, 180, 400)
+  #2: label="summary.pdf", box=(220, 340, 280, 400)
+  #3: label="data.pdf", box=(320, 340, 380, 400)
+```
+
+零目标结果：
+```
+## Detection Result
+Description: "错误对话框"
+Count: 0
+No targets found.
+Screenshot: C:\Users\...\detection-1234567890.png
+```
+
+JSON 输出（`--format json`，全局选项）：
+```json
+{
+  "description": "桌面上的 PDF 文件图标",
+  "count": 3,
+  "targets": [
+    {"index": 1, "label": "report.pdf", "box": {"x1": 120, "y1": 340, "x2": 180, "y2": 400}},
+    {"index": 2, "label": "summary.pdf", "box": {"x1": 220, "y1": 340, "x2": 280, "y2": 400}},
+    {"index": 3, "label": "data.pdf", "box": {"x1": 320, "y1": 340, "x2": 380, "y2": 400}}
+  ],
+  "screenshot_path": "C:\\Users\\...\\detection-1234567890.png"
+}
+```
+
+**坐标约定：**
+- `(x1, y1)` = 目标左上角，`(x2, y2)` = 目标右下角
+- 坐标为物理屏幕像素，可直接用于 `click`（点击 box 中心：`((x1+x2)/2, (y1+y2)/2)`）或 `drag`（框选）
+- 若模型返回 x2 < x1 或 y2 < y1，自动交换使其规范化
+- 所有坐标经过 `model_to_physical()` 转换后钳制到 `[0, screen_width]` × `[0, screen_height]` 范围
+
+**三个视觉命令的对比：**
+
+| 方面 | `ground` | `detect` | `ask-vision` |
+|------|----------|----------|--------------|
+| 目的 | 精确定位单个元素的点击坐标 | 检测所有匹配目标的范围 | 任意视觉问答 |
+| 输出 | 单点 `(x, y)` | bounding box 列表 `[{x1,y1,x2,y2}]` | 原始文本 |
+| 多目标 | ❌ 每次返回一个 | ✅ 返回所有匹配项 | 取决于提示词 |
+| 精度 | 高（两轮裁剪） | 中（单轮 + 坐标管道） | 无保证 |
+| 坐标可用性 | ✅ 直接给 `click` 用 | ✅ 经坐标管道转换 | ❌ 不可靠 |
+| Prompt | 固定模板，注入坐标指令 | 固定模板，注入 JSON bbox 指令 | 完全自定义 |
+| `observe` 集成 | ✅ `--ground` | ❌ 独立命令 | ❌ 独立命令 |
+| 典型场景 | "点击保存按钮" | "选中桌面上所有 PDF" | "这个复选框勾选了吗？" |
+
+**实现方案：**
+
+1. **单轮检测**（无两轮裁剪）：全屏截图 → 缩放到模型坐标空间 → 发送给视觉模型，要求返回所有匹配目标的 bounding box 列表
+2. **坐标管道**：复用 `grounding` 的 `prepare_model_input()` + `model_to_physical()`。对每个 box 的左上角 (x1, y1) 和右下角 (x2, y2) 分别调用 `model_to_physical()` 转换，转换后钳制到屏幕范围。若 box 部分或完全落在黑边填充区域内，钳制后的坐标仍为有效值（0 或屏幕边界）
+3. **Prompt 设计**：要求模型返回 JSON 数组，每个元素包含 `{label, bbox}`。可通过 `[grounding.prompts.detect]` 自定义（与 `ground` 的提示词配置一致）
+4. **标注截图**：始终保存标注后的截图（与 `ground` 行为一致），在截图上为每个目标画彩色编号矩形框
+5. **复用配置**：与 `grounding` 共享配置（engine / api_base / api_key / timeout / width / height）
+
+**默认 Prompt：**
+
+```
+Detect all elements matching: {description}
+Return a JSON array. Each element must have:
+- "label": a short text label for the element
+- "bbox": [x1, y1, x2, y2] where (x1,y1) is top-left, (x2,y2) is bottom-right
+  Coordinates are in the image coordinate space (0,0) is top-left, width and height match the image dimensions.
+  Values are integers in pixels.
+
+Return at most {max_targets} elements.
+Return ONLY the JSON array. If no elements match, return [].
+
+Example response:
+[{"label": "icon", "bbox": [100, 200, 150, 250]}]
+```
+
+**输出解析（多级降级策略）：**
+
+1. 尝试 `json.loads(response)` 直接解析（理想情况）
+2. 提取 ` ```json ... ``` ` 代码块内容后解析（常见模型行为）
+3. 用正则提取第一个完整的 `[...]`（平衡括号匹配），再解析
+4. 以上均失败 → 返回原始文本，`count: 0`，`targets: []`
+
+解析成功后，对每个 bbox 做规范化：
+- 若 `x2 < x1`，交换 x1/x2；若 `y2 < y1`，交换 y1/y1
+- 钳制到模型坐标空间范围
+- 坐标转换后钳制到物理屏幕范围
+
+**标注颜色方案：** 循环使用 8 色调色板 `["#FF0000", "#00AA00", "#0066FF", "#FF8800", "#AA00FF", "#00AAAA", "#FF00AA", "#888800"]`，框线宽度 2px，在框的左上角标注编号（白底黑字）。
 
 ### 输入命令
 

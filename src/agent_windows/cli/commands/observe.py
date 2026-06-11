@@ -71,3 +71,24 @@ def ask_vision(
         params["output"] = output
     result = dispatch("ask-vision", params, ctx)
     print_result(result, ctx)
+
+
+@app.command()
+def detect(
+    ctx: typer.Context,
+    description: str = typer.Argument(help="Description of targets to detect"),
+    image: str = typer.Option("", "--image", "-i", help="Path to image file (default: screenshot)"),
+    model: str = typer.Option("", "--model", "-m", help="Override vision model"),
+    max_targets: int = typer.Option(20, "--max-targets", help="Maximum number of targets to return"),
+    output: str = typer.Option("", "--output", "-o", help="Save annotated screenshot to path"),
+) -> None:
+    """Detect multiple visual targets, returning bounding boxes."""
+    params: dict = {"description": description, "max_targets": max_targets}
+    if image:
+        params["image"] = image
+    if model:
+        params["model"] = model
+    if output:
+        params["output"] = output
+    result = dispatch("detect", params, ctx)
+    print_result(result, ctx)

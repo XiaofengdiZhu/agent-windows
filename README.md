@@ -26,6 +26,9 @@ agent-windows observe
 # Visual grounding (locate element by description)
 agent-windows ground "任务栏"
 
+# Detect multiple targets (returns bounding boxes)
+agent-windows detect "桌面上的 PDF 文件图标"
+
 # Visual Q&A (custom prompt + screenshot)
 agent-windows ask-vision "屏幕上有哪些窗口？是否有错误弹窗？"
 
@@ -61,9 +64,10 @@ CLI (Typer, ~5ms) → Named Pipe IPC → Daemon (COM STA, ~20ms response)
 | `snapshot` | UIA accessibility tree |
 | `screenshot [-o PATH]` | Screen capture |
 | `ground DESCRIPTION` | Visual coordinate grounding |
+| `detect DESCRIPTION [-i IMAGE] [--max-targets N]` | Multi-target bounding box detection |
 | `ask-vision PROMPT [-i IMAGE] [-m MODEL]` | Free-form visual Q&A |
-| Command | Description |
-|---------|-------------|
+
+### Input
 | `click X Y [--right] [--double]` | Mouse click |
 | `type TEXT [--at X,Y] [--enter] [--clear]` | Type text (Unicode direct input) |
 | `scroll X Y [--direction up\|down] [--amount N]` | Scroll |

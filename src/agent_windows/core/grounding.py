@@ -4,8 +4,12 @@ Implements the coordinate pipeline from the design doc:
 1. Full screenshot → resize to model space → coarse locate
 2. Crop around coarse point → resize to model space → fine locate
 3. Drift check → final coordinate
+
+Also provides detect_elements() for multi-target bounding box detection
+and ask_vision() for free-form visual Q&A.
 """
 
+import json
 import logging
 import re
 import time
@@ -249,3 +253,259 @@ def ask_vision(
         "screenshot_path": saved_path or "",
         "model_used": effective_config.get("model", ""),
     }
+
+
+# ── detect: multi-target bounding box detection ──────────────────────
+
+
+# 8-color palette for annotation
+_PALETTE = [
+    "#FF0000", "#00AA00", "#0066FF", "#FF8800",
+    "#AA00FF", "#00AAAA", "#FF00AA", "#888800",
+]
+
+_DEFAULT_DETECT_PROMPT = (
+    "Detect all elements matching: {description}\n"
+    "Return a JSON array. Each element must have:\n"
+    '- "label": a short text label for the element\n'
+    '- "bbox": [x1, y1, x2, y2] where (x1,y1) is top-left, (x2,y2) is bottom-right\n'
+    "  Coordinates are in the image coordinate space (0,0) is top-left, "
+    "width and height match the image dimensions.\n"
+    "  Values are integers in pixels.\n"
+    "\n"
+    "Return at most {max_targets} elements.\n"
+    "Return ONLY the JSON array. If no elements match, return [].\n"
+    "\n"
+    "Example response:\n"
+    '[{{"label": "icon", "bbox": [100, 200, 150, 250]}}]'
+)
+
+
+def detect_elements(
+    description: str,
+    image_path: str | None = None,
+    model: str | None = None,
+    max_targets: int = 20,
+    output_path: str | None = None,
+) -> dict[str, Any]:
+    """Detect all visual targets matching a description, return bounding boxes.
+
+    Args:
+        description: Natural language description of targets to detect.
+        image_path: Path to an image file. If None, captures a fresh screenshot.
+        model: Override the vision model from config (optional).
+        max_targets: Maximum number of targets to return (default 20).
+        output_path: Save annotated screenshot to this path (optional).
+
+    Returns:
+        Dict with: description, count, targets (list of bounding boxes),
+        screenshot_path.
+    """
+    config = load_config()
+    ground_config = config.get("grounding", {})
+
+    if not ground_config.get("enabled", True):
+        raise RuntimeError("Visual grounding is disabled in config")
+
+    # Build effective config with optional model override
+    effective_config = dict(ground_config)
+    if model:
+        effective_config["model"] = model
+
+    # Load image from file or capture screenshot
+    if image_path:
+        p = Path(image_path)
+        if not p.exists():
+            raise ValueError(f"Image file not found: {image_path}")
+        image = Image.open(p)
+        if image.mode not in ("RGB", "L"):
+            image = image.convert("RGB")
+    else:
+        from agent_windows.core.screenshot import capture_screenshot
+        image = capture_screenshot()
+
+    src_width, src_height = image.size
+    model_w = ground_config.get("width", 1000)
+    model_h = ground_config.get("height", 1000)
+
+    # Prepare model input
+    model_img, *_ = prepare_model_input(image, model_w, model_h)
+
+    # Build prompt
+    prompts = ground_config.get("prompts", {})
+    detect_prompt = prompts.get("detect", _DEFAULT_DETECT_PROMPT)
+    prompt = detect_prompt.format(description=description, max_targets=max_targets)
+
+    # Call vision model
+    logger.info("detect: detecting '%s' (max %d targets)", description[:50], max_targets)
+    response = call_vision_model(model_img, prompt, effective_config, max_tokens=1024)
+    logger.debug("detect response: %s", response[:300])
+
+    # Parse JSON response
+    raw_targets = _parse_detection_json(response)
+    logger.info("detect: parsed %d raw targets", len(raw_targets))
+
+    # Convert coordinates for each target
+    targets = []
+    for i, raw in enumerate(raw_targets[:max_targets]):
+        bbox = raw.get("bbox")
+        if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+            logger.warning("Skipping target #%d: invalid bbox %s", i + 1, bbox)
+            continue
+
+        mx1, my1, mx2, my2 = (int(v) for v in bbox)
+
+        # Auto-swap inverted boxes
+        if mx2 < mx1:
+            mx1, mx2 = mx2, mx1
+        if my2 < my1:
+            my1, my2 = my2, my1
+
+        # Convert to physical pixels
+        px1, py1 = model_to_physical(mx1, my1, model_w, model_h, src_width, src_height)
+        px2, py2 = model_to_physical(mx2, my2, model_w, model_h, src_width, src_height)
+
+        targets.append({
+            "index": i + 1,
+            "label": str(raw.get("label", "")),
+            "box": {"x1": px1, "y1": py1, "x2": px2, "y2": py2},
+        })
+
+    # Save annotated screenshot
+    marked_path = _save_detection_screenshot(image, targets, output_path)
+
+    return {
+        "description": description,
+        "count": len(targets),
+        "targets": targets,
+        "screenshot_path": str(marked_path),
+    }
+
+
+def _parse_detection_json(response: str) -> list[dict]:
+    """Parse detection JSON from model response with 4-level fallback.
+
+    Levels:
+    1. Direct json.loads()
+    2. Extract ```json ... ``` code block
+    3. Balanced bracket matching for first [...]
+    4. Return empty list
+
+    Returns:
+        List of dicts, each with "label" and "bbox" keys.
+        Malformed entries are silently skipped.
+    """
+    # Level 1: Direct parse
+    try:
+        result = json.loads(response)
+        if isinstance(result, list):
+            return _validate_targets(result)
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Level 2: Extract code block
+    code_block = re.search(r"```(?:json)?\s*\n?(.*?)\n?\s*```", response, re.DOTALL)
+    if code_block:
+        try:
+            result = json.loads(code_block.group(1).strip())
+            if isinstance(result, list):
+                return _validate_targets(result)
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    # Level 3: Balanced bracket matching
+    start = response.find("[")
+    if start != -1:
+        depth = 0
+        for i in range(start, len(response)):
+            if response[i] == "[":
+                depth += 1
+            elif response[i] == "]":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        result = json.loads(response[start : i + 1])
+                        if isinstance(result, list):
+                            return _validate_targets(result)
+                    except (json.JSONDecodeError, ValueError):
+                        break
+
+    # Level 4: Parsing failed
+    logger.warning("detect: failed to parse JSON from model response")
+    return []
+
+
+def _validate_targets(raw_list: list) -> list[dict]:
+    """Validate and normalize parsed target list.
+
+    Skips entries without valid "label" and "bbox" keys.
+    Converts bbox values to int.
+    """
+    valid = []
+    for item in raw_list:
+        if not isinstance(item, dict):
+            continue
+        label = item.get("label")
+        bbox = item.get("bbox")
+        if not isinstance(label, str):
+            continue
+        if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+            continue
+        try:
+            bbox_int = [int(v) for v in bbox]
+        except (ValueError, TypeError):
+            continue
+        valid.append({"label": label, "bbox": bbox_int})
+    return valid
+
+
+def _save_detection_screenshot(
+    image: Image.Image,
+    targets: list[dict],
+    output_path: str | None = None,
+) -> Path:
+    """Save annotated screenshot with numbered bounding boxes."""
+    from PIL import ImageDraw, ImageFont
+
+    marked = image.copy()
+    draw = ImageDraw.Draw(marked)
+
+    try:
+        font = ImageFont.load_default(size=14)
+    except TypeError:
+        font = ImageFont.load_default()
+
+    for t in targets:
+        b = t["box"]
+        x1, y1, x2, y2 = b["x1"], b["y1"], b["x2"], b["y2"]
+        color = _PALETTE[(t["index"] - 1) % len(_PALETTE)]
+
+        # Draw bounding box
+        draw.rectangle([(x1, y1), (x2, y2)], outline=color, width=2)
+
+        # Draw label
+        label_text = f"#{t['index']} {t['label']}".strip()
+        text_pos = (x1 + 2, y1 + 2)
+        text_bbox = draw.textbbox(text_pos, label_text, font=font)
+        text_bg = [
+            text_bbox[0] - 1,
+            text_bbox[1] - 1,
+            text_bbox[2] + 1,
+            text_bbox[3] + 1,
+        ]
+        draw.rectangle(text_bg, fill="white")
+        draw.text(text_pos, label_text, fill="black", font=font)
+
+    # Save
+    if output_path:
+        save_target = Path(output_path)
+        save_target.parent.mkdir(parents=True, exist_ok=True)
+        save_target = save_target.with_suffix(".png")
+        marked.save(save_target, format="PNG")
+        return save_target
+
+    save_dir = get_screenshot_save_dir()
+    timestamp = int(time.time() * 1000)
+    path = save_dir / f"detection-{timestamp}.png"
+    marked.save(path, format="PNG")
+    return path
