@@ -123,6 +123,36 @@ max_height = 1080
 max_depth = 30
 ```
 
+## Desktop Automation Tips
+
+### 1. Always switch window before input
+
+Use `app switch` before any keyboard or mouse operation. Otherwise shortcuts may be sent to the wrong window — with unpredictable results (e.g. ESC in a terminal can kill the running process).
+
+```bash
+agent-windows app switch "WPS"
+# now safe to click / type / shortcut
+```
+
+### 2. Prefer UIA tree over vision for element location
+
+`snapshot` returns precise bounding rectangles for named UI elements. `ground` / `detect` use a vision model whose coordinates can be off by ~100 px (typically biased toward the left edge of text). Use vision tools as a supplement when UIA can't see an element.
+
+| Tool | Precision | Best for |
+|------|-----------|----------|
+| `snapshot` | Pixel-exact | Named controls, dialogs, menus |
+| `ground` / `detect` | ±~100 px | Custom-drawn UI that UIA can't capture |
+| `ask-vision` | Descriptive only | Understanding icons, reading screen state |
+
+### 3. Navigating deep menus with mixed tools
+
+Some actions are buried in 2nd- or 3rd-level menus. Buttons may show only icons with no text. A practical approach:
+
+1. Use `ask-vision` to describe what each icon does in the current panel.
+2. Use `ground` / `detect` to get approximate coordinates for candidate buttons.
+3. Cross-reference with `snapshot` (UIA tree) for any named elements in the same area.
+4. Click and verify the result before proceeding to the next step.
+
 ## Requirements
 
 - Windows 10/11

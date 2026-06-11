@@ -81,6 +81,8 @@ KEY_ALIASES: dict[str, str] = {
     "printscreen": "PrintScreen", "prtsc": "PrintScreen",
     "up": "Up", "down": "Down", "left": "Left", "right": "Right",
     "apps": "Apps", "menu": "Apps", "context": "Apps",
+    # Function keys (F1–F12)
+    **{f"f{i}": f"F{i}" for i in range(1, 13)},
 }
 
 # Special key name → VK code
