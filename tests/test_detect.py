@@ -92,6 +92,19 @@ class TestParseDetectionJson:
         result = _parse_detection_json(response)
         assert len(result) == 1
 
+    def test_label_with_bracket_in_preamble(self):
+        """Level 3 should handle labels containing ] character."""
+        response = 'Results: [{"label": "]", "bbox": [1, 2, 3, 4]}]'
+        result = _parse_detection_json(response)
+        assert len(result) == 1
+        assert result[0]["label"] == "]"
+
+    def test_label_with_brackets_in_preamble(self):
+        response = 'Found: [{"label": "[OK]", "bbox": [1, 2, 3, 4]}]'
+        result = _parse_detection_json(response)
+        assert len(result) == 1
+        assert result[0]["label"] == "[OK]"
+
 
 class TestValidateTargets:
     def test_valid_targets(self):
@@ -218,6 +231,52 @@ class TestDetectElements:
         mock_config.return_value = {"grounding": {"enabled": False}}
         with pytest.raises(RuntimeError, match="disabled"):
             detect_elements("test")
+
+    @patch("agent_windows.core.screenshot.capture_screenshot")
+    @patch("agent_windows.core.grounding.call_vision_model")
+    @patch("agent_windows.core.grounding.load_config")
+    def test_inverted_bbox_auto_swap(self, mock_config, mock_api, mock_capture):
+        mock_config.return_value = {
+            "grounding": {"enabled": True, "model": "test", "engine": "openai", "width": 1000, "height": 1000}
+        }
+        # Model returns inverted box: x2 < x1, y2 < y1
+        mock_api.return_value = '[{"label": "inv", "bbox": [200, 300, 100, 200]}]'
+        mock_capture.return_value = Image.new("RGB", (1920, 1080))
+
+        result = detect_elements("test")
+        assert result["count"] == 1
+        b = result["targets"][0]["box"]
+        assert b["x1"] <= b["x2"]
+        assert b["y1"] <= b["y2"]
+
+    @patch("agent_windows.core.screenshot.capture_screenshot")
+    @patch("agent_windows.core.grounding.call_vision_model")
+    @patch("agent_windows.core.grounding.load_config")
+    def test_max_targets_truncation(self, mock_config, mock_api, mock_capture):
+        mock_config.return_value = {
+            "grounding": {"enabled": True, "model": "test", "engine": "openai", "width": 1000, "height": 1000}
+        }
+        # Model returns 5 targets, but max_targets=2
+        targets = [{"label": f"t{i}", "bbox": [i*10, i*10, i*10+5, i*10+5]} for i in range(5)]
+        mock_api.return_value = json.dumps(targets)
+        mock_capture.return_value = Image.new("RGB", (1920, 1080))
+
+        result = detect_elements("test", max_targets=2)
+        assert result["count"] == 2
+
+    @patch("agent_windows.core.screenshot.capture_screenshot")
+    @patch("agent_windows.core.grounding.call_vision_model")
+    @patch("agent_windows.core.grounding.load_config")
+    def test_negative_max_targets_clamped(self, mock_config, mock_api, mock_capture):
+        mock_config.return_value = {
+            "grounding": {"enabled": True, "model": "test", "engine": "openai", "width": 1000, "height": 1000}
+        }
+        mock_api.return_value = '[{"label": "x", "bbox": [1, 2, 3, 4]}]'
+        mock_capture.return_value = Image.new("RGB", (1920, 1080))
+
+        result = detect_elements("test", max_targets=-1)
+        # Clamped to 1, should return 1 target
+        assert result["count"] == 1
 
     @patch("agent_windows.core.grounding.call_vision_model")
     @patch("agent_windows.core.grounding.load_config")

@@ -227,11 +227,17 @@ def _detect(params: dict) -> dict[str, Any]:
     if not description:
         raise ValueError("description is required")
 
+    max_targets = params.get("max_targets", 20)
+    try:
+        max_targets = int(max_targets)
+    except (ValueError, TypeError):
+        max_targets = 20
+
     result = detect_elements(
         description=description,
         image_path=params.get("image"),
         model=params.get("model"),
-        max_targets=params.get("max_targets", 20),
+        max_targets=max_targets,
         output_path=params.get("output"),
     )
 

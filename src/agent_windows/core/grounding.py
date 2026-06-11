@@ -307,6 +307,9 @@ def detect_elements(
     if not ground_config.get("enabled", True):
         raise RuntimeError("Visual grounding is disabled in config")
 
+    # Validate and clamp max_targets
+    max_targets = max(1, int(max_targets))
+
     # Build effective config with optional model override
     effective_config = dict(ground_config)
     if model:
@@ -346,13 +349,10 @@ def detect_elements(
     logger.info("detect: parsed %d raw targets", len(raw_targets))
 
     # Convert coordinates for each target
+    # _validate_targets already guarantees valid bbox [x1,y1,x2,y2] lists
     targets = []
     for i, raw in enumerate(raw_targets[:max_targets]):
-        bbox = raw.get("bbox")
-        if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
-            logger.warning("Skipping target #%d: invalid bbox %s", i + 1, bbox)
-            continue
-
+        bbox = raw["bbox"]
         mx1, my1, mx2, my2 = (int(v) for v in bbox)
 
         # Auto-swap inverted boxes
@@ -413,22 +413,21 @@ def _parse_detection_json(response: str) -> list[dict]:
         except (json.JSONDecodeError, ValueError):
             pass
 
-    # Level 3: Balanced bracket matching
+    # Level 3: Try json.loads on substrings from [ to each successive ]
     start = response.find("[")
     if start != -1:
-        depth = 0
-        for i in range(start, len(response)):
-            if response[i] == "[":
-                depth += 1
-            elif response[i] == "]":
-                depth -= 1
-                if depth == 0:
-                    try:
-                        result = json.loads(response[start : i + 1])
-                        if isinstance(result, list):
-                            return _validate_targets(result)
-                    except (json.JSONDecodeError, ValueError):
-                        break
+        pos = start
+        while True:
+            end = response.find("]", pos + 1)
+            if end == -1:
+                break
+            try:
+                result = json.loads(response[start : end + 1])
+                if isinstance(result, list):
+                    return _validate_targets(result)
+            except (json.JSONDecodeError, ValueError):
+                pass
+            pos = end
 
     # Level 4: Parsing failed
     logger.warning("detect: failed to parse JSON from model response")
