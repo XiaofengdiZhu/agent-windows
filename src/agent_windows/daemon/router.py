@@ -187,6 +187,37 @@ def _ground(params: dict) -> dict[str, Any]:
     }
 
 
+@handler("ask-vision")
+def _ask_vision(params: dict) -> dict[str, Any]:
+    """Free-form visual Q&A: send screenshot + custom prompt to vision model."""
+    from agent_windows.core.grounding import ask_vision
+
+    prompt = params.get("prompt", "")
+    if not prompt:
+        raise ValueError("prompt is required")
+
+    result = ask_vision(
+        prompt=prompt,
+        image_path=params.get("image"),
+        model=params.get("model"),
+        output_path=params.get("output"),
+    )
+    return {
+        "output": (
+            f"## Ask Vision\n"
+            f"Prompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}\n"
+            f"Model: {result['model_used']}\n"
+            f"Screenshot: {result['screenshot_path']}\n"
+            "Note: Use `ground` for precise click coordinates. "
+            "This tool is for visual understanding (ranges, states, descriptions).\n\n"
+            f"{result['response']}"
+        ),
+        "response": result["response"],
+        "screenshot_path": result["screenshot_path"],
+        "model_used": result["model_used"],
+    }
+
+
 # ── Input handlers ────────────────────────────────────────────────
 
 

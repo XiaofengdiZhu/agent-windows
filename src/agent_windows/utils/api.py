@@ -38,6 +38,7 @@ def call_vision_model(
     image: Image.Image,
     prompt: str,
     config: dict[str, Any],
+    max_tokens: int = 100,
 ) -> str:
     """Call a vision model API with an image and prompt.
 
@@ -45,6 +46,7 @@ def call_vision_model(
         image: PIL Image to send.
         prompt: Text prompt for the model.
         config: Grounding config dict (engine, model, api_base, api_key, etc.).
+        max_tokens: Maximum tokens in the model response (default 100 for grounding).
 
     Returns:
         The model's text response.
@@ -55,17 +57,17 @@ def call_vision_model(
     engine = config.get("engine", "openai").lower()
 
     if engine in ("openai", "doubao", "gemini_compatible"):
-        return _call_openai_compatible(image, prompt, config)
+        return _call_openai_compatible(image, prompt, config, max_tokens)
     elif engine == "anthropic":
-        return _call_anthropic(image, prompt, config)
+        return _call_anthropic(image, prompt, config, max_tokens)
     elif engine == "gemini":
-        return _call_gemini(image, prompt, config)
+        return _call_gemini(image, prompt, config, max_tokens)
     else:
         # Default to OpenAI-compatible for unknown engines
-        return _call_openai_compatible(image, prompt, config)
+        return _call_openai_compatible(image, prompt, config, max_tokens)
 
 
-def _call_openai_compatible(image: Image.Image, prompt: str, config: dict) -> str:
+def _call_openai_compatible(image: Image.Image, prompt: str, config: dict, max_tokens: int = 100) -> str:
     """Call an OpenAI-compatible vision API."""
     from openai import OpenAI
 
@@ -95,14 +97,14 @@ def _call_openai_compatible(image: Image.Image, prompt: str, config: dict) -> st
                 ],
             }
         ],
-        max_tokens=100,
+        max_tokens=max_tokens,
         temperature=0.0,
     )
 
     return response.choices[0].message.content.strip()
 
 
-def _call_anthropic(image: Image.Image, prompt: str, config: dict) -> str:
+def _call_anthropic(image: Image.Image, prompt: str, config: dict, max_tokens: int = 100) -> str:
     """Call Anthropic Claude vision API."""
     import anthropic
 
@@ -114,7 +116,7 @@ def _call_anthropic(image: Image.Image, prompt: str, config: dict) -> str:
 
     response = client.messages.create(
         model=model,
-        max_tokens=100,
+        max_tokens=max_tokens,
         temperature=0.0,
         messages=[
             {
@@ -137,7 +139,7 @@ def _call_anthropic(image: Image.Image, prompt: str, config: dict) -> str:
     return response.content[0].text.strip()
 
 
-def _call_gemini(image: Image.Image, prompt: str, config: dict) -> str:
+def _call_gemini(image: Image.Image, prompt: str, config: dict, max_tokens: int = 100) -> str:
     """Call Google Gemini vision API."""
     import google.generativeai as genai
 
@@ -147,7 +149,10 @@ def _call_gemini(image: Image.Image, prompt: str, config: dict) -> str:
     model_name = config.get("model", "gemini-1.5-flash")
     model = genai.GenerativeModel(model_name)
     response = model.generate_content([prompt, image],
-                                       generation_config=genai.GenerationConfig(temperature=0))
+                                       generation_config=genai.GenerationConfig(
+                                           temperature=0,
+                                           max_output_tokens=max_tokens,
+                                       ))
     return response.text.strip()
 
 

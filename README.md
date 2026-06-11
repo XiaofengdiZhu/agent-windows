@@ -26,6 +26,9 @@ agent-windows observe
 # Visual grounding (locate element by description)
 agent-windows ground "任务栏"
 
+# Visual Q&A (custom prompt + screenshot)
+agent-windows ask-vision "屏幕上有哪些窗口？是否有错误弹窗？"
+
 # Mouse/keyboard
 agent-windows click 500 300
 agent-windows type "Hello World" --enter
@@ -58,8 +61,7 @@ CLI (Typer, ~5ms) → Named Pipe IPC → Daemon (COM STA, ~20ms response)
 | `snapshot` | UIA accessibility tree |
 | `screenshot [-o PATH]` | Screen capture |
 | `ground DESCRIPTION` | Visual coordinate grounding |
-
-### Input
+| `ask-vision PROMPT [-i IMAGE] [-m MODEL]` | Free-form visual Q&A |
 | Command | Description |
 |---------|-------------|
 | `click X Y [--right] [--double]` | Mouse click |

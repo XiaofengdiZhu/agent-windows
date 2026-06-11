@@ -55,6 +55,7 @@ VK_LEFT = 0x25
 VK_UP = 0x26
 VK_RIGHT = 0x27
 VK_DOWN = 0x28
+VK_INSERT = 0x2D
 VK_SNAPSHOT = 0x2C  # Print Screen
 VK_APPS = 0x5D     # Context menu
 VK_F1 = 0x70
@@ -86,11 +87,23 @@ KEY_ALIASES: dict[str, str] = {
 SPECIAL_KEYS: dict[str, int] = {
     "Ctrl": VK_CONTROL, "Shift": VK_SHIFT, "Alt": VK_MENU, "Win": VK_LWIN,
     "Enter": VK_RETURN, "Tab": VK_TAB, "Esc": VK_ESCAPE,
-    "Back": VK_BACK, "Delete": VK_DELETE, "Insert": 0x2D,
+    "Back": VK_BACK, "Delete": VK_DELETE, "Insert": VK_INSERT,
     "Home": VK_HOME, "End": VK_END,
     "PageUp": VK_PRIOR, "PageDown": VK_NEXT,
     "Space": VK_SPACE, "PrintScreen": VK_SNAPSHOT, "Apps": VK_APPS,
     "Up": VK_UP, "Down": VK_DOWN, "Left": VK_LEFT, "Right": VK_RIGHT,
+    # OEM keys (physical keyboard keys, not ASCII codes)
+    "=": 0xBB, "+": 0xBB,   # VK_OEM_PLUS
+    "-": 0xBD, "_": 0xBD,   # VK_OEM_MINUS
+    ",": 0xBC, "<": 0xBC,   # VK_OEM_COMMA
+    ".": 0xBE, ">": 0xBE,   # VK_OEM_PERIOD
+    "/": 0xBF, "?": 0xBF,   # VK_OEM_2
+    ";": 0xBA, ":": 0xBA,   # VK_OEM_1
+    "'": 0xDE, '"': 0xDE,   # VK_OEM_7
+    "[": 0xDB, "{": 0xDB,   # VK_OEM_4
+    "]": 0xDD, "}": 0xDD,   # VK_OEM_6
+    "\\": 0xDC, "|": 0xDC,  # VK_OEM_5
+    "`": 0xC0, "~": 0xC0,   # VK_OEM_3
     "F1": VK_F1, "F2": 0x71, "F3": 0x72, "F4": 0x73,
     "F5": 0x74, "F6": 0x75, "F7": 0x76, "F8": 0x77,
     "F9": 0x78, "F10": 0x79, "F11": 0x7A, "F12": 0x7B,
@@ -283,9 +296,24 @@ def _send_unicode_char(char: str) -> None:
     )
 
 
-def _send_vk_key(vk: int, scan: int = 0, extended: bool = False) -> None:
+# Extended keys require KEY_EXTENDED flag for correct input.
+# Navigation keys, Edit keys, and Nav keys are all extended.
+# See: https://learn.microsoft.com/en-us/windows/win32/inputdev/virtual-key-codes
+_EXTENDED_VKS = frozenset({
+    VK_HOME, VK_END, VK_PRIOR, VK_NEXT,  # Nav: Home, End, PgUp, PgDn
+    VK_LEFT, VK_UP, VK_RIGHT, VK_DOWN,    # Arrow keys
+    VK_INSERT, VK_DELETE,                  # Edit keys: Insert, Delete
+})
+
+
+def _is_extended_key(vk: int) -> bool:
+    """Check if a virtual key code is an extended key."""
+    return vk in _EXTENDED_VKS
+
+
+def _send_vk_key(vk: int, scan: int = 0) -> None:
     """Send a virtual key press (down + up) via keybd_event."""
-    flags = KEY_EXTENDED if extended else 0
+    flags = KEY_EXTENDED if _is_extended_key(vk) else 0
     if not scan:
         scan = user32.MapVirtualKeyA(vk, 0)
     user32.keybd_event(vk, scan, flags, 0)
@@ -295,14 +323,16 @@ def _send_vk_key(vk: int, scan: int = 0, extended: bool = False) -> None:
 
 def _press_key(vk: int) -> None:
     """Press and hold a key."""
+    flags = KEY_EXTENDED if _is_extended_key(vk) else 0
     scan = user32.MapVirtualKeyA(vk, 0)
-    user32.keybd_event(vk, scan, 0, 0)
+    user32.keybd_event(vk, scan, flags, 0)
 
 
 def _release_key(vk: int) -> None:
     """Release a held key."""
+    flags = KEY_EXTENDED if _is_extended_key(vk) else 0
     scan = user32.MapVirtualKeyA(vk, 0)
-    user32.keybd_event(vk, scan, KEY_UP, 0)
+    user32.keybd_event(vk, scan, flags | KEY_UP, 0)
 
 
 def type_text(text: str, interval: float = 0.02, wait_time: float = 0.3) -> None:

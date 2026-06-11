@@ -51,3 +51,23 @@ def ground(
     """Visual model grounding: locate element coordinates."""
     result = dispatch("ground", {"description": description}, ctx)
     print_result(result, ctx)
+
+
+@app.command(name="ask-vision")
+def ask_vision(
+    ctx: typer.Context,
+    prompt: str = typer.Argument(help="Custom prompt for the vision model"),
+    image: str = typer.Option("", "--image", "-i", help="Path to image file (default: screenshot)"),
+    model: str = typer.Option("", "--model", "-m", help="Override vision model"),
+    output: str = typer.Option("", "--output", "-o", help="Save screenshot to path"),
+) -> None:
+    """Free-form visual Q&A: screenshot + custom prompt → raw model response."""
+    params = {"prompt": prompt}
+    if image:
+        params["image"] = image
+    if model:
+        params["model"] = model
+    if output:
+        params["output"] = output
+    result = dispatch("ask-vision", params, ctx)
+    print_result(result, ctx)

@@ -151,6 +151,54 @@ COM STA（单线程单元）要求初始化 COM 的线程必须有 Windows 消�
 | `snapshot` | UIA 无障碍树遍历，返回语义化文本 |
 | `screenshot [--output PATH]` | 截图返回图片路径 |
 | `ground <description>` | 视觉模型定位元素坐标 |
+| `ask-vision <prompt> [--image PATH] [--model MODEL]` | 自由视觉问答：将截图（或指定图片）+ 自定义提示词发给视觉模型，返回模型的原始文本响应 |
+
+#### `ask-vision` 详细设计
+
+**用途：** 让 AI agent 利用视觉模型的理解能力进行任意视觉推理，不仅限于坐标定位。
+
+**参数：**
+
+| 参数 | 说明 |
+|------|------|
+| `<prompt>` | 自定义提示词，完全由调用方控制 |
+| `--image PATH` | 指定图片文件路径（默认：自动截取当前屏幕） |
+| `--model MODEL` | 覆盖配置文件中的视觉模型（可选） |
+| `--output PATH` | 保存使用的截图（可选，便于调试） |
+
+**示例：**
+
+```bash
+# 让视觉模型描述屏幕内容
+agent-windows ask-vision "描述当前屏幕上有哪些窗口和它们的状态"
+
+# 分析指定截图中的表格数据
+agent-windows ask-vision "提取这张图中表格的所有数据，以 JSON 格式返回" --image step3.png
+
+# 判断某个 UI 元素是否存在
+agent-windows ask-vision "屏幕上是否有弹出的错误对话框？如果有，描述其内容"
+
+# 读取图标状态
+agent-windows ask-vision "任务栏上的网络图标是否显示已断开连接？"
+
+# 结合 ground 使用：先用 ask-vision 分析，再用 ground 定位
+agent-windows ask-vision "当前活动窗口的标题是什么？窗口中是否有未保存的文档标志（标题栏上的星号）？"
+```
+
+**与 `ground` 的区别：**
+
+| | `ground` | `ask-vision` |
+|---|---|---|
+| 目的 | 精确定位元素的像素坐标 | 任意视觉问答 |
+| 输出 | `{x, y, confidence}` 坐标 | 模型的原始文本响应 |
+| 提示词 | 固定模板（可配），自动注入坐标解析指令 | 完全自定义 |
+| 两轮裁剪 | ✅ 粗定位 → 精定位 | ❌ 单次调用 |
+| 典型场景 | "点这个按钮" → 需要坐标 | "这个复选框是否勾选了？" → 需要语义判断 |
+
+**实现要点：**
+- 复用 `grounding` 的视觉模型 API 客户端和配置（engine / api_base / api_key / timeout）
+- 不进行坐标解析，直接返回模型响应文本
+- 如果 agent 需要坐标，使用 `ground`；如果需要语义理解、OCR、状态判断等，使用 `ask-vision`
 
 ### 输入命令
 

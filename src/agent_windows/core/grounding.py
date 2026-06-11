@@ -175,3 +175,77 @@ _DEFAULT_FINE_PROMPT = (
     "The previous coarse location is ({x},{y}). Crop from ({cx},{cy}).\n"
     "Output only the coordinate of one point in your response."
 )
+
+
+# ── ask-vision: free-form visual Q&A ─────────────────────────────────
+
+
+def ask_vision(
+    prompt: str,
+    image_path: str | None = None,
+    model: str | None = None,
+    output_path: str | None = None,
+) -> dict[str, Any]:
+    """Send a screenshot (or image) with a custom prompt to a vision model.
+
+    Unlike ground_element(), this function does no coordinate parsing — it
+    returns the model's raw text response, enabling free-form visual Q&A.
+
+    Args:
+        prompt: Custom prompt sent to the vision model.
+        image_path: Path to an image file. If None, captures a fresh screenshot.
+        model: Override the vision model from config (optional).
+        output_path: Save the screenshot/image used for the call (optional).
+
+    Returns:
+        Dict with: response (raw text), screenshot_path, model_used.
+    """
+    config = load_config()
+    ground_config = config.get("grounding", {})
+
+    if not ground_config.get("enabled", True):
+        raise RuntimeError("Visual grounding is disabled in config")
+
+    # Build effective config with optional model override
+    effective_config = dict(ground_config)
+    if model:
+        effective_config["model"] = model
+
+    # Load image from file or capture screenshot
+    if image_path:
+        p = Path(image_path)
+        if not p.exists():
+            raise ValueError(f"Image file not found: {image_path}")
+        image = Image.open(p)
+        # Convert to RGB if necessary (e.g. RGBA PNGs)
+        if image.mode not in ("RGB", "L"):
+            image = image.convert("RGB")
+    else:
+        from agent_windows.core.screenshot import capture_screenshot
+        image = capture_screenshot()
+
+    # Save screenshot if requested
+    saved_path = None
+    if output_path:
+        save_target = Path(output_path)
+        save_target.parent.mkdir(parents=True, exist_ok=True)
+        image.save(save_target, format="PNG")
+        saved_path = str(save_target)
+    elif not image_path:
+        # Auto-save captured screenshot for reference
+        save_dir = get_screenshot_save_dir()
+        timestamp = int(time.time() * 1000)
+        auto_path = save_dir / f"ask-vision-{timestamp}.png"
+        image.save(auto_path, format="PNG")
+        saved_path = str(auto_path)
+
+    # Call vision model with custom prompt (higher token limit for Q&A)
+    logger.info("ask-vision: sending prompt (%d chars)", len(prompt))
+    response_text = call_vision_model(image, prompt, effective_config, max_tokens=1024)
+    logger.debug("ask-vision response: %s", response_text[:200])
+
+    return {
+        "response": response_text,
+        "screenshot_path": saved_path or "",
+        "model_used": effective_config.get("model", ""),
+    }
