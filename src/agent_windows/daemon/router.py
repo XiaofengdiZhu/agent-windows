@@ -77,11 +77,40 @@ def _screenshot(params: dict) -> dict[str, Any]:
 
     output = params.get("output", "")
     monitor = params.get("monitor", -1)
+    bbox = params.get("bbox")
+    selector = params.get("selector", "")
+    selector_warn = ""
 
-    image = capture_screenshot(monitor=monitor)
+    # UIA element selector → bbox
+    if selector and selector.startswith("@e"):
+        try:
+            index = int(selector[2:]) - 1  # @e{N} is 1-based
+            if index < 0:
+                raise IndexError(f"Invalid selector: {selector}")
+            from agent_windows.core.tree import traverse_tree
+            from agent_windows.utils.config import load_config as _lc
+            cfg = _lc().get("tree", {})
+            data = traverse_tree(
+                max_depth=cfg.get("max_depth", 30),
+                include_invisible=cfg.get("include_invisible", False),
+                include_offscreen=cfg.get("include_offscreen", False),
+            )
+            elements = data.get("interactive_elements", [])
+            if index >= len(elements):
+                raise IndexError(f"Element {selector} not found ({len(elements)} elements)")
+            el = elements[index]
+            if not el.bbox:
+                raise ValueError(f"Element {selector} has no bounding box")
+            bbox = [el.bbox.left, el.bbox.top, el.bbox.right, el.bbox.bottom]
+        except (ValueError, IndexError) as e:
+            selector_warn = f" [selector unresolved: {e}]"
+
+    image = capture_screenshot(
+        monitor=monitor,
+        bbox=tuple(bbox) if bbox else None,
+    )
 
     # Scale if configured
-    config_result = {}
     try:
         from agent_windows.utils.config import load_config
         cfg = load_config().get("screenshot", {})
@@ -94,10 +123,84 @@ def _screenshot(params: dict) -> dict[str, Any]:
 
     path = save_screenshot(image, output_path=output if output else None)
     return {
-        "output": f"## Screenshot\nPath: {path}\nSize: {image.width}x{image.height}",
+        "output": f"## Screenshot\nPath: {path}\nSize: {image.width}x{image.height}{selector_warn}",
         "path": str(path),
         "width": image.width,
         "height": image.height,
+    }
+
+
+@handler("highlight")
+def _highlight(params: dict) -> dict[str, Any]:
+    """Highlight regions on a screenshot."""
+    from agent_windows.core.screenshot import capture_screenshot, highlight_region
+
+    regions = params.get("regions", [])
+    # Single-region shortcut: x1,y1,x2,y2 + label
+    if not regions and "x1" in params:
+        regions = [{
+            "x1": params["x1"], "y1": params["y1"],
+            "x2": params["x2"], "y2": params["y2"],
+            "label": params.get("label", ""),
+            "color": params.get("color", "red"),
+        }]
+
+    image_path = params.get("image", "")
+    if image_path:
+        from PIL import Image
+        with Image.open(image_path) as img:
+            img.load()
+            image = img.copy()
+    else:
+        image = capture_screenshot()
+
+    output = params.get("output", "")
+    path = highlight_region(image, regions, output_path=output if output else None)
+
+    return {
+        "output": f"## Highlight\nRegions: {len(regions)}\nPath: {path}",
+        "path": str(path),
+        "regions": len(regions),
+    }
+
+
+@handler("diff")
+def _diff(params: dict) -> dict[str, Any]:
+    """Pixel-level diff between two screenshots."""
+    from PIL import Image
+    from agent_windows.core.screenshot import capture_screenshot, diff_images
+
+    baseline_path = params["baseline"]
+    compare_path = params.get("compare", "")
+    threshold = params.get("threshold", 30)
+    output = params.get("output", "")
+
+    with Image.open(baseline_path) as img:
+        img.load()
+        image_a = img.copy()
+
+    if compare_path:
+        with Image.open(compare_path) as img:
+            img.load()
+            image_b = img.copy()
+    else:
+        image_b = capture_screenshot()
+
+    result = diff_images(
+        image_a, image_b,
+        threshold=threshold,
+        output_path=output if output else None,
+    )
+
+    return {
+        "output": (
+            f"## Diff\n"
+            f"Diff pixels: {result['diff_pixels']} / {result['total_pixels']} "
+            f"({result['diff_percent']}%)\n"
+            f"Match: {result['match']}\n"
+            f"Path: {result['diff_path']}"
+        ),
+        **result,
     }
 
 

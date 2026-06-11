@@ -236,6 +236,181 @@ def _monitor_bbox(monitor_index: int) -> tuple[int, int, int, int]:
     return monitors[monitor_index]
 
 
+# ── Screenshot annotation ────────────────────────────────────────────
+
+
+def highlight_region(
+    image: Image.Image,
+    regions: list[dict],
+    output_path: str | Path | None = None,
+) -> Path:
+    """Draw highlight rectangles with optional labels on a screenshot.
+
+    Args:
+        image: PIL Image to annotate.
+        regions: List of dicts, each with:
+            x1, y1, x2, y2 (int) — bounding box.
+            label (str, optional) — text label.
+            color (str, optional) — border color (default "red").
+        output_path: Save path. If None, auto-generates.
+
+    Returns:
+        Path to the saved annotated image.
+    """
+    from PIL import ImageDraw, ImageFont
+
+    if not regions:
+        raise ValueError("At least one region is required")
+
+    marked = image.copy()
+    draw = ImageDraw.Draw(marked)
+
+    try:
+        font = ImageFont.load_default(size=14)
+    except TypeError:
+        font = ImageFont.load_default()
+
+    for r in regions:
+        x1, y1, x2, y2 = r["x1"], r["y1"], r["x2"], r["y2"]
+        color = r.get("color", "red")
+
+        # Draw border (width=3)
+        draw.rectangle([(x1, y1), (x2, y2)], outline=color, width=3)
+
+        # Draw label if provided
+        label = r.get("label", "")
+        if label:
+            text_pos = (x1 + 3, y1 + 3)
+            text_bbox = draw.textbbox(text_pos, label, font=font)
+            text_bg = [
+                text_bbox[0] - 1, text_bbox[1] - 1,
+                text_bbox[2] + 1, text_bbox[3] + 1,
+            ]
+            draw.rectangle(text_bg, fill="white")
+            draw.text(text_pos, label, fill="black", font=font)
+
+    if output_path:
+        path = Path(output_path)
+    else:
+        save_dir = get_screenshot_save_dir()
+        timestamp = int(time.time() * 1000)
+        path = save_dir / f"highlight-{timestamp}.png"
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    marked.save(path, format="PNG")
+
+    # Trigger cleanup after save (respects interval)
+    try:
+        cleanup_screenshots()
+    except Exception:
+        logger.debug("Post-highlight cleanup failed", exc_info=True)
+
+    return path
+
+
+def diff_images(
+    image_a: Image.Image,
+    image_b: Image.Image,
+    threshold: int = 30,
+    output_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Pixel-level diff between two screenshots.
+
+    Args:
+        image_a: Baseline image.
+        image_b: Comparison image.
+        threshold: Per-channel diff threshold (0-255). Pixels below this
+            are considered identical.
+        output_path: Save diff visualization. If None, auto-generates.
+
+    Returns:
+        Dict with: diff_pixels, total_pixels, diff_percent, match, diff_path.
+    """
+    from PIL import ImageChops
+
+    # Resize B to match A if needed
+    if image_b.size != image_a.size:
+        image_b = image_b.resize(image_a.size, Image.LANCZOS)
+
+    # Convert both to RGB
+    a = image_a.convert("RGB")
+    b = image_b.convert("RGB")
+
+    # Raw per-channel difference → grayscale
+    diff_gray = ImageChops.difference(a, b).convert("L")
+
+    # Check numpy availability once
+    _has_numpy = False
+    try:
+        import numpy as np
+        _has_numpy = True
+    except ImportError:
+        pass
+
+    if _has_numpy:
+        mask_arr = np.array(diff_gray)
+        diff_mask = mask_arr > threshold
+        diff_pixels = int(np.count_nonzero(diff_mask))
+        total_pixels = mask_arr.size
+
+        # Build visualization with numpy
+        vis = np.array(a)
+        vis_rgba = np.dstack([vis, np.full((*vis.shape[:2], 1), 255, dtype=np.uint8)])
+
+        # Red tint on diff pixels
+        diff_coords = np.where(diff_mask)
+        vis_rgba[diff_coords[0], diff_coords[1], 0] = 255  # R
+        vis_rgba[diff_coords[0], diff_coords[1], 1] = 0    # G
+        vis_rgba[diff_coords[0], diff_coords[1], 2] = 0    # B
+        vis_rgba[diff_coords[0], diff_coords[1], 3] = 180  # A
+
+        # Outline via contour filter
+        from PIL import ImageFilter
+        outline = diff_gray.point(lambda p: 255 if p > threshold else 0)
+        outline = outline.filter(ImageFilter.CONTOUR)
+        outline_arr = np.array(outline)
+        outline_coords = np.where(outline_arr > 0)
+        vis_rgba[outline_coords[0], outline_coords[1], 0] = 255
+        vis_rgba[outline_coords[0], outline_coords[1], 1] = 0
+        vis_rgba[outline_coords[0], outline_coords[1], 2] = 0
+        vis_rgba[outline_coords[0], outline_coords[1], 3] = 255
+
+        from PIL import Image as _Img
+        vis_img = _Img.fromarray(vis_rgba, mode="RGBA")
+    else:
+        # Fallback without numpy: simple side-by-side diff
+        mask = diff_gray.point(lambda p: 255 if p > threshold else 0)
+        diff_pixels = sum(1 for v in mask.getchannel("L").tobytes() if v > 0)
+        total_pixels = mask.width * mask.height
+        vis_img = ImageChops.difference(a, b)
+
+    diff_percent = round(diff_pixels / max(total_pixels, 1) * 100, 2)
+
+    if output_path:
+        path = Path(output_path)
+    else:
+        save_dir = get_screenshot_save_dir()
+        timestamp = int(time.time() * 1000)
+        path = save_dir / f"diff-{timestamp}.png"
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    vis_img.save(path, format="PNG")
+
+    # Trigger cleanup after save (respects interval)
+    try:
+        cleanup_screenshots()
+    except Exception:
+        logger.debug("Post-diff cleanup failed", exc_info=True)
+
+    return {
+        "diff_pixels": diff_pixels,
+        "total_pixels": total_pixels,
+        "diff_percent": diff_percent,
+        "match": diff_pixels == 0,
+        "diff_path": str(path),
+    }
+
+
 # ── Screenshot cleanup ────────────────────────────────────────────────
 
 _last_cleanup_time: float = 0.0

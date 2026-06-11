@@ -62,10 +62,12 @@ CLI (Typer, ~5ms) → Named Pipe IPC → Daemon (COM STA, ~20ms response)
 |---------|-------------|
 | `observe [--snapshot] [--screenshot] [--ground DESC]` | Combined observation |
 | `snapshot` | UIA accessibility tree |
-| `screenshot [-o PATH]` | Screen capture |
+| `screenshot [-o PATH] [-s @eN] [--bbox X1,Y1,X2,Y2]` | Screen capture (optionally cropped to UIA element or region) |
 | `ground DESCRIPTION` | Visual coordinate grounding |
 | `detect DESCRIPTION [-i IMAGE] [--max-targets N]` | Multi-target bounding box detection |
 | `ask-vision PROMPT [-i IMAGE] [-m MODEL]` | Free-form visual Q&A |
+| `highlight X1 Y1 X2 Y2 [-l LABEL] [-c COLOR]` | Highlight region on screenshot |
+| `diff BASELINE [-c COMPARE] [-t THRESHOLD]` | Pixel-level screenshot diff |
 
 ### Input
 | `click X Y [--right] [--double]` | Mouse click |
