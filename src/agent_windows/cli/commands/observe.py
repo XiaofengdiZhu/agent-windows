@@ -92,3 +92,10 @@ def detect(
         params["output"] = output
     result = dispatch("detect", params, ctx)
     print_result(result, ctx)
+
+
+@app.command()
+def cleanup(ctx: typer.Context) -> None:
+    """Clean up old/oversized screenshots based on age and size limits."""
+    result = dispatch("cleanup_screenshots", {}, ctx)
+    print_result(result, ctx)

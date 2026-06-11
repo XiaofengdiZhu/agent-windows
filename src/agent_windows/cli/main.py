@@ -30,7 +30,7 @@ def global_options(
 # ── Register top-level commands ───────────────────────────────────
 # Commands defined in individual modules, added here to the main app.
 
-from agent_windows.cli.commands.observe import observe, snapshot, screenshot, ground, ask_vision, detect  # noqa: E402
+from agent_windows.cli.commands.observe import observe, snapshot, screenshot, ground, ask_vision, detect, cleanup  # noqa: E402
 from agent_windows.cli.commands.input import click, type_text, scroll, move, drag, shortcut  # noqa: E402
 from agent_windows.cli.commands.system import (  # noqa: E402
     shell,
@@ -44,6 +44,7 @@ app.command()(screenshot)
 app.command()(ground)
 app.command()(ask_vision)
 app.command()(detect)
+app.command()(cleanup)
 app.command()(click)
 app.command(name="type")(type_text)
 app.command()(scroll)

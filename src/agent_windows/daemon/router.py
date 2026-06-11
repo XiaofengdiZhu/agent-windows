@@ -276,6 +276,24 @@ def _detect(params: dict) -> dict[str, Any]:
     }
 
 
+@handler("cleanup_screenshots")
+def _cleanup_screenshots(params: dict) -> dict[str, Any]:
+    """Force cleanup of old/oversized screenshots."""
+    from agent_windows.core.screenshot import cleanup_screenshots
+
+    stats = cleanup_screenshots(force=True)
+    return {
+        "output": (
+            f"## Screenshot Cleanup\n"
+            f"Deleted by age: {stats.get('deleted_by_age', 0)}\n"
+            f"Deleted by size: {stats.get('deleted_by_size', 0)}\n"
+            f"Remaining files: {stats.get('total_kept', 0)}\n"
+            f"Directory size: {stats.get('dir_size_mb', 0)} MB"
+        ),
+        **stats,
+    }
+
+
 # ── Input handlers ────────────────────────────────────────────────
 
 

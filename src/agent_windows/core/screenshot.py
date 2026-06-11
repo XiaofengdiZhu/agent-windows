@@ -183,6 +183,13 @@ def save_screenshot(
 
     image.save(path, format=fmt, **save_kwargs)
     logger.debug("Screenshot saved: %s (%dx%d)", path, image.width, image.height)
+
+    # Trigger cleanup after save (respects interval)
+    try:
+        cleanup_screenshots()
+    except Exception:
+        logger.debug("Post-save cleanup failed", exc_info=True)
+
     return path
 
 
@@ -229,22 +236,110 @@ def _monitor_bbox(monitor_index: int) -> tuple[int, int, int, int]:
     return monitors[monitor_index]
 
 
-def clean_old_screenshots() -> int:
-    """Remove screenshots older than 7 days. Returns count deleted."""
-    import time
+# ── Screenshot cleanup ────────────────────────────────────────────────
+
+_last_cleanup_time: float = 0.0
+
+
+def cleanup_screenshots(force: bool = False) -> dict[str, Any]:
+    """Clean screenshots by age and size.
+
+    Three trigger points:
+    1. Daemon startup (force=True)
+    2. After each screenshot save (force=False, respects interval)
+    3. Explicit CLI command (force=True)
+
+    Args:
+        force: If True, skip interval check and run immediately.
+
+    Returns:
+        Dict with cleanup stats: deleted_by_age, deleted_by_size,
+        total_kept, dir_size_mb, skipped.
+    """
+    global _last_cleanup_time
+
+    config = load_config()
+    ss_config = config.get("screenshot", {})
+
+    # Interval check (skip when force=True)
+    interval = ss_config.get("cleanup_interval_minutes", 10)
+    if not force and interval > 0:
+        if time.monotonic() - _last_cleanup_time < interval * 60:
+            return {"skipped": True}
+    _last_cleanup_time = time.monotonic()
+
+    stats: dict[str, Any] = {
+        "deleted_by_age": 0,
+        "deleted_by_size": 0,
+        "total_kept": 0,
+        "dir_size_mb": 0.0,
+        "skipped": False,
+    }
 
     save_dir = get_screenshot_save_dir()
     if not save_dir.exists():
-        return 0
+        return stats
 
-    config = load_config()
-    max_age_days = config.get("screenshot", {}).get("max_screenshot_age_days", 7)
-    cutoff = time.time() - max_age_days * 86400
-    deleted = 0
-
+    # Collect files with mtime and size
+    files: list[tuple[Path, float, int]] = []
     for f in save_dir.iterdir():
-        if f.is_file() and f.stat().st_mtime < cutoff:
-            f.unlink()
-            deleted += 1
+        if f.is_file():
+            try:
+                st = f.stat()
+                files.append((f, st.st_mtime, st.st_size))
+            except OSError:
+                continue
 
-    return deleted
+    if not files:
+        return stats
+
+    # --- Strategy 1: Age-based ---
+    max_age_days = ss_config.get("max_screenshot_age_days", 7)
+    if max_age_days > 0:
+        cutoff = time.time() - max_age_days * 86400
+        aged = [(f, mt, sz) for f, mt, sz in files if mt < cutoff]
+        for f, _, _ in aged:
+            try:
+                f.unlink()
+                stats["deleted_by_age"] += 1
+            except OSError:
+                pass
+        aged_set = {f for f, _, _ in aged}
+        files = [(f, mt, sz) for f, mt, sz in files if f not in aged_set]
+
+    # --- Strategy 2: Size-based ---
+    max_mb = ss_config.get("max_screenshot_dir_mb", 500)
+    if max_mb > 0:
+        total_size = sum(sz for _, _, sz in files)
+        max_bytes = max_mb * 1024 * 1024
+        if total_size > max_bytes:
+            # Sort oldest first, delete until under limit
+            files.sort(key=lambda x: x[1])
+            for f, _, sz in files:
+                if total_size <= max_bytes:
+                    break
+                try:
+                    f.unlink()
+                    total_size -= sz
+                    stats["deleted_by_size"] += 1
+                except OSError:
+                    pass
+            files = [(f, mt, sz) for f, mt, sz in files if f.exists()]
+
+    stats["total_kept"] = len(files)
+    stats["dir_size_mb"] = round(sum(sz for _, _, sz in files) / 1024 / 1024, 2)
+
+    if stats["deleted_by_age"] or stats["deleted_by_size"]:
+        logger.info(
+            "Cleanup: %d by age, %d by size, %d kept (%.2f MB)",
+            stats["deleted_by_age"], stats["deleted_by_size"],
+            stats["total_kept"], stats["dir_size_mb"],
+        )
+
+    return stats
+
+
+def clean_old_screenshots() -> int:
+    """Legacy wrapper: force cleanup, return total deleted count."""
+    result = cleanup_screenshots(force=True)
+    return result.get("deleted_by_age", 0) + result.get("deleted_by_size", 0)

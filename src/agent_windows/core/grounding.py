@@ -164,6 +164,14 @@ def _save_marked_screenshot(
     timestamp = int(time.time() * 1000)
     path = save_dir / f"grounding-{timestamp}.png"
     marked.save(path, format="PNG")
+
+    # Trigger cleanup after save (respects interval)
+    try:
+        from agent_windows.core.screenshot import cleanup_screenshots
+        cleanup_screenshots()
+    except Exception:
+        pass
+
     return path
 
 
@@ -247,6 +255,11 @@ def ask_vision(
     logger.info("ask-vision: sending prompt (%d chars)", len(prompt))
     response_text = call_vision_model(image, prompt, effective_config, max_tokens=1024)
     logger.debug("ask-vision response: %s", response_text[:200])
+
+    # Trigger cleanup after save (respects interval)
+    if saved_path:
+        from agent_windows.core.screenshot import cleanup_screenshots
+        cleanup_screenshots()
 
     return {
         "response": response_text,
@@ -507,4 +520,12 @@ def _save_detection_screenshot(
     timestamp = int(time.time() * 1000)
     path = save_dir / f"detection-{timestamp}.png"
     marked.save(path, format="PNG")
+
+    # Trigger cleanup after save (respects interval)
+    try:
+        from agent_windows.core.screenshot import cleanup_screenshots
+        cleanup_screenshots()
+    except Exception:
+        pass
+
     return path

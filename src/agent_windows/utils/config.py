@@ -74,6 +74,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "max_height": 1080,
         "format": "png",
         "jpeg_quality": 85,
+        "max_screenshot_age_days": 7,
+        "max_screenshot_dir_mb": 500,
+        "cleanup_interval_minutes": 10,
     },
     "tree": {
         "include_invisible": False,
