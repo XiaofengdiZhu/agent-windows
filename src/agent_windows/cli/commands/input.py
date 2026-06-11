@@ -66,6 +66,54 @@ def move(
 
 
 @app.command()
+def dblclick(
+    ctx: typer.Context,
+    x: int = typer.Argument(help="X coordinate"),
+    y: int = typer.Argument(help="Y coordinate"),
+    right: bool = typer.Option(False, "--right", help="Right-button double-click"),
+) -> None:
+    """Double-click at (x, y)."""
+    params = {"x": x, "y": y, "right": right}
+    result = dispatch("dblclick", params, ctx)
+    print_result(result, ctx)
+
+
+@app.command()
+def hover(
+    ctx: typer.Context,
+    x: int = typer.Argument(help="X coordinate"),
+    y: int = typer.Argument(help="Y coordinate"),
+) -> None:
+    """Move mouse to (x, y) and trigger hover event."""
+    result = dispatch("hover", {"x": x, "y": y}, ctx)
+    print_result(result, ctx)
+
+
+@app.command(name="mouse-down")
+def mouse_down(
+    ctx: typer.Context,
+    x: int = typer.Argument(help="X coordinate"),
+    y: int = typer.Argument(help="Y coordinate"),
+    button: str = typer.Option("left", "--button", help="Mouse button: left, right, middle"),
+) -> None:
+    """Press and hold mouse button at (x, y)."""
+    result = dispatch("mouse_down", {"x": x, "y": y, "button": button}, ctx)
+    print_result(result, ctx)
+
+
+@app.command(name="mouse-up")
+def mouse_up(
+    ctx: typer.Context,
+    x: int = typer.Argument(help="X coordinate"),
+    y: int = typer.Argument(help="Y coordinate"),
+    button: str = typer.Option("left", "--button", help="Mouse button: left, right, middle"),
+) -> None:
+    """Release mouse button at (x, y)."""
+    result = dispatch("mouse_up", {"x": x, "y": y, "button": button}, ctx)
+    print_result(result, ctx)
+
+
+@app.command()
 def drag(
     ctx: typer.Context,
     x1: int = typer.Argument(help="Start X"),

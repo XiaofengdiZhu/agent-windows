@@ -310,6 +310,49 @@ def _click(params: dict) -> dict[str, Any]:
     return {"output": f"## Click\nPosition: ({x}, {y})\nButton: {'right' if right else 'left'}\nDouble: {double}"}
 
 
+@handler("dblclick")
+def _dblclick(params: dict) -> dict[str, Any]:
+    """Double-click at coordinates."""
+    from agent_windows.core.input_controller import click
+
+    x, y = params["x"], params["y"]
+    right = params.get("right", False)
+    click(x, y, right=right, double=True)
+    return {"output": f"## Double Click\nPosition: ({x}, {y})\nButton: {'right' if right else 'left'}"}
+
+
+@handler("hover")
+def _hover(params: dict) -> dict[str, Any]:
+    """Hover at position to trigger tooltip/highlight."""
+    from agent_windows.core.input_controller import hover
+
+    x, y = params["x"], params["y"]
+    hover(x, y)
+    return {"output": f"## Hover\nPosition: ({x}, {y})"}
+
+
+@handler("mouse_down")
+def _mouse_down(params: dict) -> dict[str, Any]:
+    """Press and hold mouse button."""
+    from agent_windows.core.input_controller import mouse_down
+
+    x, y = params["x"], params["y"]
+    button = params.get("button", "left")
+    mouse_down(x, y, button=button)
+    return {"output": f"## Mouse Down\nPosition: ({x}, {y})\nButton: {button}"}
+
+
+@handler("mouse_up")
+def _mouse_up(params: dict) -> dict[str, Any]:
+    """Release mouse button."""
+    from agent_windows.core.input_controller import mouse_up
+
+    x, y = params["x"], params["y"]
+    button = params.get("button", "left")
+    mouse_up(x, y, button=button)
+    return {"output": f"## Mouse Up\nPosition: ({x}, {y})\nButton: {button}"}
+
+
 @handler("type")
 def _type(params: dict) -> dict[str, Any]:
     """Type text."""

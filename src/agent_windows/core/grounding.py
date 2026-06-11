@@ -258,8 +258,11 @@ def ask_vision(
 
     # Trigger cleanup after save (respects interval)
     if saved_path:
-        from agent_windows.core.screenshot import cleanup_screenshots
-        cleanup_screenshots()
+        try:
+            from agent_windows.core.screenshot import cleanup_screenshots
+            cleanup_screenshots()
+        except Exception:
+            pass
 
     return {
         "response": response_text,

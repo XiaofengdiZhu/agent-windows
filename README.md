@@ -69,6 +69,10 @@ CLI (Typer, ~5ms) → Named Pipe IPC → Daemon (COM STA, ~20ms response)
 
 ### Input
 | `click X Y [--right] [--double]` | Mouse click |
+| `dblclick X Y [--right]` | Double-click |
+| `hover X Y` | Hover (trigger tooltips/highlights) |
+| `mouse-down X Y [--button left\|right\|middle]` | Press and hold mouse button |
+| `mouse-up X Y [--button left\|right\|middle]` | Release mouse button |
 | `type TEXT [--at X,Y] [--enter] [--clear]` | Type text (Unicode direct input) |
 | `scroll X Y [--direction up\|down] [--amount N]` | Scroll |
 | `move X Y` | Move mouse |
@@ -86,6 +90,7 @@ CLI (Typer, ~5ms) → Named Pipe IPC → Daemon (COM STA, ~20ms response)
 | `fs read/write/list PATH` | File operations |
 | `clipboard get/set` | Clipboard access |
 | `process list/kill` | Process management |
+| `cleanup` | Clean up old/oversized screenshots |
 | `wait SECONDS` | Wait |
 
 ### Daemon & Config

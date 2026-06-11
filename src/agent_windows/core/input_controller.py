@@ -220,7 +220,7 @@ def move_to(x: int, y: int, speed: float = 10.0) -> None:
         set_cursor_pos(x, y)
         return
 
-    sw, sh = _get_screen_size()
+    _, _, sw, sh = _get_virtual_screen()
     step = max(1, int(distance / max(sw, sh) * 10))
     interval = min(1.0 / speed, 0.05) / max(step, 1)
 
@@ -231,6 +231,39 @@ def move_to(x: int, y: int, speed: float = 10.0) -> None:
         time.sleep(interval)
 
     set_cursor_pos(x, y)
+
+
+def hover(x: int, y: int, wait_time: float = 0.3) -> None:
+    """Move mouse to (x, y) and trigger hover event.
+
+    Unlike move_to(), this also sends a MOUSE_MOVE event via mouse_event,
+    ensuring WM_MOUSEMOVE reaches the target window to trigger tooltips,
+    hover highlights, etc.
+    """
+    set_cursor_pos(x, y)
+    nx, ny = _normalize(x, y)
+    _send_mouse_event(MOUSE_MOVE | MOUSE_ABSOLUTE, nx, ny, 0)
+    time.sleep(wait_time)
+
+
+def mouse_down(x: int, y: int, button: str = "left") -> None:
+    """Press and hold mouse button at (x, y) without releasing."""
+    if button not in ("left", "right", "middle"):
+        raise ValueError(f"Invalid button: {button!r}. Must be 'left', 'right', or 'middle'.")
+    set_cursor_pos(x, y)
+    nx, ny = _normalize(x, y)
+    flag = {"right": MOUSE_RIGHTDOWN, "middle": MOUSE_MIDDLEDOWN}.get(button, MOUSE_LEFTDOWN)
+    _send_mouse_event(flag | MOUSE_ABSOLUTE, nx, ny, 0)
+
+
+def mouse_up(x: int, y: int, button: str = "left") -> None:
+    """Release mouse button at (x, y)."""
+    if button not in ("left", "right", "middle"):
+        raise ValueError(f"Invalid button: {button!r}. Must be 'left', 'right', or 'middle'.")
+    set_cursor_pos(x, y)
+    nx, ny = _normalize(x, y)
+    flag = {"right": MOUSE_RIGHTUP, "middle": MOUSE_MIDDLEUP}.get(button, MOUSE_LEFTUP)
+    _send_mouse_event(flag | MOUSE_ABSOLUTE, nx, ny, 0)
 
 
 def click(x: int, y: int, right: bool = False, double: bool = False,
@@ -258,7 +291,7 @@ def scroll_at(x: int, y: int, direction: str = "down", amount: int = 3,
     delta = -WHEEL_DELTA if direction == "down" else WHEEL_DELTA
 
     for _ in range(amount):
-        _send_mouse_event(MOUSE_WHEEL, 0, 0, delta, 0)
+        _send_mouse_event(MOUSE_WHEEL, 0, 0, delta)
         time.sleep(0.05)
 
     time.sleep(wait_time)
