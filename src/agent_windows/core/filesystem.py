@@ -7,10 +7,47 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# 路径黑名单：按路径组件精确匹配，禁止访问敏感目录和文件
+# 每个 entry 是一个元组：(匹配模式, 描述)
+#   "part"  — 匹配路径中的某个组件（如 ".ssh" 匹配 C:\Users\x\.ssh\config）
+#   "prefix" — 匹配连续组件前缀（如 ("windows", "system32") 匹配 ...\Windows\System32\...）
+_BLOCKED_PARTS = frozenset({
+    ".ssh",
+    ".gnupg",
+    "ntuser.dat",
+    "ntuser.ini",
+    "sam",
+})
+
+_BLOCKED_PART_PREFIXES: list[tuple[tuple[str, ...], str]] = [
+    (("windows", "system32"), "Windows System32 directory"),
+    (("windows", "system"), "Windows System directory"),
+]
+
+
+def _validate_path(path: str) -> Path:
+    """验证文件路径是否在黑名单中。"""
+    p = Path(path).expanduser().resolve()
+    parts = [part.lower() for part in p.parts]
+
+    # 按组件精确匹配（如 .ssh、ntuser.dat）
+    for part in parts:
+        if part in _BLOCKED_PARTS:
+            raise ValueError(f"Access denied: path contains restricted segment '{part}'")
+
+    # 按连续组件前缀匹配（如 windows\system32）
+    for prefix, desc in _BLOCKED_PART_PREFIXES:
+        prefix_len = len(prefix)
+        for i in range(len(parts) - prefix_len + 1):
+            if tuple(parts[i : i + prefix_len]) == prefix:
+                raise ValueError(f"Access denied: path is in {desc}")
+
+    return p
+
 
 def read_file(path: str) -> dict[str, Any]:
     """Read a file and return its contents."""
-    p = Path(path).expanduser()
+    p = _validate_path(path)
     if not p.exists():
         raise FileNotFoundError(f"File not found: {path}")
     if p.is_dir():
@@ -32,7 +69,7 @@ def read_file(path: str) -> dict[str, Any]:
 
 def write_file(path: str, content: str) -> dict[str, Any]:
     """Write content to a file."""
-    p = Path(path).expanduser()
+    p = _validate_path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(content, encoding="utf-8")
     return {"output": f"## File Write\nPath: {p}\nSize: {len(content)} bytes"}
@@ -40,7 +77,7 @@ def write_file(path: str, content: str) -> dict[str, Any]:
 
 def list_dir(path: str) -> dict[str, Any]:
     """List directory contents."""
-    p = Path(path).expanduser()
+    p = _validate_path(path)
     if not p.exists():
         raise FileNotFoundError(f"Directory not found: {path}")
     if not p.is_dir():

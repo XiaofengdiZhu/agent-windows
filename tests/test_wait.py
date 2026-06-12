@@ -28,7 +28,7 @@ def test_wait_sleep():
     from agent_windows.daemon.router import HANDLERS
 
     handler = HANDLERS["wait"]
-    with patch("agent_windows.daemon.router.time") as mock_time:
+    with patch("agent_windows.daemon.handlers.tree.time") as mock_time:
         mock_time.time.side_effect = [0.0, 0.3]  # start, after sleep
         result = handler({"seconds": 0.3})
 
@@ -66,7 +66,7 @@ def test_wait_element_immediate(mock_config):
     handler = HANDLERS["wait"]
 
     with patch("agent_windows.core.tree.resolve_element") as mock_resolve, \
-         patch("agent_windows.daemon.router.time") as mock_time:
+         patch("agent_windows.daemon.handlers.tree.time") as mock_time:
         mock_resolve.return_value = _make_element(name="Submit")
         mock_time.time.side_effect = [0.0, 0.0]  # start, after resolve
         result = handler({"selector": "@e3", "timeout": 5})
@@ -84,7 +84,7 @@ def test_wait_element_not_found_timeout(mock_config):
     handler = HANDLERS["wait"]
 
     with patch("agent_windows.core.tree.resolve_element") as mock_resolve, \
-         patch("agent_windows.daemon.router.time") as mock_time:
+         patch("agent_windows.daemon.handlers.tree.time") as mock_time:
         mock_resolve.side_effect = IndexError("not found")
         # Simulate time passing: start=0, then past timeout on first check
         mock_time.time.side_effect = [0.0, 0.0, 0.0, 100.0]
@@ -107,7 +107,7 @@ def test_wait_text_immediate(mock_config):
     handler = HANDLERS["wait"]
 
     with patch("agent_windows.core.tree.traverse_tree") as mock_traverse, \
-         patch("agent_windows.daemon.router.time") as mock_time:
+         patch("agent_windows.daemon.handlers.tree.time") as mock_time:
         mock_traverse.return_value = {"interactive_elements": elements}
         mock_time.time.side_effect = [0.0, 0.0]
         result = handler({"text": "成功", "timeout": 5})
@@ -127,7 +127,7 @@ def test_wait_text_not_found_timeout(mock_config):
     handler = HANDLERS["wait"]
 
     with patch("agent_windows.core.tree.traverse_tree") as mock_traverse, \
-         patch("agent_windows.daemon.router.time") as mock_time:
+         patch("agent_windows.daemon.handlers.tree.time") as mock_time:
         mock_traverse.return_value = {"interactive_elements": elements}
         # start=0, poll check at 100s (past timeout)
         mock_time.time.side_effect = [0.0, 100.0]
@@ -149,7 +149,7 @@ def test_wait_custom_interval(mock_config):
     handler = HANDLERS["wait"]
 
     with patch("agent_windows.core.tree.resolve_element") as mock_resolve, \
-         patch("agent_windows.daemon.router.time") as mock_time:
+         patch("agent_windows.daemon.handlers.tree.time") as mock_time:
         mock_resolve.return_value = _make_element(name="OK")
         mock_time.time.side_effect = [0.0, 0.0]
         result = handler({"selector": "@e1", "timeout": 5, "interval": 0.1})

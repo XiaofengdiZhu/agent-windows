@@ -7,11 +7,36 @@ Simplified from Windows-MCP's tree service — no browser DOM/IA2 handling yet.
 """
 
 import logging
+import threading
 import time
+import time as _time
 from dataclasses import dataclass, field
 from typing import Any
 
+from agent_windows.utils.win32 import get_process_name
+
 logger = logging.getLogger(__name__)
+
+# ── Tree cache ────────────────────────────────────────────────────
+
+_tree_cache: dict[str, Any] = {}
+_tree_cache_ts: float = 0.0
+_tree_cache_lock = threading.Lock()
+_TREE_CACHE_TTL = 2.0  # seconds
+
+
+def get_tree_snapshot(ttl: float = _TREE_CACHE_TTL, **kwargs) -> dict[str, Any]:
+    """获取 UIA 树快照，带缓存。"""
+    global _tree_cache, _tree_cache_ts
+    with _tree_cache_lock:
+        if _tree_cache and _time.time() - _tree_cache_ts < ttl:
+            return _tree_cache
+    data = traverse_tree(**kwargs)
+    with _tree_cache_lock:
+        _tree_cache = data
+        _tree_cache_ts = _time.time()
+    return data
+
 
 # ── Control type classification ───────────────────────────────────
 
@@ -125,7 +150,7 @@ def enumerate_windows() -> list[WindowInfo]:
         # Get process name
         pid = ctypes.wintypes.DWORD()
         ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-        process_name = _get_process_name(pid.value)
+        process_name = get_process_name(pid.value)
 
         # Get window rect
         rect = ctypes.wintypes.RECT()
@@ -148,26 +173,6 @@ def enumerate_windows() -> list[WindowInfo]:
     ctypes.windll.user32.EnumWindows(WNDENUMPROC(_enum_cb), 0)
     return windows
 
-
-def _get_process_name(pid: int) -> str:
-    """Get process executable name from PID."""
-    import ctypes
-
-    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-    handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-    if not handle:
-        return ""
-    try:
-        import ctypes.wintypes
-        buf = ctypes.create_unicode_buffer(260)
-        size = ctypes.wintypes.DWORD(260)
-        ctypes.windll.kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size))
-        import os
-        return os.path.basename(buf.value)
-    except Exception:
-        return ""
-    finally:
-        ctypes.windll.kernel32.CloseHandle(handle)
 
 
 # ── UIA Tree Traversal ────────────────────────────────────────────
@@ -267,7 +272,7 @@ def resolve_element(selector: str) -> ElementInfo:
 
     from agent_windows.utils.config import load_config
     cfg = load_config().get("tree", {})
-    data = traverse_tree(
+    data = get_tree_snapshot(
         max_depth=cfg.get("max_depth", 30),
         include_invisible=cfg.get("include_invisible", False),
         include_offscreen=cfg.get("include_offscreen", False),

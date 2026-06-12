@@ -3,7 +3,7 @@
 import pytest
 from unittest.mock import patch, MagicMock
 
-from agent_windows.core.tree import ElementInfo, BoundingBox, resolve_element
+from agent_windows.core.tree import ElementInfo, BoundingBox, resolve_element, get_tree_snapshot
 
 
 # ── resolve_element tests ───────────────────────────────────────────
@@ -22,37 +22,37 @@ def _make_element(name: str = "Button", control_type: str = "ButtonControl",
     )
 
 
-@patch("agent_windows.core.tree.traverse_tree")
+@patch("agent_windows.core.tree.get_tree_snapshot")
 @patch("agent_windows.utils.config.load_config")
-def test_resolve_element_valid(mock_config, mock_traverse):
+def test_resolve_element_valid(mock_config, mock_snapshot):
     """resolve_element with valid @e{N} returns correct ElementInfo."""
     mock_config.return_value = {"tree": {}}
     elements = [_make_element(name=f"el{i}") for i in range(5)]
-    mock_traverse.return_value = {"interactive_elements": elements}
+    mock_snapshot.return_value = {"interactive_elements": elements}
 
     result = resolve_element("@e3")
     assert result.name == "el2"
 
 
-@patch("agent_windows.core.tree.traverse_tree")
+@patch("agent_windows.core.tree.get_tree_snapshot")
 @patch("agent_windows.utils.config.load_config")
-def test_resolve_element_first(mock_config, mock_traverse):
+def test_resolve_element_first(mock_config, mock_snapshot):
     """resolve_element @e1 returns the first element."""
     mock_config.return_value = {"tree": {}}
     elements = [_make_element(name="first"), _make_element(name="second")]
-    mock_traverse.return_value = {"interactive_elements": elements}
+    mock_snapshot.return_value = {"interactive_elements": elements}
 
     result = resolve_element("@e1")
     assert result.name == "first"
 
 
-@patch("agent_windows.core.tree.traverse_tree")
+@patch("agent_windows.core.tree.get_tree_snapshot")
 @patch("agent_windows.utils.config.load_config")
-def test_resolve_element_out_of_range(mock_config, mock_traverse):
+def test_resolve_element_out_of_range(mock_config, mock_snapshot):
     """resolve_element raises IndexError for out-of-range index."""
     mock_config.return_value = {"tree": {}}
     elements = [_make_element(name="only")]
-    mock_traverse.return_value = {"interactive_elements": elements}
+    mock_snapshot.return_value = {"interactive_elements": elements}
 
     with pytest.raises(IndexError, match="not found"):
         resolve_element("@e5")

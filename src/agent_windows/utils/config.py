@@ -5,10 +5,17 @@ Data directory: ~/.agent-windows/
 """
 
 import os
+import stat
+import time
 from pathlib import Path
 from typing import Any
 
 import toml
+
+# ── Config cache ───────────────────────────────────────────────────
+
+_config_cache: dict[str, Any] | None = None
+_config_cache_mtime: float = 0.0
 
 # ── Paths ─────────────────────────────────────────────────────────
 
@@ -98,8 +105,20 @@ DEFAULT_CONFIG: dict[str, Any] = {
 
 
 def load_config() -> dict[str, Any]:
-    """Load config from TOML file, merging with defaults."""
+    """Load config from TOML file, merging with defaults.
+
+    Uses an in-memory cache invalidated by file modification time (mtime).
+    """
+    global _config_cache, _config_cache_mtime
+
     config_path = get_config_path()
+
+    # 检查缓存：如果文件未修改，返回缓存
+    if _config_cache is not None and config_path.exists():
+        current_mtime = config_path.stat().st_mtime
+        if current_mtime == _config_cache_mtime:
+            return _config_cache
+
     if config_path.exists():
         user_config = toml.loads(config_path.read_text(encoding="utf-8"))
     else:
@@ -107,13 +126,27 @@ def load_config() -> dict[str, Any]:
 
     # Deep merge: user values override defaults
     merged = _deep_merge(DEFAULT_CONFIG, user_config)
+
+    # 环境变量优先覆盖 API Key
+    env_key = os.environ.get("AGENT_WINDOWS_GROUNDING_API_KEY", "")
+    if env_key:
+        merged.setdefault("grounding", {})["api_key"] = env_key
+
+    # 更新缓存
+    _config_cache = merged
+    if config_path.exists():
+        _config_cache_mtime = config_path.stat().st_mtime
+
     return merged
 
 
 def save_config(config: dict[str, Any]) -> None:
     """Save config dict to TOML file."""
+    global _config_cache
     config_path = get_config_path()
     config_path.write_text(toml.dumps(config), encoding="utf-8")
+    config_path.chmod(stat.S_IRUSR | stat.S_IWUSR)  # 0o600
+    _config_cache = None  # 清除缓存
 
 
 def init_config() -> Path:

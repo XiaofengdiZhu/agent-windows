@@ -1,0 +1,113 @@
+"""System handlers: app management, shell, filesystem, clipboard, process."""
+
+from typing import Any
+
+from agent_windows.daemon.router import handler
+
+
+# ── Application management ─────────────────────────────────────────
+
+
+@handler("app_launch")
+def _app_launch(params: dict) -> dict[str, Any]:
+    """Launch an application."""
+    from agent_windows.core.app_manager import launch_app
+    return launch_app(params["name_or_path"], params.get("args"))
+
+
+@handler("app_switch")
+def _app_switch(params: dict) -> dict[str, Any]:
+    """Switch to an application window."""
+    from agent_windows.core.app_manager import switch_window
+    return switch_window(params["name_or_title"])
+
+
+@handler("app_resize")
+def _app_resize(params: dict) -> dict[str, Any]:
+    """Resize an application window."""
+    from agent_windows.core.app_manager import resize_window
+    return resize_window(
+        params["name_or_title"], params["width"], params["height"],
+        params.get("x", -1), params.get("y", -1),
+    )
+
+
+@handler("app_list")
+def _app_list(params: dict) -> dict[str, Any]:
+    """List all visible windows."""
+    from agent_windows.core.app_manager import list_windows
+    return list_windows()
+
+
+# ── Shell ───────────────────────────────────────────────────────────
+
+
+@handler("shell")
+def _shell(params: dict) -> dict[str, Any]:
+    """Execute a PowerShell command."""
+    from agent_windows.core.shell_runner import run_shell
+    return run_shell(params["command"])
+
+
+# ── Filesystem ──────────────────────────────────────────────────────
+
+
+@handler("fs_read")
+def _fs_read(params: dict) -> dict[str, Any]:
+    """Read a file."""
+    from agent_windows.core.filesystem import read_file
+    return read_file(params["path"])
+
+
+@handler("fs_write")
+def _fs_write(params: dict) -> dict[str, Any]:
+    """Write to a file."""
+    from agent_windows.core.filesystem import write_file
+    return write_file(params["path"], params["content"])
+
+
+@handler("fs_list")
+def _fs_list(params: dict) -> dict[str, Any]:
+    """List directory contents."""
+    from agent_windows.core.filesystem import list_dir
+    return list_dir(params["path"])
+
+
+# ── Clipboard ───────────────────────────────────────────────────────
+
+
+@handler("clipboard_get")
+def _clipboard_get(params: dict) -> dict[str, Any]:
+    """Get clipboard content."""
+    from agent_windows.core.clipboard import get_clipboard
+    from agent_windows.utils.config import load_config
+    cfg_method = load_config().get("clipboard", {}).get("method", "system")
+    keyboard = params.get("keyboard", cfg_method == "keyboard")
+    return get_clipboard(keyboard=keyboard)
+
+
+@handler("clipboard_set")
+def _clipboard_set(params: dict) -> dict[str, Any]:
+    """Set clipboard content."""
+    from agent_windows.core.clipboard import set_clipboard
+    from agent_windows.utils.config import load_config
+    cfg_method = load_config().get("clipboard", {}).get("method", "system")
+    keyboard = params.get("keyboard", cfg_method == "keyboard")
+    return set_clipboard(params["text"], keyboard=keyboard)
+
+
+# ── Process management ──────────────────────────────────────────────
+
+
+@handler("process_list")
+def _process_list(params: dict) -> dict[str, Any]:
+    """List running processes."""
+    from agent_windows.core.process_manager import list_processes
+    return list_processes()
+
+
+@handler("process_kill")
+def _process_kill(params: dict) -> dict[str, Any]:
+    """Kill a process."""
+    from agent_windows.core.process_manager import kill_process
+    return kill_process(params["pid_or_name"])

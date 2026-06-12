@@ -17,6 +17,11 @@ import threading
 import time
 import ctypes
 
+import pywintypes
+import win32api
+import win32event
+import win32pipe
+
 from agent_windows import __version__
 from agent_windows.daemon.lifecycle import (
     write_pid_file,
@@ -55,7 +60,7 @@ class COMWorkerThread(threading.Thread):
         self.results: dict[str | int | None, dict] = {}
         self._results_lock = threading.Lock()
         self._ready = threading.Event()
-        self._running = True
+        self._stop_event = threading.Event()
         self._result_events: dict[str | int | None, threading.Event] = {}
 
     def run(self):
@@ -85,7 +90,7 @@ class COMWorkerThread(threading.Thread):
         self._ready.set()
 
         # Command processing loop with COM message pump
-        while self._running:
+        while not self._stop_event.is_set():
             # Pump COM messages (required for STA)
             try:
                 pythoncom.PumpWaitingMessages()
@@ -157,7 +162,7 @@ class COMWorkerThread(threading.Thread):
 
     def stop(self):
         """Signal the worker thread to stop."""
-        self._running = False
+        self._stop_event.set()
         self.command_queue.put(None)  # Poison pill
 
     def wait_ready(self, timeout: float = 10.0):
@@ -177,12 +182,12 @@ class IdleMonitorThread(threading.Thread):
         self.timeout_seconds = timeout_minutes * 60
         self.shutdown_callback = shutdown_callback
         self._last_activity = time.time()
-        self._running = True
+        self._stop_event = threading.Event()
         self._lock = threading.Lock()
 
     def run(self):
         logger.info("Idle monitor started (timeout=%dm)", self.timeout_seconds // 60)
-        while self._running:
+        while not self._stop_event.is_set():
             time.sleep(10)  # Check every 10 seconds
             with self._lock:
                 idle = time.time() - self._last_activity
@@ -199,7 +204,7 @@ class IdleMonitorThread(threading.Thread):
             self._last_activity = time.time()
 
     def stop(self):
-        self._running = False
+        self._stop_event.set()
 
 
 # ── Daemon Main Loop ──────────────────────────────────────────────
@@ -275,22 +280,39 @@ def run_daemon() -> None:
     try:
         while not shutdown_event.is_set():
             pipe = None
+            overlapped_event = None
             try:
                 pipe = create_pipe_server()
-                # Use a timeout-based approach so we can check shutdown_event
-                import win32pipe
-                import win32file
-                import pywintypes
 
-                # Set pipe to non-blocking for connect with timeout
+                # Use overlapped I/O so ConnectNamedPipe can be interrupted on shutdown
+                overlapped = pywintypes.OVERLAPPED()
+                overlapped.hEvent = win32event.CreateEvent(None, True, False, None)
+                overlapped_event = overlapped.hEvent
+
                 try:
-                    win32pipe.ConnectNamedPipe(pipe, None)
+                    win32pipe.ConnectNamedPipe(pipe, overlapped)
+
+                    # Wait for client connection or shutdown, checking every 3 seconds
+                    connect_timeout_ms = 3000
+                    while not shutdown_event.is_set():
+                        result = win32event.WaitForSingleObject(overlapped.hEvent, connect_timeout_ms)
+                        if result == win32event.WAIT_OBJECT_0:
+                            break  # Client connected
+                        # Timeout — loop back to check shutdown_event
+                    else:
+                        # shutdown triggered, clean up and exit
+                        disconnect_pipe(pipe)
+                        break
+
                 except pywintypes.error as e:
                     if e.winerror == 5:  # ERROR_ACCESS_DENIED
                         logger.warning("Pipe connect error, recreating")
                         disconnect_pipe(pipe)
                         continue
                     raise
+                finally:
+                    if overlapped_event is not None:
+                        win32api.CloseHandle(overlapped_event)
 
                 # Client connected, read request
                 request_str = read_pipe(pipe)

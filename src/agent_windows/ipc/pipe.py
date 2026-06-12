@@ -6,6 +6,9 @@ Uses win32pipe / win32file from pywin32.
 
 import logging
 
+import win32security
+import ntsecuritycon
+
 logger = logging.getLogger(__name__)
 
 PIPE_NAME = r"\\.\pipe\agent-windows"
@@ -15,13 +18,45 @@ MAX_CONNECT_RETRIES = 25
 RETRY_INTERVAL_S = 0.2  # 200ms between retries
 
 
+def _create_pipe_security_attributes():
+    """Create a SECURITY_ATTRIBUTES that restricts pipe access to the current user.
+
+    Returns None if the security descriptor cannot be created (falls back to
+    default security), with a warning logged.
+    """
+    try:
+        user_sid = win32security.LookupAccountName(None, win32security.GetUserName())[0]
+        dacl = win32security.ACL()
+        dacl.AddAccessAllowedAce(
+            win32security.ACL_REVISION,
+            ntsecuritycon.FILE_GENERIC_READ | ntsecuritycon.FILE_GENERIC_WRITE,
+            user_sid,
+        )
+        sd = win32security.SECURITY_DESCRIPTOR()
+        sd.SetSecurityDescriptorDacl(1, dacl, 0)
+
+        sa = win32security.SECURITY_ATTRIBUTES()
+        sa.SECURITY_DESCRIPTOR = sd
+        sa.bInheritHandle = False
+        return sa
+    except Exception:
+        logger.warning(
+            "Failed to create pipe security descriptor; falling back to default security",
+            exc_info=True,
+        )
+        return None
+
+
 def create_pipe_server(pipe_name: str = PIPE_NAME, buffer_size: int = BUFFER_SIZE):
     """Create a Named Pipe server instance (not yet connected).
 
+    The pipe is restricted to the current user via a security descriptor.
     Returns a pipe handle that can be used with connect_pipe_client().
     """
     import win32pipe
     import win32file
+
+    sa = _create_pipe_security_attributes()
 
     pipe = win32pipe.CreateNamedPipe(
         pipe_name,
@@ -31,7 +66,7 @@ def create_pipe_server(pipe_name: str = PIPE_NAME, buffer_size: int = BUFFER_SIZ
         buffer_size,
         buffer_size,
         0,  # default timeout
-        None,  # default security descriptor
+        sa,  # security attributes (restricted to current user, or None on failure)
     )
     logger.debug("Named Pipe created: %s", pipe_name)
     return pipe

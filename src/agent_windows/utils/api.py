@@ -12,6 +12,8 @@ from PIL import Image
 
 logger = logging.getLogger(__name__)
 
+_client_cache: dict[str, Any] = {}
+
 
 def encode_image(image: Image.Image, format: str = "PNG", max_size: int = 0) -> str:
     """Encode a PIL Image to base64 string.
@@ -69,14 +71,17 @@ def call_vision_model(
 
 def _call_openai_compatible(image: Image.Image, prompt: str, config: dict, max_tokens: int = 100) -> str:
     """Call an OpenAI-compatible vision API."""
-    from openai import OpenAI
-
     api_key = config.get("api_key", "") or _get_api_key_env()
-    client = OpenAI(
-        api_key=api_key,
-        base_url=config.get("api_base", "https://api.openai.com/v1"),
-        timeout=float(config.get("timeout", 30)),
-    )
+    api_base = config.get("api_base", "https://api.openai.com/v1")
+    cache_key = f"openai:{api_base}:{api_key}"
+    if cache_key not in _client_cache:
+        from openai import OpenAI
+        _client_cache[cache_key] = OpenAI(
+            api_key=api_key,
+            base_url=api_base,
+            timeout=float(config.get("timeout", 30)),
+        )
+    client = _client_cache[cache_key]
 
     b64 = encode_image(image)
     model = config.get("model", "gpt-4o-mini")
@@ -106,10 +111,12 @@ def _call_openai_compatible(image: Image.Image, prompt: str, config: dict, max_t
 
 def _call_anthropic(image: Image.Image, prompt: str, config: dict, max_tokens: int = 100) -> str:
     """Call Anthropic Claude vision API."""
-    import anthropic
-
     api_key = config.get("api_key", "") or _get_api_key_env()
-    client = anthropic.Anthropic(api_key=api_key, timeout=float(config.get("timeout", 30)))
+    cache_key = f"anthropic:{api_key}"
+    if cache_key not in _client_cache:
+        import anthropic
+        _client_cache[cache_key] = anthropic.Anthropic(api_key=api_key, timeout=float(config.get("timeout", 30)))
+    client = _client_cache[cache_key]
 
     b64 = encode_image(image)
     model = config.get("model", "claude-sonnet-4-6-20250514")
@@ -144,10 +151,12 @@ def _call_gemini(image: Image.Image, prompt: str, config: dict, max_tokens: int 
     import google.generativeai as genai
 
     api_key = config.get("api_key", "") or _get_api_key_env()
-    genai.configure(api_key=api_key)
-
-    model_name = config.get("model", "gemini-1.5-flash")
-    model = genai.GenerativeModel(model_name)
+    cache_key = f"gemini:{api_key}"
+    if cache_key not in _client_cache:
+        genai.configure(api_key=api_key)
+        model_name = config.get("model", "gemini-1.5-flash")
+        _client_cache[cache_key] = genai.GenerativeModel(model_name)
+    model = _client_cache[cache_key]
     response = model.generate_content([prompt, image],
                                        generation_config=genai.GenerationConfig(
                                            temperature=0,

@@ -17,9 +17,10 @@ def run_shell(command: str, timeout: float = 30.0) -> dict[str, Any]:
     Returns:
         Dict with output, exit_code.
     """
+    logger.warning("Shell command executed: %s", command[:500])
     try:
         result = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", command],
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
             capture_output=True,
             text=True,
             timeout=timeout,

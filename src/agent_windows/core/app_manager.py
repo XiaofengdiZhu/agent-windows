@@ -7,6 +7,8 @@ import os
 import subprocess
 from typing import Any
 
+from agent_windows.utils.win32 import get_process_name
+
 logger = logging.getLogger(__name__)
 
 user32 = ctypes.windll.user32
@@ -130,7 +132,7 @@ def _find_window_by_process(name: str) -> int:
             return True
         pid = ctypes.wintypes.DWORD()
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-        proc_name = _get_process_name(pid.value).lower()
+        proc_name = get_process_name(pid.value).lower()
         if target in proc_name:
             result.value = hwnd
             return False
@@ -138,20 +140,3 @@ def _find_window_by_process(name: str) -> int:
 
     user32.EnumWindows(WNDENUMPROC(_cb), 0)
     return result.value or 0
-
-
-def _get_process_name(pid: int) -> str:
-    """Get process executable name from PID."""
-    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-    handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-    if not handle:
-        return ""
-    try:
-        buf = ctypes.create_unicode_buffer(260)
-        size = ctypes.wintypes.DWORD(260)
-        ctypes.windll.kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size))
-        return os.path.basename(buf.value)
-    except Exception:
-        return ""
-    finally:
-        ctypes.windll.kernel32.CloseHandle(handle)

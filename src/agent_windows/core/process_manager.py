@@ -51,10 +51,12 @@ def kill_process(pid_or_name: str) -> dict[str, Any]:
 
     # Kill by name via PowerShell
     try:
+        # Escape single quotes to prevent PowerShell injection
+        safe_name = pid_or_name.replace("'", "''")
         result = subprocess.run(
             ["powershell", "-NoProfile", "-Command",
-             f"Stop-Process -Name '{pid_or_name}' -Force -ErrorAction SilentlyContinue; "
-             f"(Get-Process -Name '{pid_or_name}' -ErrorAction SilentlyContinue).Count"],
+             f"Stop-Process -Name '{safe_name}' -Force -ErrorAction SilentlyContinue; "
+             f"(Get-Process -Name '{safe_name}' -ErrorAction SilentlyContinue).Count"],
             capture_output=True, text=True, timeout=10,
             encoding="utf-8", errors="replace",
         )

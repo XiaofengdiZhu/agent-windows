@@ -20,3 +20,6 @@ reference/
 # OS
 Thumbs.db
 .DS_Store
+
+# Temp
+docs/

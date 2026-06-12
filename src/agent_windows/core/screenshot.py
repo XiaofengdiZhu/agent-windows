@@ -4,6 +4,7 @@ Auto-selects the best available backend. Saves to disk and returns path info.
 """
 
 import logging
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,12 @@ from PIL import Image
 from agent_windows.utils.config import load_config, get_screenshot_save_dir
 
 logger = logging.getLogger(__name__)
+
+_dxcam_camera = None
+_dxcam_lock = threading.Lock()
+
+_mss_instance = None
+_mss_lock = threading.Lock()
 
 # ── Virtual screen helpers ────────────────────────────────────────
 
@@ -50,9 +57,14 @@ def get_primary_monitor() -> int:
 
 def _capture_dxcam(bbox: tuple[int, int, int, int] | None) -> Image.Image:
     """Capture via dxcam (DXGI) — fast but single-monitor only."""
+    global _dxcam_camera
     import dxcam
 
-    camera = dxcam.create(output_idx=0, processor_backend="numpy")
+    with _dxcam_lock:
+        if _dxcam_camera is None:
+            _dxcam_camera = dxcam.create(output_idx=0, processor_backend="numpy")
+        camera = _dxcam_camera
+
     if bbox:
         # dxcam region is monitor-local; translate from virtual coords
         left, top, width, height = get_virtual_screen_rect()
@@ -67,20 +79,25 @@ def _capture_dxcam(bbox: tuple[int, int, int, int] | None) -> Image.Image:
 
 def _capture_mss(bbox: tuple[int, int, int, int] | None) -> Image.Image:
     """Capture via mss — cross-platform, multi-monitor aware."""
+    global _mss_instance
     import mss
 
-    with mss.mss() as sct:
-        if bbox:
-            monitor = {
-                "left": bbox[0],
-                "top": bbox[1],
-                "width": bbox[2] - bbox[0],
-                "height": bbox[3] - bbox[1],
-            }
-        else:
-            monitor = sct.monitors[0]  # Full virtual screen
-        raw = sct.grab(monitor)
-        return Image.frombytes("RGB", raw.size, raw.rgb)
+    with _mss_lock:
+        if _mss_instance is None:
+            _mss_instance = mss.mss()
+        sct = _mss_instance
+
+    if bbox:
+        monitor = {
+            "left": bbox[0],
+            "top": bbox[1],
+            "width": bbox[2] - bbox[0],
+            "height": bbox[3] - bbox[1],
+        }
+    else:
+        monitor = sct.monitors[0]  # Full virtual screen
+    raw = sct.grab(monitor)
+    return Image.frombytes("RGB", raw.size, raw.rgb)
 
 
 def _capture_pillow(bbox: tuple[int, int, int, int] | None) -> Image.Image:

@@ -44,8 +44,8 @@ def set_clipboard(text: str, keyboard: bool = False) -> dict[str, Any]:
     """
     try:
         result = subprocess.run(
-            ["powershell", "-NoProfile", "-Command",
-             f"Set-Clipboard -Value @'\n{text}\n'@"],
+            ["powershell", "-NoProfile", "-Command", "$input | Set-Clipboard"],
+            input=text,
             capture_output=True, text=True, timeout=5,
             encoding="utf-8", errors="replace",
         )
