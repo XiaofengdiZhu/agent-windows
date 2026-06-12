@@ -69,6 +69,7 @@ CLI (Typer, ~5ms) → Named Pipe IPC → Daemon (COM STA, ~20ms response)
 | `ask-vision PROMPT [-i IMAGE] [-m MODEL]` | Free-form visual Q&A |
 | `highlight X1 Y1 X2 Y2 [-l LABEL] [-c COLOR]` | Highlight region on screenshot |
 | `diff BASELINE [-c COMPARE] [-t THRESHOLD]` | Pixel-level screenshot diff |
+| `get-text SELECTOR` | Get text content of a UIA element |
 
 ### Input
 | `click X Y [--right] [--double]` | Mouse click |

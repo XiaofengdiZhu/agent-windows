@@ -45,7 +45,7 @@ def route_request(request: JSONRPCRequest) -> JSONRPCResponse:
     try:
         result = handler_func(request.params or {})
         return JSONRPCResponse(id=request.id, result=result)
-    except ValueError as e:
+    except (ValueError, IndexError) as e:
         return make_error(INVALID_PARAMS, str(e), request.id)
     except Exception as e:
         logger.exception("Handler error for %s", request.method)
@@ -394,6 +394,29 @@ def _cleanup_screenshots(params: dict) -> dict[str, Any]:
             f"Directory size: {stats.get('dir_size_mb', 0)} MB"
         ),
         **stats,
+    }
+
+
+# ── Element query handlers ─────────────────────────────────────────
+
+
+@handler("get_text")
+def _get_text(params: dict) -> dict[str, Any]:
+    """Get text content of a UIA element."""
+    from agent_windows.core.tree import resolve_element
+
+    selector = params.get("selector", "")
+    if not selector:
+        raise ValueError("selector is required")
+
+    el = resolve_element(selector)
+    text = el.name or ""
+
+    return {
+        "output": f"## Get Text\nSelector: {selector}\nText: {text}",
+        "selector": selector,
+        "text": text,
+        "control_type": el.control_type,
     }
 
 

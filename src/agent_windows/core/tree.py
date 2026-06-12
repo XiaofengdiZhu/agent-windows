@@ -242,6 +242,44 @@ def traverse_tree(
     }
 
 
+def resolve_element(selector: str) -> ElementInfo:
+    """Resolve a UIA element selector to an ElementInfo.
+
+    Args:
+        selector: Element reference like "@e3" (1-based index into
+            the interactive elements list from the rendered snapshot).
+
+    Returns:
+        ElementInfo for the matched element.
+
+    Raises:
+        ValueError: If selector format is invalid.
+        IndexError: If element index is out of range.
+    """
+    if not selector.startswith("@e"):
+        raise ValueError(f"Invalid selector: {selector!r} (expected @eN)")
+    try:
+        index = int(selector[2:]) - 1  # @e{N} is 1-based
+    except ValueError:
+        raise ValueError(f"Invalid selector: {selector!r} (expected @eN)")
+    if index < 0:
+        raise ValueError(f"Invalid selector: {selector!r} (index must be ≥ 1)")
+
+    from agent_windows.utils.config import load_config
+    cfg = load_config().get("tree", {})
+    data = traverse_tree(
+        max_depth=cfg.get("max_depth", 30),
+        include_invisible=cfg.get("include_invisible", False),
+        include_offscreen=cfg.get("include_offscreen", False),
+    )
+    elements = data.get("interactive_elements", [])
+    if index >= len(elements):
+        raise IndexError(
+            f"Element {selector} not found ({len(elements)} interactive elements)"
+        )
+    return elements[index]
+
+
 def _traverse_window(
     client,
     window: WindowInfo,

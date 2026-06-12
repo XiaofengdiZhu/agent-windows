@@ -149,3 +149,13 @@ def diff_screenshot(
         params["output"] = output
     result = dispatch("diff", params, ctx)
     print_result(result, ctx)
+
+
+@app.command(name="get-text")
+def get_text(
+    ctx: typer.Context,
+    selector: str = typer.Argument(help="UIA element ref (e.g. @e3)"),
+) -> None:
+    """Get text content of a UIA element."""
+    result = dispatch("get_text", {"selector": selector}, ctx)
+    print_result(result, ctx)

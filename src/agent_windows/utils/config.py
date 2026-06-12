@@ -89,6 +89,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "clipboard": {
         "method": "system",  # "system" (PowerShell) or "keyboard" (simulate Ctrl+C/V)
     },
+    "wait": {
+        "poll_interval": 0.5,  # seconds between polls when waiting for element/text
+    },
 }
 
 # ── Load / Save ───────────────────────────────────────────────────
