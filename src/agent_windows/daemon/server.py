@@ -11,7 +11,6 @@ Usage: python -m agent_windows --daemon [--debug]
 import logging
 import os
 import queue
-import signal
 import sys
 import threading
 import time
@@ -95,7 +94,7 @@ class COMWorkerThread(threading.Thread):
             try:
                 pythoncom.PumpWaitingMessages()
             except Exception:
-                pass
+                logger.debug("PumpWaitingMessages failed", exc_info=True)
 
             try:
                 cmd = self.command_queue.get(timeout=0.05)
@@ -159,6 +158,7 @@ class COMWorkerThread(threading.Thread):
             return result["response"]
         finally:
             self._result_events.pop(cmd_id, None)
+            self.results.pop(cmd_id, None)
 
     def stop(self):
         """Signal the worker thread to stop."""
@@ -295,9 +295,6 @@ def _start_workers(state):
 
     logger.info("Daemon ready, listening on %s", PIPE_NAME)
 
-    # Register command handlers from core modules
-    _register_core_handlers()
-
     return True
 
 
@@ -430,22 +427,6 @@ def run_daemon() -> None:
         _main_pipe_loop(state)
     finally:
         _shutdown_daemon(state)
-
-
-def _register_core_handlers():
-    """Import and register command handlers from core modules.
-
-    Handlers use @handler("method") decorator to register themselves.
-    We import modules here to trigger registration, but only after the
-    STA thread is ready (to ensure COM calls happen on the right thread).
-    """
-    # Core handlers will be registered when their modules are imported
-    # Import them here so registration happens at daemon startup
-    try:
-        # These imports will grow as we implement phases
-        pass
-    except Exception as e:
-        logger.warning("Failed to register some core handlers: %s", e)
 
 
 def _setup_logging(debug: bool) -> None:

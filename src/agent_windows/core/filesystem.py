@@ -19,10 +19,10 @@ _BLOCKED_PARTS = frozenset({
     "sam",
 })
 
-_BLOCKED_PART_PREFIXES: list[tuple[tuple[str, ...], str]] = [
+_BLOCKED_PART_PREFIXES: tuple[tuple[tuple[str, ...], str], ...] = (
     (("windows", "system32"), "Windows System32 directory"),
     (("windows", "system"), "Windows System directory"),
-]
+)
 
 
 def _validate_path(path: str) -> Path:

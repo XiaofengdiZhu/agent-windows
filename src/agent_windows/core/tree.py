@@ -9,7 +9,6 @@ Simplified from Windows-MCP's tree service — no browser DOM/IA2 handling yet.
 import logging
 import threading
 import time
-import time as _time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -29,12 +28,12 @@ def get_tree_snapshot(ttl: float = _TREE_CACHE_TTL, **kwargs) -> dict[str, Any]:
     """获取 UIA 树快照，带缓存。"""
     global _tree_cache, _tree_cache_ts
     with _tree_cache_lock:
-        if _tree_cache and _time.time() - _tree_cache_ts < ttl:
+        if _tree_cache and time.time() - _tree_cache_ts < ttl:
             return _tree_cache
     data = traverse_tree(**kwargs)
     with _tree_cache_lock:
         _tree_cache = data
-        _tree_cache_ts = _time.time()
+        _tree_cache_ts = time.time()
     return data
 
 
@@ -47,15 +46,6 @@ INTERACTIVE_TYPES = {
     "TreeItemControl", "DataItemControl", "HeaderItemControl",
     "TextBoxControl", "SpinnerControl", "ScrollBarControl",
     "DocumentControl",
-}
-
-STRUCTURAL_TYPES = {
-    "PaneControl", "GroupControl", "CustomControl",
-    "ToolBarControl", "TabControl", "MenuBarControl",
-}
-
-INFORMATIVE_TYPES = {
-    "TextControl", "StatusBarControl",
 }
 
 # ── Data models ───────────────────────────────────────────────────
@@ -99,11 +89,6 @@ class ElementInfo:
     is_enabled: bool = True
     is_offscreen: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)
-
-    @property
-    def ref_id(self) -> str:
-        """Stable reference ID for this element."""
-        return f"@e{id(self) & 0xFFFF:03x}"
 
 
 @dataclass

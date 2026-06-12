@@ -136,7 +136,3 @@ def shortcut(
     """Send keyboard shortcut."""
     result = dispatch("shortcut", {"keys": keys}, ctx)
     print_result(result, ctx)
-
-
-# Register 'type' as the command name (Python built-in conflict)
-type_text.__name__ = "type"

@@ -1,7 +1,10 @@
 """Shared Win32 utility functions."""
 import ctypes
 import ctypes.wintypes
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 
 
 def get_process_name(pid: int) -> str:
@@ -16,6 +19,7 @@ def get_process_name(pid: int) -> str:
         ctypes.windll.kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size))
         return os.path.basename(buf.value)
     except Exception:
+        logger.debug("Failed to get process name for pid %d", pid, exc_info=True)
         return ""
     finally:
         ctypes.windll.kernel32.CloseHandle(handle)

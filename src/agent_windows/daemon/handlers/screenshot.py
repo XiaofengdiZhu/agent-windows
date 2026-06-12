@@ -1,8 +1,11 @@
 """Screenshot command handlers: capture, highlight, diff, cleanup."""
 
+import logging
 from typing import Any
 
 from agent_windows.daemon.router import handler
+
+logger = logging.getLogger(__name__)
 
 
 @handler("screenshot")
@@ -54,7 +57,7 @@ def _screenshot(params: dict) -> dict[str, Any]:
         scale = cfg.get("scale", 1.0)
         image = scale_screenshot(image, max_width=max_w, max_height=max_h, scale=scale)
     except Exception:
-        pass
+        logger.debug("Screenshot scaling skipped", exc_info=True)
 
     path = save_and_cleanup(image, output_path=output if output else None)
     return {

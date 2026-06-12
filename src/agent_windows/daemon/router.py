@@ -29,6 +29,8 @@ HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {}
 def handler(method: str):
     """Decorator to register a function as a JSON-RPC handler."""
     def decorator(func: Callable[..., dict[str, Any]]):
+        if method in HANDLERS:
+            logger.warning("Overwriting existing handler for %r", method)
         HANDLERS[method] = func
         return func
     return decorator

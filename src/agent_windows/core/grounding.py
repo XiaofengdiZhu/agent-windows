@@ -26,7 +26,7 @@ from agent_windows.utils.coordinates import (
     crop_around_point,
     parse_model_coordinates,
 )
-from agent_windows.core.screenshot import cleanup_screenshots
+from agent_windows.core.screenshot import save_and_cleanup
 
 logger = logging.getLogger(__name__)
 
@@ -164,15 +164,8 @@ def _save_marked_screenshot(
     save_dir = get_screenshot_save_dir()
     timestamp = int(time.time() * 1000)
     path = save_dir / f"grounding-{timestamp}.png"
-    marked.save(path, format="PNG")
 
-    # Trigger cleanup after save (respects interval)
-    try:
-        cleanup_screenshots()
-    except Exception:
-        pass
-
-    return path
+    return save_and_cleanup(marked, output_path=str(path))
 
 
 # ── Default prompts ───────────────────────────────────────────────
@@ -239,29 +232,20 @@ def ask_vision(
     # Save screenshot if requested
     saved_path = None
     if output_path:
-        save_target = Path(output_path)
-        save_target.parent.mkdir(parents=True, exist_ok=True)
-        image.save(save_target, format="PNG")
-        saved_path = str(save_target)
+        path = save_and_cleanup(image, output_path=output_path)
+        saved_path = str(path)
     elif not image_path:
         # Auto-save captured screenshot for reference
         save_dir = get_screenshot_save_dir()
         timestamp = int(time.time() * 1000)
-        auto_path = save_dir / f"ask-vision-{timestamp}.png"
-        image.save(auto_path, format="PNG")
-        saved_path = str(auto_path)
+        auto_path = str(save_dir / f"ask-vision-{timestamp}.png")
+        path = save_and_cleanup(image, output_path=auto_path)
+        saved_path = str(path)
 
     # Call vision model with custom prompt (higher token limit for Q&A)
     logger.info("ask-vision: sending prompt (%d chars)", len(prompt))
     response_text = call_vision_model(image, prompt, effective_config, max_tokens=1024)
     logger.debug("ask-vision response: %s", response_text[:200])
-
-    # Trigger cleanup after save (respects interval)
-    if saved_path:
-        try:
-            cleanup_screenshots()
-        except Exception:
-            pass
 
     return {
         "response": response_text,
@@ -512,21 +496,10 @@ def _save_detection_screenshot(
 
     # Save
     if output_path:
-        save_target = Path(output_path)
-        save_target.parent.mkdir(parents=True, exist_ok=True)
-        save_target = save_target.with_suffix(".png")
-        marked.save(save_target, format="PNG")
-        return save_target
+        path = str(Path(output_path).with_suffix(".png"))
+        return save_and_cleanup(marked, output_path=path)
 
     save_dir = get_screenshot_save_dir()
     timestamp = int(time.time() * 1000)
-    path = save_dir / f"detection-{timestamp}.png"
-    marked.save(path, format="PNG")
-
-    # Trigger cleanup after save (respects interval)
-    try:
-        cleanup_screenshots()
-    except Exception:
-        pass
-
-    return path
+    path = str(save_dir / f"detection-{timestamp}.png")
+    return save_and_cleanup(marked, output_path=path)

@@ -52,7 +52,7 @@ def set_clipboard(text: str, keyboard: bool = False) -> dict[str, Any]:
         if result.returncode != 0:
             raise RuntimeError(f"Set-Clipboard failed: {result.stderr}")
     except Exception as e:
-        raise RuntimeError(f"Failed to set clipboard: {e}")
+        raise RuntimeError(f"Failed to set clipboard: {e}") from e
 
     if keyboard:
         from agent_windows.core.input_controller import shortcut

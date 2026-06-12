@@ -115,11 +115,11 @@ def disconnect_pipe(pipe) -> None:
     try:
         win32pipe.DisconnectNamedPipe(pipe)
     except Exception:
-        pass
+        logger.debug("Pipe disconnect failed", exc_info=True)
     try:
         win32file.CloseHandle(pipe)
     except Exception:
-        pass
+        logger.debug("Pipe disconnect failed", exc_info=True)
 
 
 def send_to_daemon(message: str, pipe_name: str = PIPE_NAME) -> str:

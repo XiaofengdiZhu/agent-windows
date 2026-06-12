@@ -93,7 +93,7 @@ def test_wait_text_immediate(mock_config, make_element):
     mock_config.return_value = {"wait": {"poll_interval": 0.5}, "tree": {}}
     handler = HANDLERS["wait"]
 
-    with patch("agent_windows.core.tree.traverse_tree") as mock_traverse, \
+    with patch("agent_windows.core.tree.get_tree_snapshot") as mock_traverse, \
          patch("agent_windows.daemon.handlers.tree.time") as mock_time:
         mock_traverse.return_value = {"interactive_elements": elements}
         mock_time.time.side_effect = [0.0, 0.0]
@@ -113,7 +113,7 @@ def test_wait_text_not_found_timeout(mock_config, make_element):
     mock_config.return_value = {"wait": {"poll_interval": 0.01}, "tree": {}}
     handler = HANDLERS["wait"]
 
-    with patch("agent_windows.core.tree.traverse_tree") as mock_traverse, \
+    with patch("agent_windows.core.tree.get_tree_snapshot") as mock_traverse, \
          patch("agent_windows.daemon.handlers.tree.time") as mock_time:
         mock_traverse.return_value = {"interactive_elements": elements}
         # start=0, poll check at 100s (past timeout)

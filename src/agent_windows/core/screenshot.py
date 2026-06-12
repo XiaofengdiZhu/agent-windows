@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 _dxcam_camera = None
 _dxcam_lock = threading.Lock()
 
+_last_successful_backend: str | None = None
+
 _mss_instance = None
 _mss_lock = threading.Lock()
 
@@ -59,19 +61,15 @@ def _capture_dxcam(bbox: tuple[int, int, int, int] | None) -> Image.Image:
     """Capture via dxcam (DXGI) — fast but single-monitor only."""
     global _dxcam_camera
     import dxcam
-
     with _dxcam_lock:
         if _dxcam_camera is None:
             _dxcam_camera = dxcam.create(output_idx=0, processor_backend="numpy")
-        camera = _dxcam_camera
-
-    if bbox:
-        # dxcam region is monitor-local; translate from virtual coords
-        left, top, width, height = get_virtual_screen_rect()
-        region = (bbox[0] - left, bbox[1] - top, bbox[2] - left, bbox[3] - top)
-        frame = camera.grab(region=region, copy=True)
-    else:
-        frame = camera.grab(copy=True)
+        if bbox:
+            left, top, width, height = get_virtual_screen_rect()
+            region = (bbox[0] - left, bbox[1] - top, bbox[2] - left, bbox[3] - top)
+            frame = _dxcam_camera.grab(region=region, copy=True)
+        else:
+            frame = _dxcam_camera.grab(copy=True)
     if frame is None:
         raise RuntimeError("DXGI capture returned no frame")
     return Image.fromarray(frame)
@@ -146,9 +144,22 @@ def capture_screenshot(
         bbox = _monitor_bbox(monitor)
 
     if backend_config == "auto":
+        global _last_successful_backend
+        # Try last successful backend first
+        if _last_successful_backend:
+            for name, capture_fn in BACKEND_CHAIN:
+                if name == _last_successful_backend:
+                    try:
+                        img = capture_fn(bbox)
+                        logger.debug("Screenshot captured via %s (cached)", name)
+                        return img
+                    except Exception:
+                        break
+        # Full chain fallback
         for name, capture_fn in BACKEND_CHAIN:
             try:
                 img = capture_fn(bbox)
+                _last_successful_backend = name
                 logger.debug("Screenshot captured via %s", name)
                 return img
             except Exception as e:
@@ -321,16 +332,7 @@ def highlight_region(
         timestamp = int(time.time() * 1000)
         path = save_dir / f"highlight-{timestamp}.png"
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    marked.save(path, format="PNG")
-    logger.debug("Highlight saved: %s", path)
-
-    try:
-        cleanup_screenshots()
-    except Exception:
-        logger.debug("Post-highlight cleanup failed", exc_info=True)
-
-    return path
+    return save_and_cleanup(marked, output_path=str(path))
 
 
 def diff_images(
@@ -400,8 +402,7 @@ def diff_images(
         vis_rgba[outline_coords[0], outline_coords[1], 2] = 0
         vis_rgba[outline_coords[0], outline_coords[1], 3] = 255
 
-        from PIL import Image as _Img
-        vis_img = _Img.fromarray(vis_rgba, mode="RGBA")
+        vis_img = Image.fromarray(vis_rgba, mode="RGBA")
     else:
         # Fallback without numpy: simple side-by-side diff
         mask = diff_gray.point(lambda p: 255 if p > threshold else 0)
@@ -418,14 +419,7 @@ def diff_images(
         timestamp = int(time.time() * 1000)
         path = save_dir / f"diff-{timestamp}.png"
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    vis_img.save(path, format="PNG")
-
-    # Trigger cleanup after save (respects interval)
-    try:
-        cleanup_screenshots()
-    except Exception:
-        logger.debug("Post-diff cleanup failed", exc_info=True)
+    save_and_cleanup(vis_img, output_path=str(path))
 
     return {
         "diff_pixels": diff_pixels,

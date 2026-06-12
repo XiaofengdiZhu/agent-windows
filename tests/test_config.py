@@ -46,8 +46,7 @@ class TestParseValue:
 
     def test_int(self):
         assert _parse_value("42") == 42
-        assert _parse_value("0") == 0  # But wait, "0" maps to False...
-        # Actually "0" is caught by bool check first
+        assert _parse_value("0") is False  # "0" matches bool check first, returns False
 
     def test_float(self):
         assert _parse_value("3.14") == 3.14

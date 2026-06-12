@@ -22,19 +22,21 @@ def config_init() -> None:
 @app.command("show")
 def config_show() -> None:
     """Show current configuration."""
+    import copy
     import toml
 
     config = load_config()
+    display_config = copy.deepcopy(config)
     # 遮蔽 API Key
-    if "grounding" in config and "api_key" in config["grounding"]:
-        key = config["grounding"]["api_key"]
+    if "grounding" in display_config and "api_key" in display_config["grounding"]:
+        key = display_config["grounding"]["api_key"]
         if key and len(key) > 8:
-            config["grounding"]["api_key"] = key[:4] + "..." + key[-4:]
+            display_config["grounding"]["api_key"] = key[:4] + "..." + key[-4:]
         elif key:
-            config["grounding"]["api_key"] = "***"
+            display_config["grounding"]["api_key"] = "***"
     path = get_config_path()
     typer.echo(f"# Config file: {path}")
-    typer.echo(toml.dumps(config))
+    typer.echo(toml.dumps(display_config))
 
 
 @app.command("set")
