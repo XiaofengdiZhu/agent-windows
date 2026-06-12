@@ -7,19 +7,6 @@ from unittest.mock import patch, MagicMock
 from agent_windows.core.tree import ElementInfo, BoundingBox
 
 
-def _make_element(name: str = "Button", control_type: str = "ButtonControl",
-                  bbox: BoundingBox | None = None, is_enabled: bool = True,
-                  is_offscreen: bool = False) -> ElementInfo:
-    return ElementInfo(
-        name=name,
-        control_type=control_type,
-        bbox=bbox or BoundingBox(100, 200, 300, 250),
-        is_interactive=True,
-        is_enabled=is_enabled,
-        is_offscreen=is_offscreen,
-    )
-
-
 # ── wait: sleep mode ────────────────────────────────────────────────
 
 
@@ -58,7 +45,7 @@ def test_wait_no_args():
 
 
 @patch("agent_windows.utils.config.load_config")
-def test_wait_element_immediate(mock_config):
+def test_wait_element_immediate(mock_config, make_element):
     """wait for element that already exists returns immediately."""
     from agent_windows.daemon.router import HANDLERS
 
@@ -67,7 +54,7 @@ def test_wait_element_immediate(mock_config):
 
     with patch("agent_windows.core.tree.resolve_element") as mock_resolve, \
          patch("agent_windows.daemon.handlers.tree.time") as mock_time:
-        mock_resolve.return_value = _make_element(name="Submit")
+        mock_resolve.return_value = make_element(name="Submit")
         mock_time.time.side_effect = [0.0, 0.0]  # start, after resolve
         result = handler({"selector": "@e3", "timeout": 5})
 
@@ -98,11 +85,11 @@ def test_wait_element_not_found_timeout(mock_config):
 
 
 @patch("agent_windows.utils.config.load_config")
-def test_wait_text_immediate(mock_config):
+def test_wait_text_immediate(mock_config, make_element):
     """wait for text that already exists returns immediately."""
     from agent_windows.daemon.router import HANDLERS
 
-    elements = [_make_element(name="提交成功")]
+    elements = [make_element(name="提交成功")]
     mock_config.return_value = {"wait": {"poll_interval": 0.5}, "tree": {}}
     handler = HANDLERS["wait"]
 
@@ -118,11 +105,11 @@ def test_wait_text_immediate(mock_config):
 
 
 @patch("agent_windows.utils.config.load_config")
-def test_wait_text_not_found_timeout(mock_config):
+def test_wait_text_not_found_timeout(mock_config, make_element):
     """wait for text that never appears raises TimeoutError."""
     from agent_windows.daemon.router import HANDLERS
 
-    elements = [_make_element(name="Loading")]
+    elements = [make_element(name="Loading")]
     mock_config.return_value = {"wait": {"poll_interval": 0.01}, "tree": {}}
     handler = HANDLERS["wait"]
 
@@ -141,7 +128,7 @@ def test_wait_text_not_found_timeout(mock_config):
 
 
 @patch("agent_windows.utils.config.load_config")
-def test_wait_custom_interval(mock_config):
+def test_wait_custom_interval(mock_config, make_element):
     """wait respects explicit interval parameter over config default."""
     from agent_windows.daemon.router import HANDLERS
 
@@ -150,7 +137,7 @@ def test_wait_custom_interval(mock_config):
 
     with patch("agent_windows.core.tree.resolve_element") as mock_resolve, \
          patch("agent_windows.daemon.handlers.tree.time") as mock_time:
-        mock_resolve.return_value = _make_element(name="OK")
+        mock_resolve.return_value = make_element(name="OK")
         mock_time.time.side_effect = [0.0, 0.0]
         result = handler({"selector": "@e1", "timeout": 5, "interval": 0.1})
 

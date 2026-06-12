@@ -3,31 +3,18 @@
 import pytest
 from unittest.mock import patch, MagicMock
 
-from agent_windows.core.tree import ElementInfo, BoundingBox, resolve_element, get_tree_snapshot
+from agent_windows.core.tree import BoundingBox, resolve_element, get_tree_snapshot
 
 
 # ── resolve_element tests ───────────────────────────────────────────
 
 
-def _make_element(name: str = "Button", control_type: str = "ButtonControl",
-                  bbox: BoundingBox | None = None, is_enabled: bool = True,
-                  is_offscreen: bool = False) -> ElementInfo:
-    return ElementInfo(
-        name=name,
-        control_type=control_type,
-        bbox=bbox or BoundingBox(100, 200, 300, 250),
-        is_interactive=True,
-        is_enabled=is_enabled,
-        is_offscreen=is_offscreen,
-    )
-
-
 @patch("agent_windows.core.tree.get_tree_snapshot")
 @patch("agent_windows.utils.config.load_config")
-def test_resolve_element_valid(mock_config, mock_snapshot):
+def test_resolve_element_valid(mock_config, mock_snapshot, make_element):
     """resolve_element with valid @e{N} returns correct ElementInfo."""
     mock_config.return_value = {"tree": {}}
-    elements = [_make_element(name=f"el{i}") for i in range(5)]
+    elements = [make_element(name=f"el{i}") for i in range(5)]
     mock_snapshot.return_value = {"interactive_elements": elements}
 
     result = resolve_element("@e3")
@@ -36,10 +23,10 @@ def test_resolve_element_valid(mock_config, mock_snapshot):
 
 @patch("agent_windows.core.tree.get_tree_snapshot")
 @patch("agent_windows.utils.config.load_config")
-def test_resolve_element_first(mock_config, mock_snapshot):
+def test_resolve_element_first(mock_config, mock_snapshot, make_element):
     """resolve_element @e1 returns the first element."""
     mock_config.return_value = {"tree": {}}
-    elements = [_make_element(name="first"), _make_element(name="second")]
+    elements = [make_element(name="first"), make_element(name="second")]
     mock_snapshot.return_value = {"interactive_elements": elements}
 
     result = resolve_element("@e1")
@@ -48,10 +35,10 @@ def test_resolve_element_first(mock_config, mock_snapshot):
 
 @patch("agent_windows.core.tree.get_tree_snapshot")
 @patch("agent_windows.utils.config.load_config")
-def test_resolve_element_out_of_range(mock_config, mock_snapshot):
+def test_resolve_element_out_of_range(mock_config, mock_snapshot, make_element):
     """resolve_element raises IndexError for out-of-range index."""
     mock_config.return_value = {"tree": {}}
-    elements = [_make_element(name="only")]
+    elements = [make_element(name="only")]
     mock_snapshot.return_value = {"interactive_elements": elements}
 
     with pytest.raises(IndexError, match="not found"):
@@ -80,11 +67,11 @@ def test_resolve_element_not_a_number():
 
 
 @patch("agent_windows.core.tree.resolve_element")
-def test_get_text_handler(mock_resolve):
+def test_get_text_handler(mock_resolve, make_element):
     """get_text handler returns element name as text."""
     from agent_windows.daemon.router import HANDLERS
 
-    mock_resolve.return_value = _make_element(name="Submit", control_type="ButtonControl")
+    mock_resolve.return_value = make_element(name="Submit", control_type="ButtonControl")
 
     handler = HANDLERS["get_text"]
     result = handler({"selector": "@e3"})
@@ -96,11 +83,11 @@ def test_get_text_handler(mock_resolve):
 
 
 @patch("agent_windows.core.tree.resolve_element")
-def test_get_text_empty_name(mock_resolve):
+def test_get_text_empty_name(mock_resolve, make_element):
     """get_text handler returns empty string for element with no name."""
     from agent_windows.daemon.router import HANDLERS
 
-    mock_resolve.return_value = _make_element(name="", control_type="PaneControl")
+    mock_resolve.return_value = make_element(name="", control_type="PaneControl")
 
     handler = HANDLERS["get_text"]
     result = handler({"selector": "@e1"})

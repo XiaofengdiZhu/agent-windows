@@ -1,0 +1,48 @@
+"""Tests for daemon router: request routing and error handling."""
+
+import pytest
+from agent_windows.daemon.router import route_request, HANDLERS
+from agent_windows.ipc.protocol import JSONRPCRequest
+
+
+class TestRouteRequest:
+    def test_ping(self):
+        req = JSONRPCRequest(id=1, method="ping")
+        resp = route_request(req)
+        assert resp.error is None
+        assert resp.result["status"] == "ok"
+
+    def test_unknown_method_returns_method_not_found(self):
+        req = JSONRPCRequest(id=1, method="nonexistent")
+        resp = route_request(req)
+        assert resp.error is not None
+        assert resp.error["code"] == -32601
+
+    def test_empty_method_returns_invalid_request(self):
+        req = JSONRPCRequest(id=1, method="")
+        resp = route_request(req)
+        assert resp.error is not None
+        assert resp.error["code"] == -32600
+
+    def test_handler_value_error_maps_to_invalid_params(self):
+        req = JSONRPCRequest(id=1, method="get_text", params={})
+        resp = route_request(req)
+        assert resp.error is not None
+        assert resp.error["code"] == -32602
+
+    def test_handlers_registered(self):
+        """Verify key handlers are registered."""
+        expected = {"ping", "shutdown", "screenshot", "snapshot", "observe",
+                    "click", "type", "scroll", "shortcut", "batch",
+                    "ground", "detect", "ask-vision",
+                    "shell", "fs_read", "fs_write", "fs_list",
+                    "clipboard_get", "clipboard_set",
+                    "process_list", "process_kill",
+                    "app_launch", "app_switch", "app_list",
+                    "get_text", "element_state", "wait",
+                    "highlight", "diff", "cleanup_screenshots",
+                    "move", "drag", "hover", "dblclick",
+                    "mouse_down", "mouse_up", "app_resize"}
+        registered = set(HANDLERS.keys())
+        missing = expected - registered
+        assert not missing, f"Missing handlers: {missing}"

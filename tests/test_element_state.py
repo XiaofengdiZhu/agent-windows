@@ -6,28 +6,15 @@ from unittest.mock import patch
 from agent_windows.core.tree import ElementInfo, BoundingBox
 
 
-def _make_element(name: str = "Button", control_type: str = "ButtonControl",
-                  bbox: BoundingBox | None = None, is_enabled: bool = True,
-                  is_offscreen: bool = False) -> ElementInfo:
-    return ElementInfo(
-        name=name,
-        control_type=control_type,
-        bbox=bbox or BoundingBox(100, 200, 300, 250),
-        is_interactive=True,
-        is_enabled=is_enabled,
-        is_offscreen=is_offscreen,
-    )
-
-
 # ── element_state handler tests ─────────────────────────────────────
 
 
 @patch("agent_windows.core.tree.resolve_element")
-def test_is_visible_true(mock_resolve):
+def test_is_visible_true(mock_resolve, make_element):
     """element_state returns True for visible (not offscreen) element."""
     from agent_windows.daemon.router import HANDLERS
 
-    mock_resolve.return_value = _make_element(is_offscreen=False)
+    mock_resolve.return_value = make_element(is_offscreen=False)
     handler = HANDLERS["element_state"]
     result = handler({"selector": "@e1", "check": "visible"})
 
@@ -37,11 +24,11 @@ def test_is_visible_true(mock_resolve):
 
 
 @patch("agent_windows.core.tree.resolve_element")
-def test_is_visible_false(mock_resolve):
+def test_is_visible_false(mock_resolve, make_element):
     """element_state returns False for offscreen element."""
     from agent_windows.daemon.router import HANDLERS
 
-    mock_resolve.return_value = _make_element(is_offscreen=True)
+    mock_resolve.return_value = make_element(is_offscreen=True)
     handler = HANDLERS["element_state"]
     result = handler({"selector": "@e1", "check": "visible"})
 
@@ -50,11 +37,11 @@ def test_is_visible_false(mock_resolve):
 
 
 @patch("agent_windows.core.tree.resolve_element")
-def test_is_enabled_true(mock_resolve):
+def test_is_enabled_true(mock_resolve, make_element):
     """element_state returns True for enabled element."""
     from agent_windows.daemon.router import HANDLERS
 
-    mock_resolve.return_value = _make_element(is_enabled=True)
+    mock_resolve.return_value = make_element(is_enabled=True)
     handler = HANDLERS["element_state"]
     result = handler({"selector": "@e3", "check": "enabled"})
 
@@ -63,11 +50,11 @@ def test_is_enabled_true(mock_resolve):
 
 
 @patch("agent_windows.core.tree.resolve_element")
-def test_is_enabled_false(mock_resolve):
+def test_is_enabled_false(mock_resolve, make_element):
     """element_state returns False for disabled element."""
     from agent_windows.daemon.router import HANDLERS
 
-    mock_resolve.return_value = _make_element(is_enabled=False)
+    mock_resolve.return_value = make_element(is_enabled=False)
     handler = HANDLERS["element_state"]
     result = handler({"selector": "@e3", "check": "enabled"})
 
