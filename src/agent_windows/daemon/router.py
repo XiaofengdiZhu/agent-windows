@@ -17,6 +17,7 @@ from agent_windows.ipc.protocol import (
     METHOD_NOT_FOUND,
     INVALID_PARAMS,
     DAEMON_INTERNAL_ERROR,
+    WAIT_TIMEOUT,
 )
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,8 @@ def route_request(request: JSONRPCRequest) -> JSONRPCResponse:
         return JSONRPCResponse(id=request.id, result=result)
     except (ValueError, IndexError) as e:
         return make_error(INVALID_PARAMS, str(e), request.id)
+    except TimeoutError as e:
+        return make_error(WAIT_TIMEOUT, str(e), request.id)
     except Exception as e:
         logger.exception("Handler error for %s", request.method)
         return make_error(DAEMON_INTERNAL_ERROR, str(e), request.id)
@@ -446,6 +449,76 @@ def _element_state(params: dict) -> dict[str, Any]:
         "check": check,
         "result": result,
     }
+
+
+@handler("wait")
+def _wait(params: dict) -> dict[str, Any]:
+    """Wait for a duration, element appearance, or text appearance.
+
+    Modes:
+        seconds > 0 and no selector/text → sleep
+        selector → poll until resolve_element succeeds or timeout
+        text → poll until an interactive element's name contains text
+    """
+    from agent_windows.utils.config import load_config
+    from agent_windows.core.tree import resolve_element, traverse_tree
+
+    timeout = float(params.get("timeout", 30))
+    selector = params.get("selector", "")
+    text = params.get("text", "")
+    seconds = float(params.get("seconds", 0))
+
+    poll_interval = float(params.get("interval", 0)) or (
+        load_config().get("wait", {}).get("poll_interval", 0.5)
+    )
+
+    # Mode 1: plain sleep
+    if not selector and not text:
+        if seconds <= 0:
+            raise ValueError("provide seconds, selector, or text")
+        time.sleep(seconds)
+        return {"output": f"## Wait\nSlept {seconds}s"}
+
+    start = time.time()
+    cfg = load_config().get("tree", {})
+
+    # Mode 2: wait for element
+    if selector:
+        while True:
+            try:
+                el = resolve_element(selector)
+                elapsed = time.time() - start
+                return {
+                    "output": f"## Wait\nElement {selector} appeared after {elapsed:.1f}s",
+                    "selector": selector,
+                    "elapsed": round(elapsed, 1),
+                    "element": el.name,
+                }
+            except (ValueError, IndexError):
+                pass
+            if time.time() - start >= timeout:
+                raise TimeoutError(f"Element {selector} not found within {timeout}s")
+            time.sleep(poll_interval)
+
+    # Mode 3: wait for text
+    while True:
+        data = traverse_tree(
+            max_depth=cfg.get("max_depth", 30),
+            include_invisible=cfg.get("include_invisible", False),
+            include_offscreen=cfg.get("include_offscreen", False),
+        )
+        for el in data.get("interactive_elements", []):
+            if text in (el.name or ""):
+                elapsed = time.time() - start
+                return {
+                    "output": f"## Wait\nText '{text}' appeared after {elapsed:.1f}s",
+                    "text": text,
+                    "elapsed": round(elapsed, 1),
+                    "matched_element": el.name,
+                }
+        if time.time() - start >= timeout:
+            raise TimeoutError(f"Text '{text}' not found within {timeout}s")
+        time.sleep(poll_interval)
 
 
 # ── Input handlers ────────────────────────────────────────────────

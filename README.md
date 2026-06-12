@@ -96,7 +96,7 @@ CLI (Typer, ~5ms) → Named Pipe IPC → Daemon (COM STA, ~20ms response)
 | `clipboard get/set [--keyboard]` | Clipboard access (`--keyboard` simulates Ctrl+C/V) |
 | `process list/kill` | Process management |
 | `cleanup` | Clean up old/oversized screenshots |
-| `wait SECONDS` | Wait |
+| `wait SECONDS|SELECTOR [--text TEXT] [--timeout N] [--interval N]` | Wait for duration, element, or text |
 | `batch JSON/--file PATH [--delay N] [--continue-on-error]` | Execute multiple commands in one IPC round-trip |
 
 ### Daemon & Config
