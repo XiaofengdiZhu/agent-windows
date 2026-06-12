@@ -107,9 +107,15 @@ clip_cmd = typer.Typer(help="Clipboard operations")
 
 
 @clip_cmd.command("get")
-def clipboard_get(ctx: typer.Context) -> None:
-    """Get clipboard content."""
-    result = dispatch("clipboard_get", {}, ctx)
+def clipboard_get(
+    ctx: typer.Context,
+    keyboard: bool | None = typer.Option(None, "--keyboard", "-k", help="Simulate Ctrl+C before reading"),
+) -> None:
+    """Get clipboard content. Use --keyboard to simulate Ctrl+C first."""
+    params: dict = {}
+    if keyboard is not None:
+        params["keyboard"] = keyboard
+    result = dispatch("clipboard_get", params, ctx)
     print_result(result, ctx)
 
 
@@ -117,9 +123,13 @@ def clipboard_get(ctx: typer.Context) -> None:
 def clipboard_set(
     ctx: typer.Context,
     text: str = typer.Argument(help="Text to copy to clipboard"),
+    keyboard: bool | None = typer.Option(None, "--keyboard", "-k", help="Simulate Ctrl+V after setting"),
 ) -> None:
-    """Set clipboard content."""
-    result = dispatch("clipboard_set", {"text": text}, ctx)
+    """Set clipboard content. Use --keyboard to simulate Ctrl+V after setting."""
+    params: dict = {"text": text}
+    if keyboard is not None:
+        params["keyboard"] = keyboard
+    result = dispatch("clipboard_set", params, ctx)
     print_result(result, ctx)
 
 

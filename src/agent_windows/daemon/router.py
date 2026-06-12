@@ -594,14 +594,20 @@ def _fs_list(params: dict) -> dict[str, Any]:
 def _clipboard_get(params: dict) -> dict[str, Any]:
     """Get clipboard content."""
     from agent_windows.core.clipboard import get_clipboard
-    return get_clipboard()
+    from agent_windows.utils.config import load_config
+    cfg_method = load_config().get("clipboard", {}).get("method", "system")
+    keyboard = params.get("keyboard", cfg_method == "keyboard")
+    return get_clipboard(keyboard=keyboard)
 
 
 @handler("clipboard_set")
 def _clipboard_set(params: dict) -> dict[str, Any]:
     """Set clipboard content."""
     from agent_windows.core.clipboard import set_clipboard
-    return set_clipboard(params["text"])
+    from agent_windows.utils.config import load_config
+    cfg_method = load_config().get("clipboard", {}).get("method", "system")
+    keyboard = params.get("keyboard", cfg_method == "keyboard")
+    return set_clipboard(params["text"], keyboard=keyboard)
 
 
 @handler("process_list")

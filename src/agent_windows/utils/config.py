@@ -86,6 +86,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "daemon": {
         "idle_timeout_minutes": 30,
     },
+    "clipboard": {
+        "method": "system",  # "system" (PowerShell) or "keyboard" (simulate Ctrl+C/V)
+    },
 }
 
 # ── Load / Save ───────────────────────────────────────────────────

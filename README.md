@@ -90,7 +90,7 @@ CLI (Typer, ~5ms) → Named Pipe IPC → Daemon (COM STA, ~20ms response)
 | `app list` | List visible windows |
 | `shell COMMAND` | Run PowerShell command |
 | `fs read/write/list PATH` | File operations |
-| `clipboard get/set` | Clipboard access |
+| `clipboard get/set [--keyboard]` | Clipboard access (`--keyboard` simulates Ctrl+C/V) |
 | `process list/kill` | Process management |
 | `cleanup` | Clean up old/oversized screenshots |
 | `wait SECONDS` | Wait |
@@ -128,6 +128,9 @@ max_height = 1080
 
 [tree]
 max_depth = 30
+
+[clipboard]
+method = "system"      # "system" (PowerShell API) or "keyboard" (simulate Ctrl+C/V)
 ```
 
 ## Desktop Automation Tips
