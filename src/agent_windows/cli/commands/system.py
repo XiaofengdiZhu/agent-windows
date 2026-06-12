@@ -1,4 +1,7 @@
-"""System commands: app, shell, fs, clipboard, process."""
+"""System commands: app, shell, fs, clipboard, batch, process."""
+
+import json
+import sys
 
 import typer
 
@@ -130,6 +133,75 @@ def clipboard_set(
     if keyboard is not None:
         params["keyboard"] = keyboard
     result = dispatch("clipboard_set", params, ctx)
+    print_result(result, ctx)
+
+
+# ── batch (top-level command) ──────────────────────────────────────
+
+
+def batch(
+    ctx: typer.Context,
+    commands_json: str = typer.Argument(
+        "",
+        help="JSON array of commands, or '-' to read from stdin",
+    ),
+    file: str = typer.Option(
+        "",
+        "--file",
+        "-f",
+        help="Read commands from JSON file",
+    ),
+    stop_on_error: bool = typer.Option(
+        True,
+        "--stop-on-error/--continue-on-error",
+        help="Stop on first error (default) or continue all",
+    ),
+    delay: float = typer.Option(
+        0.0,
+        "--delay",
+        "-d",
+        help="Delay in seconds between commands",
+    ),
+) -> None:
+    """Execute multiple commands in a single IPC round-trip.
+
+    \b
+    Examples:
+      agent-windows batch '[{"method":"click","params":{"x":500,"y":300}}]'
+      agent-windows batch --file commands.json
+      agent-windows batch --file commands.json --delay 0.5 --continue-on-error
+      echo '[{"method":"screenshot"}]' | agent-windows batch -
+    """
+    # Determine JSON source: --file > argument > error
+    raw = ""
+    if file:
+        from pathlib import Path
+
+        raw = Path(file).read_text(encoding="utf-8")
+    elif commands_json == "-":
+        raw = sys.stdin.read()
+    elif commands_json:
+        raw = commands_json
+    else:
+        typer.echo("Error: provide commands as argument, --file, or stdin (-)", err=True)
+        raise typer.Exit(1)
+
+    try:
+        commands = json.loads(raw)
+    except json.JSONDecodeError as e:
+        typer.echo(f"Error: invalid JSON: {e}", err=True)
+        raise typer.Exit(1)
+
+    if not isinstance(commands, list) or not commands:
+        typer.echo("Error: commands must be a non-empty JSON array", err=True)
+        raise typer.Exit(1)
+
+    params = {
+        "commands": commands,
+        "stop_on_error": stop_on_error,
+        "delay": delay,
+    }
+    result = dispatch("batch", params, ctx)
     print_result(result, ctx)
 
 

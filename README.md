@@ -43,6 +43,7 @@ agent-windows app list
 agent-windows shell "Get-Process | Select-Object -First 5"
 agent-windows fs list C:\\Users
 agent-windows clipboard get
+agent-windows batch --file commands.json
 ```
 
 ## Architecture
@@ -94,6 +95,7 @@ CLI (Typer, ~5ms) → Named Pipe IPC → Daemon (COM STA, ~20ms response)
 | `process list/kill` | Process management |
 | `cleanup` | Clean up old/oversized screenshots |
 | `wait SECONDS` | Wait |
+| `batch JSON/--file PATH [--delay N] [--continue-on-error]` | Execute multiple commands in one IPC round-trip |
 
 ### Daemon & Config
 | Command | Description |

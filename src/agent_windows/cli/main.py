@@ -33,7 +33,7 @@ def global_options(
 from agent_windows.cli.commands.observe import observe, snapshot, screenshot, ground, ask_vision, detect, cleanup, highlight, diff_screenshot  # noqa: E402
 from agent_windows.cli.commands.input import click, type_text, scroll, move, dblclick, hover, mouse_down, mouse_up, drag, shortcut  # noqa: E402
 from agent_windows.cli.commands.system import (  # noqa: E402
-    shell,
+    shell, batch,
     app_cmd, fs_cmd, clip_cmd, proc_cmd,
 )
 from agent_windows.cli.commands.wait import wait  # noqa: E402
@@ -58,6 +58,7 @@ app.command()(mouse_up)
 app.command()(drag)
 app.command()(shortcut)
 app.command()(shell)
+app.command()(batch)
 app.command()(wait)
 
 # ── Register sub-command groups ───────────────────────────────────
