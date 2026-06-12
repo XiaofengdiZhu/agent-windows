@@ -53,8 +53,10 @@ CLI (Typer, ~5ms) → Named Pipe IPC → Daemon (COM STA, ~20ms response)
 ```
 
 - **CLI**: Lightweight Typer entry point. Parses args, sends JSON-RPC to daemon.
-- **Daemon**: Persistent process holding heavy imports (comtypes, uia, Pillow). Three-thread model: I/O thread, COM STA worker thread, idle monitor.
-- **Auto-start**: First CLI call starts daemon automatically. Idle timeout (30min) stops it.
+- **Daemon**: Persistent process holding heavy imports (comtypes, uia, Pillow). Three-thread model: I/O thread (overlapped I/O), COM STA worker thread, idle monitor. Handlers are organized by domain in `daemon/handlers/`.
+- **IPC**: Named Pipe with per-user DACL security. JSON-RPC 2.0 protocol.
+- **Auto-start**: First CLI call starts daemon automatically. Idle timeout (30min) stops it. Graceful shutdown via overlapped I/O.
+- **Caching**: UIA tree traversal (2s TTL), config loading (mtime-based), API clients, and screenshot backends are all cached for performance.
 
 ## Commands
 
@@ -114,7 +116,9 @@ CLI (Typer, ~5ms) → Named Pipe IPC → Daemon (COM STA, ~20ms response)
 
 ## Configuration
 
-Config file: `~/.agent-windows/config.toml`
+Config file: `~/.agent-windows/config.toml` (auto-created with owner-only permissions)
+
+> **Security**: API keys in `config show` output are automatically masked. Use the `AGENT_WINDOWS_GROUNDING_API_KEY` environment variable for CI/CD or shared environments — it takes priority over the config file.
 
 ```toml
 [grounding]
