@@ -159,3 +159,28 @@ def get_text(
     """Get text content of a UIA element."""
     result = dispatch("get_text", {"selector": selector}, ctx)
     print_result(result, ctx)
+
+
+# ── is sub-command group ────────────────────────────────────────────
+
+is_cmd = typer.Typer(help="Check element state")
+
+
+@is_cmd.command("visible")
+def is_visible(
+    ctx: typer.Context,
+    selector: str = typer.Argument(help="UIA element ref (e.g. @e3)"),
+) -> None:
+    """Check if a UIA element is visible (not offscreen)."""
+    result = dispatch("element_state", {"selector": selector, "check": "visible"}, ctx)
+    print_result(result, ctx)
+
+
+@is_cmd.command("enabled")
+def is_enabled(
+    ctx: typer.Context,
+    selector: str = typer.Argument(help="UIA element ref (e.g. @e3)"),
+) -> None:
+    """Check if a UIA element is enabled."""
+    result = dispatch("element_state", {"selector": selector, "check": "enabled"}, ctx)
+    print_result(result, ctx)

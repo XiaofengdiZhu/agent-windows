@@ -420,6 +420,34 @@ def _get_text(params: dict) -> dict[str, Any]:
     }
 
 
+@handler("element_state")
+def _element_state(params: dict) -> dict[str, Any]:
+    """Check UIA element state: visible or enabled."""
+    from agent_windows.core.tree import resolve_element
+
+    selector = params.get("selector", "")
+    if not selector:
+        raise ValueError("selector is required")
+
+    check = params.get("check", "")
+    if check not in ("visible", "enabled"):
+        raise ValueError("check must be 'visible' or 'enabled'")
+
+    el = resolve_element(selector)
+
+    if check == "visible":
+        result = not el.is_offscreen
+    else:
+        result = el.is_enabled
+
+    return {
+        "output": f"## Element State\nSelector: {selector}\n{check}: {result}",
+        "selector": selector,
+        "check": check,
+        "result": result,
+    }
+
+
 # ── Input handlers ────────────────────────────────────────────────
 
 

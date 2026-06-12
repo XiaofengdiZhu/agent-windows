@@ -30,7 +30,7 @@ def global_options(
 # ── Register top-level commands ───────────────────────────────────
 # Commands defined in individual modules, added here to the main app.
 
-from agent_windows.cli.commands.observe import observe, snapshot, screenshot, ground, ask_vision, detect, cleanup, highlight, diff_screenshot, get_text  # noqa: E402
+from agent_windows.cli.commands.observe import observe, snapshot, screenshot, ground, ask_vision, detect, cleanup, highlight, diff_screenshot, get_text, is_cmd  # noqa: E402
 from agent_windows.cli.commands.input import click, type_text, scroll, move, dblclick, hover, mouse_down, mouse_up, drag, shortcut  # noqa: E402
 from agent_windows.cli.commands.system import (  # noqa: E402
     shell, batch,
@@ -68,6 +68,7 @@ app.add_typer(app_cmd, name="app")
 app.add_typer(fs_cmd, name="fs")
 app.add_typer(clip_cmd, name="clipboard")
 app.add_typer(proc_cmd, name="process")
+app.add_typer(is_cmd, name="is")
 
 # ── Daemon and Config groups ──────────────────────────────────────
 

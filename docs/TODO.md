@@ -14,7 +14,7 @@ Reference: agent-browser commands not yet in agent-windows.
 
 ## Medium Priority
 
-- [ ] **`is visible/enabled`** — 检查元素状态。UIA snapshot 里能判断，但专用命令更高效。
+- [x] **`is visible/enabled`** — 检查元素状态。UIA snapshot 里能判断，但专用命令更高效。
 - [x] **`clipboard copy/paste`** — 添加模拟 Ctrl+C/V 的选项，能通过配置文件固化；默认仍走系统 API。某些应用只认键盘操作，不走系统 API。
 - [x] **`diff screenshot`** — 视觉差异对比。对比两次截图的像素差异，可用于 UI 回归测试。
 - [x] **`screenshot --selector`** — 元素级截图。只截某个 UIA 元素区域，减少图片尺寸和 token 消耗。
