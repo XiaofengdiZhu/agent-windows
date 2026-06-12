@@ -32,7 +32,7 @@ def list_processes() -> dict[str, Any]:
 
         return {"output": "\n".join(lines)}
     except Exception as e:
-        raise RuntimeError(f"Failed to list processes: {e}")
+        raise RuntimeError(f"Failed to list processes: {e}") from e
 
 
 def kill_process(pid_or_name: str) -> dict[str, Any]:
@@ -63,4 +63,4 @@ def kill_process(pid_or_name: str) -> dict[str, Any]:
         remaining = result.stdout.strip()
         return {"output": f"## Process Kill\nName: {pid_or_name}\nStatus: killed"}
     except Exception as e:
-        raise RuntimeError(f"Failed to kill process '{pid_or_name}': {e}")
+        raise RuntimeError(f"Failed to kill process '{pid_or_name}': {e}") from e

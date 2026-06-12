@@ -341,7 +341,7 @@ def _traverse_node(
         try:
             name = node.CurrentName or ""
         except Exception:
-            pass
+            logger.debug("Failed to get node property", exc_info=True)
 
         control_type = ""
         try:
@@ -349,19 +349,19 @@ def _traverse_node(
             # Convert control type int to name
             control_type = _control_type_name(ct)
         except Exception:
-            pass
+            logger.debug("Failed to get node property", exc_info=True)
 
         is_enabled = True
         try:
             is_enabled = node.CurrentIsEnabled
         except Exception:
-            pass
+            logger.debug("Failed to get node property", exc_info=True)
 
         is_offscreen = False
         try:
             is_offscreen = node.CurrentIsOffscreen
         except Exception:
-            pass
+            logger.debug("Failed to get node property", exc_info=True)
 
         # Get bounding rectangle
         bbox = None
@@ -374,7 +374,7 @@ def _traverse_node(
                 bottom=int(rect.bottom),
             )
         except Exception:
-            pass
+            logger.debug("Failed to get node property", exc_info=True)
 
         # Filter
         if bbox and bbox.area == 0 and not include_invisible:
@@ -390,7 +390,7 @@ def _traverse_node(
         try:
             is_focused = node.CurrentHasKeyboardFocus
         except Exception:
-            pass
+            logger.debug("Failed to get node property", exc_info=True)
 
         # Build tree line
         prefix = " " * indent + "├─ " if depth > 0 else " " * indent

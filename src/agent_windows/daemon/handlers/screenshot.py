@@ -8,7 +8,7 @@ from agent_windows.daemon.router import handler
 @handler("screenshot")
 def _screenshot(params: dict) -> dict[str, Any]:
     """Capture and save a screenshot."""
-    from agent_windows.core.screenshot import capture_screenshot, save_screenshot, scale_screenshot
+    from agent_windows.core.screenshot import capture_screenshot, save_and_cleanup, scale_screenshot
 
     output = params.get("output", "")
     monitor = params.get("monitor", -1)
@@ -56,7 +56,7 @@ def _screenshot(params: dict) -> dict[str, Any]:
     except Exception:
         pass
 
-    path = save_screenshot(image, output_path=output if output else None)
+    path = save_and_cleanup(image, output_path=output if output else None)
     return {
         "output": f"## Screenshot\nPath: {path}\nSize: {image.width}x{image.height}{selector_warn}",
         "path": str(path),

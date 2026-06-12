@@ -210,15 +210,17 @@ class IdleMonitorThread(threading.Thread):
 # ── Daemon Main Loop ──────────────────────────────────────────────
 
 
-def run_daemon() -> None:
-    """Start the daemon process."""
-    # Parse --debug
+def _init_daemon_state():
+    """Parse paths, load config, write PID/version files.
+
+    Returns a dict with keys: pid_path, version_path, idle_timeout,
+    shutdown_event, sta_thread, idle_monitor.
+    """
     debug = "--debug" in sys.argv
     _setup_logging(debug)
 
     logger.info("agent-windows daemon v%s starting (PID=%d)", __version__, os.getpid())
 
-    # Resolve paths
     pid_path = cfg_pid_path()
     version_path = cfg_version_path()
 
@@ -233,29 +235,6 @@ def run_daemon() -> None:
     config = load_config()
     idle_timeout = config.get("daemon", {}).get("idle_timeout_minutes", 30)
 
-    # Shutdown event
-    shutdown_event = threading.Event()
-
-    def request_shutdown():
-        logger.info("Shutdown requested")
-        shutdown_event.set()
-
-    # Start COM STA worker thread
-    sta_thread = COMWorkerThread()
-    sta_thread.start()
-    try:
-        sta_thread.wait_ready(timeout=15.0)
-    except TimeoutError:
-        logger.error("COM STA worker failed to initialize, exiting")
-        return
-
-    # Start idle monitor
-    idle_monitor = IdleMonitorThread(
-        timeout_minutes=idle_timeout,
-        shutdown_callback=request_shutdown,
-    )
-    idle_monitor.start()
-
     # Write PID and version files
     write_pid_file(pid_path)
     write_version_file(version_path, __version__)
@@ -268,15 +247,70 @@ def run_daemon() -> None:
             logger.info("Cleaned %d old screenshots", deleted)
     except Exception as e:
         logger.debug("Screenshot cleanup skipped: %s", e)
-    write_pid_file(pid_path)
-    write_version_file(version_path, __version__)
+
+    return {
+        "pid_path": pid_path,
+        "version_path": version_path,
+        "idle_timeout": idle_timeout,
+        "shutdown_event": threading.Event(),
+        "sta_thread": COMWorkerThread(),
+        "idle_monitor": None,  # created in _start_workers after shutdown_callback is bound
+    }
+
+
+def _start_workers(state):
+    """Start STA thread and idle monitor thread.
+
+    ``state`` is the dict returned by :func:`_init_daemon_state`.
+    Adds ``request_shutdown`` callback and sets ``idle_monitor``.
+    Returns False if STA worker fails to initialize (caller should exit).
+    """
+    shutdown_event = state["shutdown_event"]
+
+    def request_shutdown():
+        logger.info("Shutdown requested")
+        shutdown_event.set()
+
+    # Start COM STA worker thread
+    sta_thread = state["sta_thread"]
+    sta_thread.start()
+    try:
+        sta_thread.wait_ready(timeout=15.0)
+    except TimeoutError:
+        logger.error("COM STA worker failed to initialize, exiting")
+        return False
+
+    # Start idle monitor
+    idle_monitor = IdleMonitorThread(
+        timeout_minutes=state["idle_timeout"],
+        shutdown_callback=request_shutdown,
+    )
+    idle_monitor.start()
+    state["idle_monitor"] = idle_monitor
+    state["request_shutdown"] = request_shutdown
+
+    # Re-write PID/version (after threads confirmed healthy)
+    write_pid_file(state["pid_path"])
+    write_version_file(state["version_path"], __version__)
 
     logger.info("Daemon ready, listening on %s", PIPE_NAME)
 
     # Register command handlers from core modules
     _register_core_handlers()
 
-    # Main loop: listen on Named Pipe
+    return True
+
+
+def _main_pipe_loop(state):
+    """Main Named Pipe listen loop.
+
+    Blocks until ``shutdown_event`` is set or KeyboardInterrupt is received.
+    """
+    shutdown_event = state["shutdown_event"]
+    sta_thread = state["sta_thread"]
+    idle_monitor = state["idle_monitor"]
+    request_shutdown = state["request_shutdown"]
+
     try:
         while not shutdown_event.is_set():
             pipe = None
@@ -366,17 +400,36 @@ def run_daemon() -> None:
 
     except KeyboardInterrupt:
         logger.info("Interrupted, shutting down")
-    finally:
-        # Cleanup
-        logger.info("Daemon shutting down...")
-        sta_thread.stop()
-        sta_thread.join(timeout=5.0)
-        idle_monitor.stop()
-        idle_monitor.join(timeout=2.0)
 
-        # Remove PID file
-        pid_path.unlink(missing_ok=True)
-        logger.info("Daemon stopped")
+
+def _shutdown_daemon(state):
+    """Gracefully stop all threads and clean up the PID file."""
+    sta_thread = state["sta_thread"]
+    idle_monitor = state["idle_monitor"]
+    pid_path = state["pid_path"]
+
+    logger.info("Daemon shutting down...")
+    sta_thread.stop()
+    sta_thread.join(timeout=5.0)
+    idle_monitor.stop()
+    idle_monitor.join(timeout=2.0)
+
+    # Remove PID file
+    pid_path.unlink(missing_ok=True)
+    logger.info("Daemon stopped")
+
+
+def run_daemon() -> None:
+    """Daemon entry point -- orchestrates init, worker startup, main loop, and shutdown."""
+    state = _init_daemon_state()
+
+    if not _start_workers(state):
+        return
+
+    try:
+        _main_pipe_loop(state)
+    finally:
+        _shutdown_daemon(state)
 
 
 def _register_core_handlers():

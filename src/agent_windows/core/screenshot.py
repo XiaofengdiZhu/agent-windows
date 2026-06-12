@@ -201,12 +201,20 @@ def save_screenshot(
     image.save(path, format=fmt, **save_kwargs)
     logger.debug("Screenshot saved: %s (%dx%d)", path, image.width, image.height)
 
-    # Trigger cleanup after save (respects interval)
+    return path
+
+
+def save_and_cleanup(image: Image.Image, output_path: str | None = None) -> Path:
+    """Save image and trigger cleanup if interval allows.
+
+    Convenience wrapper that combines save_screenshot + cleanup_screenshots,
+    used by screenshot, highlight, diff, and grounding functions.
+    """
+    path = save_screenshot(image, output_path=output_path)
     try:
         cleanup_screenshots()
     except Exception:
         logger.debug("Post-save cleanup failed", exc_info=True)
-
     return path
 
 
@@ -315,8 +323,8 @@ def highlight_region(
 
     path.parent.mkdir(parents=True, exist_ok=True)
     marked.save(path, format="PNG")
+    logger.debug("Highlight saved: %s", path)
 
-    # Trigger cleanup after save (respects interval)
     try:
         cleanup_screenshots()
     except Exception:

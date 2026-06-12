@@ -6,10 +6,13 @@ All CLI commands go through this dispatcher which:
 3. Returns/formats the result
 """
 
+import logging
 import sys
 from typing import Any
 
 import typer
+
+logger = logging.getLogger(__name__)
 
 from agent_windows.ipc.client import call_daemon
 
@@ -47,7 +50,7 @@ def dispatch(
         try:
             ctypes.windll.shcore.SetProcessDpiAwareness(2)
         except Exception:
-            pass
+            logger.debug("DPI awareness setup failed (non-critical)", exc_info=True)
         pythoncom.CoInitialize()
         try:
             from agent_windows.daemon.router import HANDLERS

@@ -31,7 +31,7 @@ def get_clipboard(keyboard: bool = False) -> dict[str, Any]:
             return {"output": "## Clipboard\n(Empty or non-text content)"}
         return {"output": f"## Clipboard\n---\n{text}", "text": text}
     except Exception as e:
-        return {"output": f"## Clipboard\n(Error: {e})"}
+        raise RuntimeError(f"Failed to read clipboard: {e}") from e
 
 
 def set_clipboard(text: str, keyboard: bool = False) -> dict[str, Any]:

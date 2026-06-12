@@ -26,6 +26,7 @@ from agent_windows.utils.coordinates import (
     crop_around_point,
     parse_model_coordinates,
 )
+from agent_windows.core.screenshot import cleanup_screenshots
 
 logger = logging.getLogger(__name__)
 
@@ -167,7 +168,6 @@ def _save_marked_screenshot(
 
     # Trigger cleanup after save (respects interval)
     try:
-        from agent_windows.core.screenshot import cleanup_screenshots
         cleanup_screenshots()
     except Exception:
         pass
@@ -259,7 +259,6 @@ def ask_vision(
     # Trigger cleanup after save (respects interval)
     if saved_path:
         try:
-            from agent_windows.core.screenshot import cleanup_screenshots
             cleanup_screenshots()
         except Exception:
             pass
@@ -526,7 +525,6 @@ def _save_detection_screenshot(
 
     # Trigger cleanup after save (respects interval)
     try:
-        from agent_windows.core.screenshot import cleanup_screenshots
         cleanup_screenshots()
     except Exception:
         pass
