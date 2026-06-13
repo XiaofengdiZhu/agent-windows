@@ -142,7 +142,7 @@ agent-windows scroll 450 320 --direction down
 - **Always re-snapshot** (or re-observe) before the next interaction.
 - Never reuse refs from a previous turn — the UI may have changed completely.
 
-For a deep dive on selectors, coordinates, and the snapshot format, read `skill-data/references/selectors.md`.
+For a deep dive on selectors, coordinates, and the snapshot format, read `references/selectors.md`.
 
 ## Interacting
 
@@ -346,11 +346,11 @@ For detailed information beyond this guide:
 
 | File | When to read |
 |------|-------------|
-| `skill-data/references/commands.md` | Full parameter reference for every command |
-| `skill-data/references/selectors.md` | Deep dive on @eN selectors, snapshot format, coordinate system |
-| `skill-data/references/vision.md` | ground/detect/ask-vision details, vision model configuration |
-| `skill-data/references/configuration.md` | Config file reference, env vars, daemon management |
-| `skill-data/references/troubleshooting.md` | Common failures, error codes, debug mode |
+| `references/commands.md` | Full parameter reference for every command |
+| `references/selectors.md` | Deep dive on @eN selectors, snapshot format, coordinate system |
+| `references/vision.md` | ground/detect/ask-vision details, vision model configuration |
+| `references/configuration.md` | Config file reference, env vars, daemon management |
+| `references/troubleshooting.md` | Common failures, error codes, debug mode |
 
 ## Why agent-windows
 
