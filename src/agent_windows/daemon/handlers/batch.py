@@ -51,7 +51,17 @@ def _batch(params: dict) -> dict[str, Any]:
                 break
             continue
 
-        req = JSONRPCRequest(id=0, method=method, params=cmd.get("params"))
+        # Build the sub-request. JSONRPCRequest.__init__ validates that method
+        # is a string and params is a dict, so a malformed sub-command (e.g.
+        # {"params": [1,2]}) surfaces here as a per-entry INVALID_PARAMS error
+        # instead of leaking a list into the handler. (M-08 follow-up)
+        try:
+            req = JSONRPCRequest(id=0, method=method, params=cmd.get("params"))
+        except ValueError as e:
+            results.append({"method": method, "ok": False, "error": {"code": -32602, "message": str(e)}})
+            if stop_on_error:
+                break
+            continue
         resp = route_request(req)
 
         entry: dict[str, Any] = {"method": method, "ok": resp.error is None}

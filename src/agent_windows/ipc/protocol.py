@@ -8,6 +8,17 @@ class JSONRPCRequest:
     """JSON-RPC 2.0 request."""
 
     def __init__(self, id: int | str | None, method: str, params: dict[str, Any] | None = None):
+        # Validate field types at construction so EVERY request — whether parsed
+        # from the wire (from_json), built from a batch sub-command, or assembled
+        # by the CLI/dispatcher — carries a string method and dict params. A
+        # non-dict params (e.g. a list) would otherwise leak to a handler and
+        # surface as a cryptic DAEMON_INTERNAL_ERROR, and a non-string method
+        # would key the handler registry wrongly. Raises ValueError so callers
+        # map it to INVALID_REQUEST / INVALID_PARAMS upstream. (M-08)
+        if not isinstance(method, str):
+            raise ValueError("JSON-RPC 'method' must be a string")
+        if params is not None and not isinstance(params, dict):
+            raise ValueError("JSON-RPC 'params' must be an object")
         self.id = id
         self.method = method
         self.params = params or {}
@@ -23,24 +34,17 @@ class JSONRPCRequest:
     @classmethod
     def from_json(cls, data: str) -> "JSONRPCRequest":
         # json.loads raises json.JSONDecodeError for non-JSON input (→ PARSE_ERROR
-        # at the server). The checks below reject JSON that parses but isn't a
-        # valid Request object (→ INVALID_REQUEST): method must be a string and
-        # params, when present, must be an object — this codebase's handlers all
-        # take a dict, so a list/str params would otherwise leak to a handler as
-        # the wrong type and surface as a cryptic DAEMON_INTERNAL_ERROR (M-08).
+        # at the server). The body-is-dict check rejects valid JSON that isn't a
+        # Request object (→ INVALID_REQUEST). Field type validation (method/
+        # params) lives in __init__ so it covers every construction path, not
+        # just this one — e.g. batch sub-commands that bypass from_json. (M-08)
         obj = json.loads(data)
         if not isinstance(obj, dict):
             raise ValueError("JSON-RPC request must be a JSON object")
-        method = obj.get("method")
-        if not isinstance(method, str):
-            raise ValueError("JSON-RPC 'method' must be a string")
-        params = obj.get("params")
-        if params is not None and not isinstance(params, dict):
-            raise ValueError("JSON-RPC 'params' must be an object")
         return cls(
             id=obj.get("id"),
-            method=method,
-            params=params,
+            method=obj.get("method"),
+            params=obj.get("params"),
         )
 
 

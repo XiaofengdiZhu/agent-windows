@@ -94,6 +94,29 @@ class TestJSONRPCRequest:
         with pytest.raises(json.JSONDecodeError):
             JSONRPCRequest.from_json("not json at all")
 
+    # ── M-08 follow-up: validation lives in the constructor, not just from_json ──
+
+    def test_constructor_rejects_non_string_method(self):
+        """M-08 follow-up: the type invariant is enforced in __init__, so a
+        request built directly (not via from_json) — e.g. a batch sub-command —
+        also rejects a non-string method. This is why batch no longer leaks
+        malformed sub-commands to the handler."""
+        with pytest.raises(ValueError):
+            JSONRPCRequest(id=1, method=123)
+
+    def test_constructor_rejects_non_dict_params(self):
+        """M-08 follow-up: __init__ rejects non-dict params for every caller,
+        not just from_json. A list params would otherwise reach a handler and
+        produce an inconsistent/cryptic error."""
+        with pytest.raises(ValueError):
+            JSONRPCRequest(id=1, method="click", params=[1, 2])
+
+    def test_constructor_accepts_none_params(self):
+        """M-08 follow-up: params=None is the documented default and must still
+        normalize to {} — only non-dict, non-None params are rejected."""
+        req = JSONRPCRequest(id=1, method="ping")
+        assert req.params == {}
+
 
 class TestJSONRPCResponse:
     def test_result_response(self):
