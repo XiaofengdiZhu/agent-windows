@@ -25,13 +25,21 @@ _TREE_CACHE_TTL = 2.0  # seconds
 
 
 def get_tree_snapshot(ttl: float = _TREE_CACHE_TTL, **kwargs) -> dict[str, Any]:
-    """Get a UIA tree snapshot, with caching."""
+    """Get a UIA tree snapshot, with caching.
+
+    The lock spans the cache check, traversal, and update so a concurrent miss
+    can never trigger a redundant traversal or leave the cache half-updated
+    (M-09 TOCTOU). ``traverse_tree`` is a UIA walk that runs on the daemon's
+    single COM STA worker thread, so the lock is otherwise uncontended —
+    holding it across the (bounded, ≤ ``timeout`` seconds) traversal costs
+    nothing today, and if the daemon ever gains a second consumer thread this
+    serializes them rather than double-traversing.
+    """
     global _tree_cache, _tree_cache_ts
     with _tree_cache_lock:
         if _tree_cache and time.time() - _tree_cache_ts < ttl:
             return _tree_cache
-    data = traverse_tree(**kwargs)
-    with _tree_cache_lock:
+        data = traverse_tree(**kwargs)
         _tree_cache = data
         _tree_cache_ts = time.time()
     return data
