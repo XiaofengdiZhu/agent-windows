@@ -14,7 +14,7 @@ import typer
 
 logger = logging.getLogger(__name__)
 
-from agent_windows.ipc.client import call_daemon
+from agent_windows.ipc.client import call_daemon, unwrap_response
 
 
 def dispatch(
@@ -42,8 +42,12 @@ def dispatch(
         fmt = ctx.obj.get("format", "text")
 
     if no_daemon:
-        # Direct execution mode (bypass daemon)
-        # Initialize COM + DPI for in-process execution
+        # Direct execution mode (bypass daemon). Still route through
+        # route_request so handler errors map to the same JSON-RPC error codes
+        # (INVALID_PARAMS / WAIT_TIMEOUT / METHOD_NOT_FOUND /
+        # DAEMON_INTERNAL_ERROR) as the daemon path, and surface via the same
+        # unwrap_response — instead of leaking raw tracebacks or ad-hoc exits
+        # (M-11).
         import ctypes
         import pythoncom
 
@@ -53,13 +57,11 @@ def dispatch(
             logger.debug("DPI awareness setup failed (non-critical)", exc_info=True)
         pythoncom.CoInitialize()
         try:
-            from agent_windows.daemon.router import HANDLERS
+            from agent_windows.daemon.router import route_request
+            from agent_windows.ipc.protocol import JSONRPCRequest
 
-            handler_func = HANDLERS.get(method)
-            if handler_func is None:
-                typer.echo(f"Error: unknown method '{method}'", err=True)
-                raise typer.Exit(1)
-            return handler_func(params or {})
+            request = JSONRPCRequest(id=1, method=method, params=params)
+            return unwrap_response(route_request(request))
         finally:
             pythoncom.CoUninitialize()
 

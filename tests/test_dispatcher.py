@@ -34,13 +34,36 @@ class TestDispatch:
     @patch("pythoncom.CoUninitialize")
     @patch("pythoncom.CoInitialize")
     @patch("ctypes.windll")
-    def test_no_daemon_unknown_method_exits(self, mock_windll, mock_coInit, mock_coUninit):
-        """In no-daemon mode, unknown method should raise typer.Exit."""
+    def test_no_daemon_unknown_method_maps_to_method_not_found(self, mock_windll, mock_coInit, mock_coUninit):
+        """M-11: in no-daemon mode, an unknown method surfaces as a RuntimeError
+        carrying the METHOD_NOT_FOUND code (via route_request), matching the
+        daemon path — not an ad-hoc typer.Exit."""
         from agent_windows.cli.dispatcher import dispatch
         ctx = MagicMock()
         ctx.obj = {"no_daemon": True, "debug": False, "format": "text"}
-        with pytest.raises(RuntimeError):
+        with pytest.raises(RuntimeError) as exc_info:
             dispatch("nonexistent", {}, ctx=ctx)
+        assert "-32601" in str(exc_info.value)  # METHOD_NOT_FOUND
+
+    @patch(
+        "agent_windows.daemon.router.HANDLERS",
+        {"boom": MagicMock(side_effect=ValueError("missing required parameter 'x'"))},
+    )
+    @patch("pythoncom.CoUninitialize")
+    @patch("pythoncom.CoInitialize")
+    @patch("ctypes.windll")
+    def test_no_daemon_handler_error_maps_to_invalid_params(self, mock_windll, mock_coInit, mock_coUninit):
+        """M-11: in no-daemon mode, a handler ValueError surfaces as a RuntimeError
+        carrying the INVALID_PARAMS code (via route_request) — not a raw
+        traceback. Before the fix the handler was called directly, so the
+        ValueError leaked instead of mapping to INVALID_PARAMS."""
+        from agent_windows.cli.dispatcher import dispatch
+        ctx = MagicMock()
+        ctx.obj = {"no_daemon": True, "debug": False, "format": "text"}
+        with pytest.raises(RuntimeError) as exc_info:
+            dispatch("boom", {}, ctx=ctx)
+        assert "-32602" in str(exc_info.value)  # INVALID_PARAMS
+        assert "missing required parameter 'x'" in str(exc_info.value)
 
     @patch("agent_windows.cli.dispatcher.call_daemon")
     def test_daemon_mode_passes_params(self, mock_call):

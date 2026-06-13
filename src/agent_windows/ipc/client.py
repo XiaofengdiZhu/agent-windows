@@ -25,6 +25,23 @@ from agent_windows.ipc.pipe import (
 logger = logging.getLogger(__name__)
 
 
+def unwrap_response(response: JSONRPCResponse) -> dict:
+    """Return a JSON-RPC response's result, or raise if it carries an error.
+
+    Centralizes the error→exception mapping so the daemon path
+    (:func:`call_daemon`) and the in-process ``--no-daemon`` path
+    (:func:`agent_windows.cli.dispatcher.dispatch`) surface identical errors.
+    A response with ``error`` becomes ``RuntimeError("Daemon error [<code>]:
+    <message>")`` — matching the codes :func:`route_request` produces
+    (INVALID_PARAMS / WAIT_TIMEOUT / METHOD_NOT_FOUND / DAEMON_INTERNAL_ERROR).
+    """
+    if response.error is not None:
+        raise RuntimeError(
+            f"Daemon error [{response.error.get('code')}]: {response.error.get('message')}"
+        )
+    return response.result
+
+
 def call_daemon(
     method: str,
     params: dict | None = None,
@@ -55,13 +72,7 @@ def call_daemon(
     # Send request
     response_str = send_to_daemon(message, PIPE_NAME)
     response = JSONRPCResponse.from_json(response_str)
-
-    if response.error is not None:
-        raise RuntimeError(
-            f"Daemon error [{response.error.get('code')}]: {response.error.get('message')}"
-        )
-
-    return response.result
+    return unwrap_response(response)
 
 
 def ensure_daemon_running(debug: bool = False) -> None:
