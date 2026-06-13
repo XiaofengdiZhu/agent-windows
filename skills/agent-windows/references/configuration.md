@@ -146,6 +146,20 @@ agent-windows daemon status    # Check PID, version, pipe status
 2. **COM STA Worker**: Executes UIA operations, screenshots, input simulation.
 3. **Idle Monitor**: Tracks inactivity and triggers shutdown.
 
+### Concurrency: Serial by Design
+
+The daemon processes **exactly one command at a time**. This is intentional, not a limitation to fix:
+
+- The named pipe is single-instance — only one client can connect at once.
+- The I/O thread blocks until each command finishes before accepting the next connection.
+- All commands run on the single COM STA worker thread, one at a time.
+
+**Why serial is correct:** UIA/COM objects are apartment-bound to the STA thread that created them, so all UIA calls must run there. Input simulation (`SendInput`) mutates global GUI state — two concurrent click/type commands would interleave into garbage. Serializing keeps GUI automation deterministic.
+
+**Practical impact:** For the normal workflow — one agent issuing commands sequentially — this costs nothing. The client is naturally serial too: each `send_to_daemon` call sends one request, blocks on the response, then reconnects for the next. The only situation it bites is **multiple agents sharing one daemon**: they serialize against each other, so a slow `shell` (up to ~30s) or a vision API call (2-10s) blocks everyone else.
+
+Concurrent multi-client use is **not supported**. For isolation between agents, run separate daemon instances (separate user accounts or machines) — the pipe path is per-user.
+
 ## Data Directory
 
 Default location: `~/.agent-windows/`

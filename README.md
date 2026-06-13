@@ -57,6 +57,7 @@ CLI (Typer, ~5ms) → Named Pipe IPC → Daemon (COM STA, ~20ms response)
 - **IPC**: Named Pipe with per-user DACL security. JSON-RPC 2.0 protocol.
 - **Auto-start**: First CLI call starts daemon automatically. Idle timeout (30min) stops it. Graceful shutdown via overlapped I/O.
 - **Caching**: UIA tree traversal (2s TTL), config loading (mtime-based), API clients, and screenshot backends are all cached for performance.
+- **Concurrency (serial by design)**: The daemon handles **one command at a time** — the named pipe is single-instance and the I/O thread blocks until each command finishes. This is intentional, not a limitation to fix: UIA/COM is STA-bound and `SendInput` mutates global GUI state, so concurrent commands would race and corrupt automation. A single client is naturally serial anyway (request → wait for response → reconnect), so it costs nothing in normal use. The one caveat: multiple agents sharing one daemon serialize against each other — a slow `shell` (~30s) or vision API call (2-10s) blocks the rest. Concurrent multi-client use is not supported; run separate daemon instances for isolation.
 
 ## Commands
 

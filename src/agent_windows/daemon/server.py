@@ -52,6 +52,15 @@ class COMWorkerThread(threading.Thread):
 
     All UIA calls happen here. Commands are received via queue,
     results are placed back keyed by command ID.
+
+    This worker processes one command at a time, which together with the
+    single-instance named pipe and the blocking I/O loop makes the daemon
+    fully serial. That is by design: UIA/COM objects are apartment-bound to
+    this thread, and SendInput input simulation mutates global GUI state, so
+    concurrent commands would race and corrupt automation. A single client is
+    naturally serial (request → response → reconnect), so serial execution
+    costs nothing in normal use — only concurrent multi-client sessions
+    contend. (H-06)
     """
 
     def __init__(self):
@@ -303,6 +312,12 @@ def _main_pipe_loop(state):
     """Main Named Pipe listen loop.
 
     Blocks until ``shutdown_event`` is set or KeyboardInterrupt is received.
+
+    Processes one client connection / one command at a time: after a client
+    connects, this thread blocks in ``sta_thread.submit()`` until the command
+    finishes before accepting the next connection. Combined with the
+    single-instance pipe and the one-at-a-time STA worker, the daemon is fully
+    serial by design (see ``COMWorkerThread`` for why). (H-06)
     """
     shutdown_event = state["shutdown_event"]
     sta_thread = state["sta_thread"]
