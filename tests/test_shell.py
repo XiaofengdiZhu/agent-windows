@@ -3,6 +3,7 @@
 import pytest
 from unittest.mock import patch, MagicMock
 
+from agent_windows.core import shell_runner
 from agent_windows.core.shell_runner import run_shell, _check_blacklist
 
 
@@ -55,6 +56,21 @@ class TestBlacklist:
             return_value={"shell": {"blacklist": 123}},
         ):
             assert _check_blacklist("Remove-Item") is None
+
+    def test_redos_pattern_rejected_before_matching(self):
+        """M-05 #3: a ReDoS-shaped pattern (nested quantifier like (a+)+) is
+        rejected up front so it can't hang the daemon on adversarial input. A
+        later valid pattern in the same list still applies."""
+        with _cfg([r"(a+)+", "Remove-Item"]):
+            assert _check_blacklist("Remove-Item foo") == "Remove-Item"
+            # (a+)+ skipped — must not hang or crash on backtracking bait
+            assert _check_blacklist("a" * 50 + "!") is None
+
+    def test_benign_group_quantifier_not_rejected(self):
+        """M-05 #3: a quantified group WITHOUT an inner quantifier (e.g. (\\w)+)
+        is NOT a ReDoS vector and must still match."""
+        with _cfg([r"(\w)+"]):
+            assert _check_blacklist("hello world") == r"(\w)+"
 
 
 class TestRunShellBlocked:
@@ -126,3 +142,24 @@ class TestAuditLog:
         audit = (tmp_path / "shell_audit.log").read_text(encoding="utf-8")
         assert "BLOCKED:Remove-Item" in audit
         assert "Remove-Item foo" in audit
+
+    def test_audit_log_rotates_when_exceeding_cap(self, tmp_path, monkeypatch):
+        """M-05 #2: the audit log is bounded — once it exceeds the cap it
+        rotates to .1 (keeping one backup) instead of growing without limit."""
+        monkeypatch.setattr(shell_runner, "_SHELL_AUDIT_MAX_BYTES", 50)
+        with patch("agent_windows.core.shell_runner.get_log_dir", return_value=tmp_path), \
+                _cfg([]), \
+                patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
+            for i in range(5):
+                run_shell(f"command-number-{i}-padding-padding-padding-padding")
+        current = tmp_path / "shell_audit.log"
+        backup = tmp_path / "shell_audit.log.1"
+        assert current.exists() and backup.exists()
+        # Only two files ever — rotation doesn't accumulate more backups.
+        assert not (tmp_path / "shell_audit.log.2").exists()
+        # The latest command is current; the oldest was evicted by rotation
+        # (proving retention is bounded, not append-forever).
+        assert "command-number-4" in current.read_text(encoding="utf-8")
+        all_text = current.read_text(encoding="utf-8") + backup.read_text(encoding="utf-8")
+        assert "command-number-0" not in all_text
