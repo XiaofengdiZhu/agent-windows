@@ -18,6 +18,7 @@ from agent_windows.ipc.protocol import (
     INVALID_PARAMS,
     DAEMON_INTERNAL_ERROR,
     WAIT_TIMEOUT,
+    PERMISSION_DENIED,
 )
 
 logger = logging.getLogger(__name__)
@@ -80,6 +81,10 @@ def route_request(request: JSONRPCRequest) -> JSONRPCResponse:
         return make_error(INVALID_PARAMS, str(e), request.id)
     except TimeoutError as e:
         return make_error(WAIT_TIMEOUT, str(e), request.id)
+    except PermissionError as e:
+        # M-05: shell blacklist (and any other policy denial) → PERMISSION_DENIED,
+        # not the generic DAEMON_INTERNAL_ERROR.
+        return make_error(PERMISSION_DENIED, str(e), request.id)
     except Exception as e:
         logger.exception("Handler error for %s", request.method)
         return make_error(DAEMON_INTERNAL_ERROR, str(e), request.id)

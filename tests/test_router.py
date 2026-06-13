@@ -1,8 +1,9 @@
 """Tests for daemon router: request routing and error handling."""
 
 import pytest
+from unittest.mock import MagicMock, patch
 from agent_windows.daemon.router import route_request, HANDLERS, require
-from agent_windows.ipc.protocol import JSONRPCRequest
+from agent_windows.ipc.protocol import JSONRPCRequest, PERMISSION_DENIED
 
 
 class TestRouteRequest:
@@ -47,6 +48,16 @@ class TestRouteRequest:
         assert resp.error is not None
         assert resp.error["code"] == -32602
         assert "must be str" in resp.error["message"]
+
+    def test_permission_error_maps_to_permission_denied(self):
+        """M-05: a handler raising PermissionError (e.g. shell blacklist block)
+        maps to PERMISSION_DENIED (-1004), not the generic DAEMON_INTERNAL_ERROR."""
+        with patch.dict(HANDLERS, {"forbidden": MagicMock(side_effect=PermissionError("blocked by policy"))}):
+            req = JSONRPCRequest(id=1, method="forbidden")
+            resp = route_request(req)
+            assert resp.error is not None
+            assert resp.error["code"] == PERMISSION_DENIED
+            assert "blocked by policy" in resp.error["message"]
 
 
 class TestRequire:

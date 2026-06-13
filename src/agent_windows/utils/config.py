@@ -111,6 +111,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "wait": {
         "poll_interval": 0.5,  # seconds between polls when waiting for element/text
     },
+    "shell": {
+        # M-05: optional command blacklist — list of case-insensitive regex
+        # patterns. A `shell` command matching any pattern is rejected with
+        # PERMISSION_DENIED (-1004) before execution. Empty list = no filtering
+        # (default). Best-effort only (PowerShell aliases/encodings can bypass);
+        # every attempt is also recorded in logs/shell_audit.log regardless.
+        "blacklist": [],
+    },
 }
 
 # ── Load / Save ───────────────────────────────────────────────────

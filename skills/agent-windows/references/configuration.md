@@ -93,6 +93,27 @@ Wait command polling settings.
 |-----|------|---------|-------------|
 | `poll_interval` | float | `0.5` | Default polling interval in seconds for `wait` element/text modes |
 
+### [shell]
+
+`shell` command execution policy (M-05).
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `blacklist` | str \| list[str] | `[]` | Case-insensitive regex pattern(s). A `shell` command matching any pattern is rejected with `PERMISSION_DENIED` (-1004) before execution. Empty disables filtering. A single string or a list of strings. Best-effort (PowerShell aliases/encodings can bypass) — pair with the audit log for a complete record. |
+
+Every `shell` execution attempt — allowed **or** blocked — is also recorded with the **full, untruncated** command in `~/.agent-windows/logs/shell_audit.log`, regardless of the blacklist setting. This is the forensic record (the daemon's own log truncates commands at 500 chars).
+
+Setting the blacklist:
+
+```bash
+# Single pattern — works with `config set` (which only handles scalars):
+agent-windows config set shell.blacklist "Remove-Item"
+
+# Multiple patterns — edit config.toml directly into a TOML array:
+#   [shell]
+#   blacklist = ["Remove-Item", "Format-Volume", "shutdown"]
+```
+
 ### [daemon]
 
 Daemon process settings.
@@ -173,7 +194,7 @@ Contents:
 | `daemon.version` | Daemon version for mismatch detection |
 | `screenshots/` | Captured screenshots |
 | `prompts/` | Custom grounding prompt files |
-| `logs/` | Daemon log files |
+| `logs/` | Daemon log files (`daemon.log`) and the full-command `shell_audit.log` (M-05) |
 
 ## Screenshot Storage
 
