@@ -40,7 +40,7 @@ UIA accessibility tree traversal. Returns the full structured text view.
 agent-windows snapshot
 ```
 
-No parameters. Uses config `tree.max_depth` (default 30), `tree.include_invisible`, `tree.include_offscreen`.
+No parameters. Uses config `tree.max_depth` (default 15), `tree.max_elements` (default 200), `tree.timeout` (default 10s), `tree.include_invisible`, `tree.include_offscreen`.
 
 **Output**: Same as observe but without screenshot file. Contains the Interactive Elements table with `@eN` refs.
 

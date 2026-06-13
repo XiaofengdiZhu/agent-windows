@@ -93,7 +93,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "tree": {
         "include_invisible": False,
         "include_offscreen": False,
-        "max_depth": 30,
+        "max_depth": 15,  # H-04: lowered from 30 to bound traversal depth
+        "max_elements": 200,  # H-04: cap on interactive elements collected per snapshot
+        "timeout": 10,  # H-04: global traversal timeout in seconds (across all windows)
     },
     "daemon": {
         "idle_timeout_minutes": 30,

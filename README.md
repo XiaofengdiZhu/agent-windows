@@ -138,7 +138,9 @@ max_height = 1080
 resampling = "BILINEAR"  # downscale filter: BILINEAR (default) / LANCZOS / NEAREST
 
 [tree]
-max_depth = 30
+max_depth = 15         # max traversal depth
+max_elements = 200     # cap on interactive elements per snapshot (0 disables)
+timeout = 10           # global traversal budget, seconds (0 disables)
 
 [clipboard]
 method = "system"      # "system" (PowerShell API) or "keyboard" (simulate Ctrl+C/V)

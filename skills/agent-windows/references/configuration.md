@@ -73,7 +73,9 @@ UIA accessibility tree traversal settings.
 |-----|------|---------|-------------|
 | `include_invisible` | bool | `false` | Include invisible UIA elements |
 | `include_offscreen` | bool | `false` | Include offscreen elements |
-| `max_depth` | int | `30` | Maximum tree traversal depth |
+| `max_depth` | int | `15` | Maximum tree traversal depth |
+| `max_elements` | int | `200` | Cap on interactive elements collected per snapshot; traversal stops once reached. `0` disables |
+| `timeout` | int | `10` | Global wall-clock budget for one traversal across all windows (seconds). `0` disables |
 
 ### [clipboard]
 
@@ -186,7 +188,9 @@ max_width = 1920
 max_height = 1080
 
 [tree]
-max_depth = 30
+max_depth = 15
+max_elements = 200
+timeout = 10
 
 [clipboard]
 method = "system"

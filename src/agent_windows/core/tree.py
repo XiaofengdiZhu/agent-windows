@@ -164,12 +164,19 @@ def enumerate_windows() -> list[WindowInfo]:
 
 
 def traverse_tree(
-    max_depth: int = 30,
+    max_depth: int = 15,
     include_invisible: bool = False,
     include_offscreen: bool = False,
     timeout_per_window: float = 5.0,
+    max_elements: int = 200,
+    timeout: float = 10.0,
 ) -> dict[str, Any]:
     """Walk the UIA tree and return structured data.
+
+    Bounds (H-04): ``max_depth`` limits descent, ``max_elements`` caps the
+    interactive-elements list (traversal stops once it is reached), and
+    ``timeout`` is a global wall-clock budget across all windows. Set any
+    bound to 0 to disable it.
 
     Returns a dict with:
         - cursor: (x, y) mouse position
@@ -208,7 +215,17 @@ def traverse_tree(
 
     client = _AutomationClient.instance()
 
+    # Global wall-clock budget across all windows (0 disables). Computed once so
+    # every node/window is checked against the same absolute deadline.
+    global_deadline = (time.time() + timeout) if timeout > 0 else float("inf")
+
     for win in all_windows:
+        if time.time() > global_deadline:
+            logger.info(
+                "Tree traversal stopped: global timeout %.1fs reached", timeout
+            )
+            break
+
         win_marker = " [active]" if win.is_active else ""
         tree_lines.append(f'  └─ Window "{win.title}" ({win.process_name}){win_marker}')
 
@@ -216,7 +233,8 @@ def traverse_tree(
             _traverse_window(client, win, tree_lines, interactive_elements,
                            max_depth=max_depth, include_invisible=include_invisible,
                            include_offscreen=include_offscreen, indent=4,
-                           timeout=timeout_per_window)
+                           timeout=timeout_per_window, max_elements=max_elements,
+                           global_deadline=global_deadline)
         except Exception as e:
             logger.warning("Failed to traverse window '%s': %s", win.title, e)
             tree_lines.append(f"      [traversal error: {e}]")
@@ -258,9 +276,11 @@ def resolve_element(selector: str) -> ElementInfo:
     from agent_windows.utils.config import load_config
     cfg = load_config().get("tree", {})
     data = get_tree_snapshot(
-        max_depth=cfg.get("max_depth", 30),
+        max_depth=cfg.get("max_depth", 15),
         include_invisible=cfg.get("include_invisible", False),
         include_offscreen=cfg.get("include_offscreen", False),
+        max_elements=cfg.get("max_elements", 200),
+        timeout=cfg.get("timeout", 10),
     )
     elements = data.get("interactive_elements", [])
     if index >= len(elements):
@@ -280,6 +300,8 @@ def _traverse_window(
     include_offscreen: bool,
     indent: int,
     timeout: float,
+    max_elements: int,
+    global_deadline: float,
 ) -> None:
     """Traverse UIA tree for a single window."""
     start = time.time()
@@ -296,7 +318,7 @@ def _traverse_window(
     _traverse_node(
         client, root, tree_lines, interactive,
         window, max_depth, include_invisible, include_offscreen,
-        indent, 0, start, timeout,
+        indent, 0, start, timeout, max_elements, global_deadline,
     )
 
 
@@ -313,11 +335,17 @@ def _traverse_node(
     depth: int,
     start_time: float,
     timeout: float,
+    max_elements: int,
+    global_deadline: float,
 ) -> None:
     """Recursively traverse a UIA node."""
     if depth >= max_depth:
         return
     if time.time() - start_time > timeout:
+        return
+    if time.time() > global_deadline:
+        return
+    if max_elements > 0 and len(interactive) >= max_elements:
         return
 
     try:
@@ -416,6 +444,7 @@ def _traverse_node(
                     client, child, tree_lines, interactive,
                     window, max_depth, include_invisible, include_offscreen,
                     indent, depth + 1, start_time, timeout,
+                    max_elements, global_deadline,
                 )
                 child = walker.GetNextSiblingElement(child)
         except Exception as e:

@@ -14,9 +14,11 @@ def _snapshot(params: dict) -> dict[str, Any]:
 
     cfg = load_config().get("tree", {})
     data = traverse_tree(
-        max_depth=cfg.get("max_depth", 30),
+        max_depth=cfg.get("max_depth", 15),
         include_invisible=cfg.get("include_invisible", False),
         include_offscreen=cfg.get("include_offscreen", False),
+        max_elements=cfg.get("max_elements", 200),
+        timeout=cfg.get("timeout", 10),
     )
     output = render_snapshot(data)
     return {"output": output}
@@ -122,9 +124,11 @@ def _wait(params: dict) -> dict[str, Any]:
     # Mode 3: wait for text
     while True:
         data = get_tree_snapshot(
-            max_depth=cfg.get("max_depth", 30),
+            max_depth=cfg.get("max_depth", 15),
             include_invisible=cfg.get("include_invisible", False),
             include_offscreen=cfg.get("include_offscreen", False),
+            max_elements=cfg.get("max_elements", 200),
+            timeout=cfg.get("timeout", 10),
         )
         for el in data.get("interactive_elements", []):
             if text in (el.name or ""):

@@ -76,7 +76,9 @@ class TestDefaultConfig:
 
     def test_has_tree(self):
         assert "tree" in DEFAULT_CONFIG
-        assert DEFAULT_CONFIG["tree"]["max_depth"] == 30
+        assert DEFAULT_CONFIG["tree"]["max_depth"] == 15  # H-04: lowered from 30
+        assert DEFAULT_CONFIG["tree"]["max_elements"] == 200  # H-04
+        assert DEFAULT_CONFIG["tree"]["timeout"] == 10  # H-04
 
     def test_has_daemon(self):
         assert "daemon" in DEFAULT_CONFIG

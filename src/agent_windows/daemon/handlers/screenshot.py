@@ -29,9 +29,11 @@ def _screenshot(params: dict) -> dict[str, Any]:
             from agent_windows.utils.config import load_config as _lc
             cfg = _lc().get("tree", {})
             data = get_tree_snapshot(
-                max_depth=cfg.get("max_depth", 30),
+                max_depth=cfg.get("max_depth", 15),
                 include_invisible=cfg.get("include_invisible", False),
                 include_offscreen=cfg.get("include_offscreen", False),
+                max_elements=cfg.get("max_elements", 200),
+                timeout=cfg.get("timeout", 10),
             )
             elements = data.get("interactive_elements", [])
             if index >= len(elements):
