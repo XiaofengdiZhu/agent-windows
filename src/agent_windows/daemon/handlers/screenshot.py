@@ -3,7 +3,7 @@
 import logging
 from typing import Any
 
-from agent_windows.daemon.router import handler
+from agent_windows.daemon.router import handler, require
 
 logger = logging.getLogger(__name__)
 
@@ -79,8 +79,8 @@ def _highlight(params: dict) -> dict[str, Any]:
     # Single-region shortcut: x1,y1,x2,y2 + label
     if not regions and "x1" in params:
         regions = [{
-            "x1": params["x1"], "y1": params["y1"],
-            "x2": params["x2"], "y2": params["y2"],
+            "x1": require(params, "x1"), "y1": require(params, "y1"),
+            "x2": require(params, "x2"), "y2": require(params, "y2"),
             "label": params.get("label", ""),
             "color": params.get("color", "red"),
         }]
@@ -110,7 +110,7 @@ def _diff(params: dict) -> dict[str, Any]:
     from PIL import Image
     from agent_windows.core.screenshot import capture_screenshot, diff_images
 
-    baseline_path = params["baseline"]
+    baseline_path = require(params, "baseline", str)
     compare_path = params.get("compare", "")
     threshold = params.get("threshold", 30)
     output = params.get("output", "")

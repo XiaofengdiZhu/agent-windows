@@ -36,6 +36,34 @@ def handler(method: str):
     return decorator
 
 
+def require(
+    params: dict,
+    key: str,
+    expected_type: type | tuple[type, ...] | None = None,
+) -> Any:
+    """Return a required request parameter, raising a clear ``ValueError`` if absent.
+
+    Use this instead of bare ``params["key"]`` so a missing parameter surfaces
+    to the client as JSON-RPC ``INVALID_PARAMS`` (-32602,
+    "missing required parameter 'key'") via :func:`route_request`, rather than
+    leaking a :class:`KeyError` as ``DAEMON_INTERNAL_ERROR`` (-32603) (H-10).
+
+    A present-but-``None`` value is treated as missing. When *expected_type* is
+    given, a value of the wrong type is rejected with a clear message (also a
+    ``ValueError``, so it maps to ``INVALID_PARAMS`` as well).
+    """
+    if key not in params or params[key] is None:
+        raise ValueError(f"missing required parameter '{key}'")
+    value = params[key]
+    if expected_type is not None and not isinstance(value, expected_type):
+        if isinstance(expected_type, tuple):
+            names = " or ".join(t.__name__ for t in expected_type)
+        else:
+            names = expected_type.__name__
+        raise ValueError(f"parameter '{key}' must be {names}, got {type(value).__name__}")
+    return value
+
+
 def route_request(request: JSONRPCRequest) -> JSONRPCResponse:
     """Route a JSON-RPC request to the appropriate handler."""
     if not request.method:

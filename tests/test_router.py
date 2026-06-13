@@ -1,7 +1,7 @@
 """Tests for daemon router: request routing and error handling."""
 
 import pytest
-from agent_windows.daemon.router import route_request, HANDLERS
+from agent_windows.daemon.router import route_request, HANDLERS, require
 from agent_windows.ipc.protocol import JSONRPCRequest
 
 
@@ -29,6 +29,43 @@ class TestRouteRequest:
         resp = route_request(req)
         assert resp.error is not None
         assert resp.error["code"] == -32602
+
+    def test_missing_required_param_maps_to_invalid_params(self):
+        """H-10: a bare params[key] gap must surface as INVALID_PARAMS, not
+        DAEMON_INTERNAL_ERROR. fs_read with no path → require() raises
+        ValueError before read_file runs."""
+        req = JSONRPCRequest(id=1, method="fs_read", params={})
+        resp = route_request(req)
+        assert resp.error is not None
+        assert resp.error["code"] == -32602
+        assert "missing required parameter 'path'" in resp.error["message"]
+
+    def test_wrong_param_type_maps_to_invalid_params(self):
+        """H-10: require() type checks map to INVALID_PARAMS too."""
+        req = JSONRPCRequest(id=1, method="fs_read", params={"path": 123})
+        resp = route_request(req)
+        assert resp.error is not None
+        assert resp.error["code"] == -32602
+        assert "must be str" in resp.error["message"]
+
+
+class TestRequire:
+    def test_missing_and_none_raise(self):
+        with pytest.raises(ValueError, match="missing required parameter 'x'"):
+            require({}, "x")
+        with pytest.raises(ValueError, match="missing required parameter 'x'"):
+            require({"x": None}, "x")
+
+    def test_wrong_type_raises(self):
+        with pytest.raises(ValueError, match="must be int"):
+            require({"x": "5"}, "x", int)
+
+    def test_valid_returns_value_and_tuple_type_accepted(self):
+        assert require({"x": 5}, "x", int) == 5
+        assert require({"pid": "abc"}, "pid", (str, int)) == "abc"
+        assert require({"pid": 123}, "pid", (str, int)) == 123
+        # expected_type=None accepts anything present
+        assert require({"x": object()}, "x") is not None
 
     def test_handlers_registered(self):
         """Verify key handlers are registered."""

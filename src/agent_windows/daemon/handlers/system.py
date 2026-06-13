@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from agent_windows.daemon.router import handler
+from agent_windows.daemon.router import handler, require
 
 
 # ── Application management ─────────────────────────────────────────
@@ -12,14 +12,14 @@ from agent_windows.daemon.router import handler
 def _app_launch(params: dict) -> dict[str, Any]:
     """Launch an application."""
     from agent_windows.core.app_manager import launch_app
-    return launch_app(params["name_or_path"], params.get("args"))
+    return launch_app(require(params, "name_or_path", str), params.get("args"))
 
 
 @handler("app_switch")
 def _app_switch(params: dict) -> dict[str, Any]:
     """Switch to an application window."""
     from agent_windows.core.app_manager import switch_window
-    return switch_window(params["name_or_title"])
+    return switch_window(require(params, "name_or_title", str))
 
 
 @handler("app_resize")
@@ -27,7 +27,8 @@ def _app_resize(params: dict) -> dict[str, Any]:
     """Resize an application window."""
     from agent_windows.core.app_manager import resize_window
     return resize_window(
-        params["name_or_title"], params["width"], params["height"],
+        require(params, "name_or_title", str),
+        require(params, "width"), require(params, "height"),
         params.get("x", -1), params.get("y", -1),
     )
 
@@ -46,7 +47,7 @@ def _app_list(params: dict) -> dict[str, Any]:
 def _shell(params: dict) -> dict[str, Any]:
     """Execute a PowerShell command."""
     from agent_windows.core.shell_runner import run_shell
-    return run_shell(params["command"])
+    return run_shell(require(params, "command", str))
 
 
 # ── Filesystem ──────────────────────────────────────────────────────
@@ -56,21 +57,21 @@ def _shell(params: dict) -> dict[str, Any]:
 def _fs_read(params: dict) -> dict[str, Any]:
     """Read a file."""
     from agent_windows.core.filesystem import read_file
-    return read_file(params["path"])
+    return read_file(require(params, "path", str))
 
 
 @handler("fs_write")
 def _fs_write(params: dict) -> dict[str, Any]:
     """Write to a file."""
     from agent_windows.core.filesystem import write_file
-    return write_file(params["path"], params["content"])
+    return write_file(require(params, "path", str), require(params, "content", str))
 
 
 @handler("fs_list")
 def _fs_list(params: dict) -> dict[str, Any]:
     """List directory contents."""
     from agent_windows.core.filesystem import list_dir
-    return list_dir(params["path"])
+    return list_dir(require(params, "path", str))
 
 
 # ── Clipboard ───────────────────────────────────────────────────────
@@ -93,7 +94,7 @@ def _clipboard_set(params: dict) -> dict[str, Any]:
     from agent_windows.utils.config import load_config
     cfg_method = load_config().get("clipboard", {}).get("method", "system")
     keyboard = params.get("keyboard", cfg_method == "keyboard")
-    return set_clipboard(params["text"], keyboard=keyboard)
+    return set_clipboard(require(params, "text", str), keyboard=keyboard)
 
 
 # ── Process management ──────────────────────────────────────────────
@@ -110,4 +111,4 @@ def _process_list(params: dict) -> dict[str, Any]:
 def _process_kill(params: dict) -> dict[str, Any]:
     """Kill a process."""
     from agent_windows.core.process_manager import kill_process
-    return kill_process(params["pid_or_name"])
+    return kill_process(require(params, "pid_or_name", (str, int)))
