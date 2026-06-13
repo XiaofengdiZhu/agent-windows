@@ -117,6 +117,28 @@ class TestJSONRPCRequest:
         req = JSONRPCRequest(id=1, method="ping")
         assert req.params == {}
 
+    def test_constructor_rejects_non_hashable_id(self):
+        """M-08 #2: a non-hashable id (list/dict) would crash
+        COMWorkerThread.submit, which uses request.id as a dict key — dropping
+        the connection with no JSON-RPC error. The constructor must reject it
+        so the server maps it to INVALID_REQUEST instead."""
+        with pytest.raises(ValueError):
+            JSONRPCRequest(id=[1, 2], method="ping")
+
+    def test_from_json_rejects_list_id(self):
+        """M-08 #2: a wire request with a list id must raise ValueError at parse
+        time (→ INVALID_REQUEST -32600 via the server's except ValueError),
+        never reaching submit()."""
+        with pytest.raises(ValueError):
+            JSONRPCRequest.from_json('{"jsonrpc":"2.0","id":[1,2],"method":"ping"}')
+
+    def test_constructor_accepts_valid_ids(self):
+        """M-08 #2: None (notification), str, and int ids are all valid per
+        JSON-RPC 2.0 (string/number/null) and must construct cleanly."""
+        assert JSONRPCRequest(id=None, method="ping").id is None
+        assert JSONRPCRequest(id="abc", method="ping").id == "abc"
+        assert JSONRPCRequest(id=42, method="ping").id == 42
+
 
 class TestJSONRPCResponse:
     def test_result_response(self):
