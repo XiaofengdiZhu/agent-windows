@@ -190,3 +190,68 @@ class TestSendToDaemonRoundtrip:
         )
         assert result == response.strip()  # full payload, byte-for-byte
         assert big in result  # explicit: the large field survived intact
+
+
+class TestPipeServerSecurity:
+    def test_refuses_when_dacl_unavailable(self):
+        """M-02: if the owner-only DACL cannot be built, the daemon must refuse
+        to start rather than silently fall back to the Windows default
+        (Everyone-/Anonymous-readable) named pipe. Security fails closed. The
+        raise happens before CreateNamedPipe, so no real pipe is created."""
+        from agent_windows.ipc import pipe as pipe_mod
+        from agent_windows.ipc.pipe import DaemonStartupError
+
+        with patch(
+            "agent_windows.ipc.pipe._create_pipe_security_attributes",
+            return_value=None,
+        ):
+            with pytest.raises(DaemonStartupError):
+                pipe_mod.create_pipe_server(r"\\.\pipe\agent-windows-test-m02")
+
+    def test_main_loop_aborts_without_spinning(self):
+        """M-02 regression (caught by review): create_pipe_server raising must
+        make _main_pipe_loop ABORT (call once → break + request_shutdown), not be
+        swallowed by the broad `except Exception` and busy-spin re-calling it
+        hundreds of times per second. Uses a dedicated DaemonStartupError so a
+        real per-connection error is never mistaken for a startup failure."""
+        import threading
+        from unittest.mock import MagicMock
+        from agent_windows.daemon import server as server_mod
+        from agent_windows.ipc.pipe import DaemonStartupError
+
+        shutdown_event = threading.Event()
+        state = {
+            "shutdown_event": shutdown_event,
+            "sta_thread": MagicMock(),
+            "idle_monitor": MagicMock(),
+            "request_shutdown": shutdown_event.set,
+        }
+
+        call_count = {"n": 0}
+
+        def boom():
+            call_count["n"] += 1
+            # Safety cap: if the fix is absent and the loop spins, stop it so the
+            # test fails cleanly instead of burning a core until timeout.
+            if call_count["n"] > 10:
+                shutdown_event.set()
+            raise DaemonStartupError("simulated DACL failure")
+
+        done = threading.Event()
+
+        def run():
+            try:
+                with patch.object(server_mod, "create_pipe_server", side_effect=boom):
+                    server_mod._main_pipe_loop(state)
+            finally:
+                done.set()
+
+        t = threading.Thread(target=run, daemon=True)
+        t.start()
+        assert done.wait(3.0), "_main_pipe_loop did not return — it is busy-spinning"
+        t.join(timeout=2.0)
+
+        assert call_count["n"] == 1, (
+            f"loop retried create_pipe_server {call_count['n']} times — busy-spin"
+        )
+        assert shutdown_event.is_set(), "request_shutdown() was not called on abort"

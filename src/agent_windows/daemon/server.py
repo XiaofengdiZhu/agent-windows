@@ -34,6 +34,7 @@ from agent_windows.ipc.pipe import (
     PIPE_NAME,
     BUFFER_SIZE,
     create_pipe_server,
+    DaemonStartupError,
     wait_for_client,
     read_pipe,
     write_pipe,
@@ -378,6 +379,12 @@ def _main_pipe_loop(state):
 
                 disconnect_pipe(pipe)
 
+            except DaemonStartupError as e:
+                # Security failure is fatal — must NOT be swallowed by the broad
+                # handler below and retried (that busy-spins). Abort the daemon.
+                logger.critical("Cannot start daemon securely — aborting: %s", e)
+                request_shutdown()
+                break
             except TimeoutError as e:
                 logger.error("Command timeout: %s", e)
                 if pipe:

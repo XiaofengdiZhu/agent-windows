@@ -21,11 +21,23 @@ ERROR_NO_DATA = 232  # The pipe is being closed (peer going away)
 _PIPE_CLOSED_ERRORS = {ERROR_BROKEN_PIPE, ERROR_NO_DATA}
 
 
+class DaemonStartupError(Exception):
+    """Fatal daemon startup failure (e.g. the named pipe cannot be secured).
+
+    Propagates past the main loop's per-connection ``except Exception`` retry
+    handler so the daemon aborts instead of busy-spinning or serving insecure
+    (M-02). Raise it for conditions where retrying cannot help and continuing
+    would be unsafe.
+    """
+
+
 def _create_pipe_security_attributes():
     """Create a SECURITY_ATTRIBUTES that restricts pipe access to the current user.
 
-    Returns None if the security descriptor cannot be created (falls back to
-    default security), with a warning logged.
+    Returns None if the security descriptor cannot be created (logging the
+    underlying error as a warning). Callers MUST treat None as fatal: serving
+    on an unsecured pipe (Windows default grants read to Everyone + Anonymous)
+    is a fail-open security hole (M-02).
     """
     import win32security
     import ntsecuritycon
@@ -47,7 +59,7 @@ def _create_pipe_security_attributes():
         return sa
     except Exception:
         logger.warning(
-            "Failed to create pipe security descriptor; falling back to default security",
+            "Failed to create pipe security descriptor; daemon startup will be refused",
             exc_info=True,
         )
         return None
@@ -56,13 +68,25 @@ def _create_pipe_security_attributes():
 def create_pipe_server(pipe_name: str = PIPE_NAME, buffer_size: int = BUFFER_SIZE):
     """Create a Named Pipe server instance (not yet connected).
 
-    The pipe is restricted to the current user via a security descriptor.
+    The pipe is restricted to the current user via a security descriptor. If
+    the descriptor cannot be built, this raises DaemonStartupError rather than
+    falling back to the Windows default (which grants read access to Everyone
+    and the anonymous account) — a security control must fail closed (M-02).
+
     Returns a pipe handle that can be used with connect_pipe_client().
     """
     import win32pipe
     import win32file
 
     sa = _create_pipe_security_attributes()
+    if sa is None:
+        # Fail closed: never serve on an unsecured pipe. The helper already
+        # logged the underlying win32security error (with exc_info) above.
+        raise DaemonStartupError(
+            "Cannot create a secure named pipe: failed to build an owner-only "
+            "security descriptor. Refusing to start the daemon with default "
+            "(world-readable) pipe security. See the preceding warning."
+        )
 
     pipe = win32pipe.CreateNamedPipe(
         pipe_name,
@@ -72,7 +96,7 @@ def create_pipe_server(pipe_name: str = PIPE_NAME, buffer_size: int = BUFFER_SIZ
         buffer_size,
         buffer_size,
         0,  # default timeout
-        sa,  # security attributes (restricted to current user, or None on failure)
+        sa,  # security attributes (restricted to current user)
     )
     logger.debug("Named Pipe created: %s", pipe_name)
     return pipe
