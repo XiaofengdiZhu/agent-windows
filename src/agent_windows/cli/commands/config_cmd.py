@@ -27,7 +27,7 @@ def config_show() -> None:
 
     config = load_config()
     display_config = copy.deepcopy(config)
-    # 遮蔽 API Key
+    # Mask API key
     if "grounding" in display_config and "api_key" in display_config["grounding"]:
         key = display_config["grounding"]["api_key"]
         if key and len(key) > 8:

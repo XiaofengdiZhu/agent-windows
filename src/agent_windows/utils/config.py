@@ -6,6 +6,7 @@ Data directory: ~/.agent-windows/
 
 import os
 import stat
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,7 @@ import toml
 
 _config_cache: dict[str, Any] | None = None
 _config_cache_mtime: float = 0.0
+_config_lock = threading.Lock()
 
 # ── Paths ─────────────────────────────────────────────────────────
 
@@ -113,29 +115,31 @@ def load_config() -> dict[str, Any]:
 
     config_path = get_config_path()
 
-    # 检查缓存：如果文件未修改，返回缓存
-    if _config_cache is not None and config_path.exists():
-        current_mtime = config_path.stat().st_mtime
-        if current_mtime == _config_cache_mtime:
-            return _config_cache
+    # Hold the lock for the check-and-update sequence to avoid races
+    with _config_lock:
+        # Check cache: if file unmodified, return cached config
+        if _config_cache is not None and config_path.exists():
+            current_mtime = config_path.stat().st_mtime
+            if current_mtime == _config_cache_mtime:
+                return _config_cache
 
-    if config_path.exists():
-        user_config = toml.loads(config_path.read_text(encoding="utf-8"))
-    else:
-        user_config = {}
+        if config_path.exists():
+            user_config = toml.loads(config_path.read_text(encoding="utf-8"))
+        else:
+            user_config = {}
 
-    # Deep merge: user values override defaults
-    merged = _deep_merge(DEFAULT_CONFIG, user_config)
+        # Deep merge: user values override defaults
+        merged = _deep_merge(DEFAULT_CONFIG, user_config)
 
-    # 环境变量优先覆盖 API Key
-    env_key = os.environ.get("AGENT_WINDOWS_GROUNDING_API_KEY", "")
-    if env_key:
-        merged.setdefault("grounding", {})["api_key"] = env_key
+        # Environment variable overrides API key
+        env_key = os.environ.get("AGENT_WINDOWS_GROUNDING_API_KEY", "")
+        if env_key:
+            merged.setdefault("grounding", {})["api_key"] = env_key
 
-    # 更新缓存
-    _config_cache = merged
-    if config_path.exists():
-        _config_cache_mtime = config_path.stat().st_mtime
+        # Update cache
+        _config_cache = merged
+        if config_path.exists():
+            _config_cache_mtime = config_path.stat().st_mtime
 
     return merged
 
@@ -146,7 +150,7 @@ def save_config(config: dict[str, Any]) -> None:
     config_path = get_config_path()
     config_path.write_text(toml.dumps(config), encoding="utf-8")
     config_path.chmod(stat.S_IRUSR | stat.S_IWUSR)  # 0o600
-    _config_cache = None  # 清除缓存
+    _config_cache = None  # Clear cache
 
 
 def init_config() -> Path:

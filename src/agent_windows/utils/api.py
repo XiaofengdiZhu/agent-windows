@@ -6,6 +6,7 @@ Supports OpenAI-compatible API (covers most providers), Anthropic, and Google Ge
 import base64
 import io
 import logging
+import threading
 from typing import Any
 
 from PIL import Image
@@ -13,6 +14,7 @@ from PIL import Image
 logger = logging.getLogger(__name__)
 
 _client_cache: dict[str, Any] = {}
+_client_lock = threading.Lock()
 
 
 def encode_image(image: Image.Image, format: str = "PNG", max_size: int = 0) -> str:
@@ -74,14 +76,15 @@ def _call_openai_compatible(image: Image.Image, prompt: str, config: dict, max_t
     api_key = config.get("api_key", "") or _get_api_key_env()
     api_base = config.get("api_base", "https://api.openai.com/v1")
     cache_key = f"openai:{api_base}:{api_key}"
-    if cache_key not in _client_cache:
-        from openai import OpenAI
-        _client_cache[cache_key] = OpenAI(
-            api_key=api_key,
-            base_url=api_base,
-            timeout=float(config.get("timeout", 30)),
-        )
-    client = _client_cache[cache_key]
+    with _client_lock:
+        if cache_key not in _client_cache:
+            from openai import OpenAI
+            _client_cache[cache_key] = OpenAI(
+                api_key=api_key,
+                base_url=api_base,
+                timeout=float(config.get("timeout", 30)),
+            )
+        client = _client_cache[cache_key]
 
     b64 = encode_image(image)
     model = config.get("model", "gpt-4o-mini")
@@ -113,10 +116,11 @@ def _call_anthropic(image: Image.Image, prompt: str, config: dict, max_tokens: i
     """Call Anthropic Claude vision API."""
     api_key = config.get("api_key", "") or _get_api_key_env()
     cache_key = f"anthropic:{api_key}"
-    if cache_key not in _client_cache:
-        import anthropic
-        _client_cache[cache_key] = anthropic.Anthropic(api_key=api_key, timeout=float(config.get("timeout", 30)))
-    client = _client_cache[cache_key]
+    with _client_lock:
+        if cache_key not in _client_cache:
+            import anthropic
+            _client_cache[cache_key] = anthropic.Anthropic(api_key=api_key, timeout=float(config.get("timeout", 30)))
+        client = _client_cache[cache_key]
 
     b64 = encode_image(image)
     model = config.get("model", "claude-sonnet-4-6-20250514")
@@ -152,11 +156,12 @@ def _call_gemini(image: Image.Image, prompt: str, config: dict, max_tokens: int 
 
     api_key = config.get("api_key", "") or _get_api_key_env()
     cache_key = f"gemini:{api_key}"
-    if cache_key not in _client_cache:
-        genai.configure(api_key=api_key)
-        model_name = config.get("model", "gemini-1.5-flash")
-        _client_cache[cache_key] = genai.GenerativeModel(model_name)
-    model = _client_cache[cache_key]
+    with _client_lock:
+        if cache_key not in _client_cache:
+            genai.configure(api_key=api_key)
+            model_name = config.get("model", "gemini-1.5-flash")
+            _client_cache[cache_key] = genai.GenerativeModel(model_name)
+        model = _client_cache[cache_key]
     response = model.generate_content([prompt, image],
                                        generation_config=genai.GenerationConfig(
                                            temperature=0,

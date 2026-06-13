@@ -13,6 +13,11 @@ logger = logging.getLogger(__name__)
 
 user32 = ctypes.windll.user32
 
+# Window enumeration callback type (defined once at module level)
+WNDENUMPROC = ctypes.WINFUNCTYPE(
+    ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM,
+)
+
 
 def launch_app(name_or_path: str, args: list[str] | None = None) -> dict[str, Any]:
     """Launch an application by name or path."""
@@ -97,10 +102,6 @@ def _find_window_by_title(title: str) -> int:
     target = title.lower()
     result = ctypes.c_void_p(0)
 
-    WNDENUMPROC = ctypes.WINFUNCTYPE(
-        ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM,
-    )
-
     def _cb(hwnd, _):
         if not user32.IsWindowVisible(hwnd):
             return True
@@ -122,10 +123,6 @@ def _find_window_by_process(name: str) -> int:
     """Find a window handle by process name match."""
     target = name.lower().replace(".exe", "") + ".exe"
     result = ctypes.c_void_p(0)
-
-    WNDENUMPROC = ctypes.WINFUNCTYPE(
-        ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM,
-    )
 
     def _cb(hwnd, _):
         if not user32.IsWindowVisible(hwnd):

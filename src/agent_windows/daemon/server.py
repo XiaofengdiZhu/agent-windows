@@ -372,7 +372,7 @@ def _main_pipe_loop(state):
 
                 # Submit to STA thread and wait for result
                 idle_monitor.touch()
-                response_str = sta_thread.submit(request, timeout=60.0)
+                response_str = sta_thread.submit(request, timeout=120.0)
                 write_pipe(pipe, response_str)
                 idle_monitor.touch()
 

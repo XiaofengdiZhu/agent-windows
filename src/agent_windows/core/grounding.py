@@ -31,6 +31,18 @@ from agent_windows.core.screenshot import save_and_cleanup
 logger = logging.getLogger(__name__)
 
 
+def _load_image_for_vision(image_path: str) -> Image.Image:
+    """Load an image file for vision-model input, ensuring RGB/L mode."""
+    p = Path(image_path)
+    if not p.exists():
+        raise ValueError(f"Image file not found: {image_path}")
+    with Image.open(p) as img:
+        img.load()
+        if img.mode not in ("RGB", "L"):
+            return img.convert("RGB")
+        return img.copy()
+
+
 def ground_element(
     description: str,
     screenshot: Image.Image | None = None,
@@ -172,13 +184,15 @@ def _save_marked_screenshot(
 
 _DEFAULT_COARSE_PROMPT = (
     "Query:{description}\n"
-    "Output only the coordinate of one point in your response."
+    "Output only the coordinate of one point in your response. "
+    "Coordinates are in image pixel space, (0,0) is top-left. Output as x,y integers."
 )
 
 _DEFAULT_FINE_PROMPT = (
     "Query:{description}\n"
     "The previous coarse location is ({x},{y}). Crop from ({cx},{cy}).\n"
-    "Output only the coordinate of one point in your response."
+    "Output only the coordinate of one point in your response. "
+    "Coordinates are in image pixel space, (0,0) is top-left. Output as x,y integers."
 )
 
 
@@ -218,13 +232,7 @@ def ask_vision(
 
     # Load image from file or capture screenshot
     if image_path:
-        p = Path(image_path)
-        if not p.exists():
-            raise ValueError(f"Image file not found: {image_path}")
-        image = Image.open(p)
-        # Convert to RGB if necessary (e.g. RGBA PNGs)
-        if image.mode not in ("RGB", "L"):
-            image = image.convert("RGB")
+        image = _load_image_for_vision(image_path)
     else:
         from agent_windows.core.screenshot import capture_screenshot
         image = capture_screenshot()
@@ -316,12 +324,7 @@ def detect_elements(
 
     # Load image from file or capture screenshot
     if image_path:
-        p = Path(image_path)
-        if not p.exists():
-            raise ValueError(f"Image file not found: {image_path}")
-        image = Image.open(p)
-        if image.mode not in ("RGB", "L"):
-            image = image.convert("RGB")
+        image = _load_image_for_vision(image_path)
     else:
         from agent_windows.core.screenshot import capture_screenshot
         image = capture_screenshot()

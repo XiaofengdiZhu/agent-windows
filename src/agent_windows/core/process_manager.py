@@ -40,14 +40,18 @@ def kill_process(pid_or_name: str) -> dict[str, Any]:
     # Try as PID first
     try:
         pid = int(pid_or_name)
+    except ValueError:
+        pid = None
+
+    if pid is not None:
+        if pid == os.getpid():
+            raise ValueError("Refusing to kill the current process")
         PROCESS_TERMINATE = 0x0001
         handle = ctypes.windll.kernel32.OpenProcess(PROCESS_TERMINATE, False, pid)
         if handle:
             ctypes.windll.kernel32.TerminateProcess(handle, 1)
             ctypes.windll.kernel32.CloseHandle(handle)
             return {"output": f"## Process Kill\nPID: {pid}\nStatus: terminated"}
-    except ValueError:
-        pass
 
     # Kill by name via PowerShell
     try:

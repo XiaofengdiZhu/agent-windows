@@ -19,13 +19,13 @@ def _observe(params: dict) -> dict[str, Any]:
         want_screenshot = True
 
     if want_snapshot:
-        snap_result = HANDLERS["snapshot"](params)
+        snap_result = HANDLERS["snapshot"]({})
         parts.append(snap_result.get("output", ""))
 
     if want_screenshot:
         if parts:
             parts.append("---\n")
-        ss_result = HANDLERS["screenshot"](params)
+        ss_result = HANDLERS["screenshot"]({})
         parts.append(ss_result.get("output", ""))
 
     if ground_desc:

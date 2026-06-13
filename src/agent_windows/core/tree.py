@@ -25,7 +25,7 @@ _TREE_CACHE_TTL = 2.0  # seconds
 
 
 def get_tree_snapshot(ttl: float = _TREE_CACHE_TTL, **kwargs) -> dict[str, Any]:
-    """获取 UIA 树快照，带缓存。"""
+    """Get a UIA tree snapshot, with caching."""
     global _tree_cache, _tree_cache_ts
     with _tree_cache_lock:
         if _tree_cache and time.time() - _tree_cache_ts < ttl:

@@ -6,13 +6,11 @@ Uses win32pipe / win32file from pywin32.
 
 import logging
 
-import win32security
-import ntsecuritycon
-
 logger = logging.getLogger(__name__)
 
 PIPE_NAME = r"\\.\pipe\agent-windows"
 BUFFER_SIZE = 65536
+MAX_MESSAGE_SIZE = 10 * 1024 * 1024  # 10 MB guard against runaway reads
 CONNECT_TIMEOUT_MS = 5000  # 5 seconds for client connection attempts
 MAX_CONNECT_RETRIES = 25
 RETRY_INTERVAL_S = 0.2  # 200ms between retries
@@ -24,6 +22,9 @@ def _create_pipe_security_attributes():
     Returns None if the security descriptor cannot be created (falls back to
     default security), with a warning logged.
     """
+    import win32security
+    import ntsecuritycon
+
     try:
         user_sid = win32security.LookupAccountName(None, win32security.GetUserName())[0]
         dacl = win32security.ACL()
@@ -89,6 +90,8 @@ def read_pipe(pipe, buffer_size: int = BUFFER_SIZE) -> str:
     while True:
         _, chunk = win32file.ReadFile(pipe, buffer_size)
         data += chunk
+        if len(data) > MAX_MESSAGE_SIZE:
+            raise RuntimeError("Message exceeds maximum size")
         if b"\n" in data or not chunk:
             break
 
@@ -154,6 +157,8 @@ def send_to_daemon(message: str, pipe_name: str = PIPE_NAME) -> str:
         while True:
             _, chunk = win32file.ReadFile(pipe, BUFFER_SIZE)
             resp_data += chunk
+            if len(resp_data) > MAX_MESSAGE_SIZE:
+                raise RuntimeError("Message exceeds maximum size")
             if b"\n" in resp_data or not chunk:
                 break
         response = resp_data.decode("utf-8").strip()
@@ -173,6 +178,6 @@ def pipe_exists(pipe_name: str = PIPE_NAME) -> bool:
 
     try:
         # WaitNamedPipe returns True if the pipe is available (even with timeout=0)
-        return ctypes.windll.kernel32.WaitNamedPipeW(pipe_name, 0) != 0
+        return ctypes.windll.kernel32.WaitNamedPipeW(pipe_name, 100) != 0
     except Exception:
         return False

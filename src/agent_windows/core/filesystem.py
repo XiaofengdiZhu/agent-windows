@@ -7,13 +7,17 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# 路径黑名单：按路径组件精确匹配，禁止访问敏感目录和文件
-# 每个 entry 是一个元组：(匹配模式, 描述)
-#   "part"  — 匹配路径中的某个组件（如 ".ssh" 匹配 C:\Users\x\.ssh\config）
-#   "prefix" — 匹配连续组件前缀（如 ("windows", "system32") 匹配 ...\Windows\System32\...）
+# Path blacklist: match by path component to deny access to sensitive
+# directories and files. Each entry is a tuple: (match pattern, description)
+#   "part"   — matches any single component in the path (e.g. ".ssh" matches C:\Users\x\.ssh\config)
+#   "prefix" — matches a contiguous component prefix (e.g. ("windows", "system32") matches ...\Windows\System32\...)
 _BLOCKED_PARTS = frozenset({
     ".ssh",
     ".gnupg",
+    ".aws",
+    ".azure",
+    ".kube",
+    ".docker",
     "ntuser.dat",
     "ntuser.ini",
     "sam",
@@ -26,16 +30,16 @@ _BLOCKED_PART_PREFIXES: tuple[tuple[tuple[str, ...], str], ...] = (
 
 
 def _validate_path(path: str) -> Path:
-    """验证文件路径是否在黑名单中。"""
+    """Validate that a file path is not in the blacklist."""
     p = Path(path).expanduser().resolve()
     parts = [part.lower() for part in p.parts]
 
-    # 按组件精确匹配（如 .ssh、ntuser.dat）
+    # Exact component match (e.g. .ssh, ntuser.dat)
     for part in parts:
         if part in _BLOCKED_PARTS:
             raise ValueError(f"Access denied: path contains restricted segment '{part}'")
 
-    # 按连续组件前缀匹配（如 windows\system32）
+    # Contiguous component prefix match (e.g. windows\system32)
     for prefix, desc in _BLOCKED_PART_PREFIXES:
         prefix_len = len(prefix)
         for i in range(len(parts) - prefix_len + 1):

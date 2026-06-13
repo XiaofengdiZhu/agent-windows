@@ -84,17 +84,16 @@ def _capture_mss(bbox: tuple[int, int, int, int] | None) -> Image.Image:
         if _mss_instance is None:
             _mss_instance = mss.mss()
         sct = _mss_instance
-
-    if bbox:
-        monitor = {
-            "left": bbox[0],
-            "top": bbox[1],
-            "width": bbox[2] - bbox[0],
-            "height": bbox[3] - bbox[1],
-        }
-    else:
-        monitor = sct.monitors[0]  # Full virtual screen
-    raw = sct.grab(monitor)
+        if bbox:
+            monitor = {
+                "left": bbox[0],
+                "top": bbox[1],
+                "width": bbox[2] - bbox[0],
+                "height": bbox[3] - bbox[1],
+            }
+        else:
+            monitor = sct.monitors[0]  # Full virtual screen
+        raw = sct.grab(monitor)
     return Image.frombytes("RGB", raw.size, raw.rgb)
 
 
@@ -433,6 +432,7 @@ def diff_images(
 # ── Screenshot cleanup ────────────────────────────────────────────────
 
 _last_cleanup_time: float = 0.0
+_cleanup_lock = threading.Lock()
 
 
 def cleanup_screenshots(force: bool = False) -> dict[str, Any]:
@@ -458,9 +458,13 @@ def cleanup_screenshots(force: bool = False) -> dict[str, Any]:
     # Interval check (skip when force=True)
     interval = ss_config.get("cleanup_interval_minutes", 10)
     if not force and interval > 0:
-        if time.monotonic() - _last_cleanup_time < interval * 60:
-            return {"skipped": True}
-    _last_cleanup_time = time.monotonic()
+        with _cleanup_lock:
+            if time.monotonic() - _last_cleanup_time < interval * 60:
+                return {"skipped": True}
+            _last_cleanup_time = time.monotonic()
+    else:
+        with _cleanup_lock:
+            _last_cleanup_time = time.monotonic()
 
     stats: dict[str, Any] = {
         "deleted_by_age": 0,
