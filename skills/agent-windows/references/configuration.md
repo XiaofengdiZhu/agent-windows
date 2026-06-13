@@ -99,6 +99,14 @@ Daemon process settings.
 |-----|------|---------|-------------|
 | `idle_timeout_minutes` | int | `30` | Auto-stop daemon after N minutes of inactivity |
 
+### [ipc]
+
+Named-pipe client read timeout (H-02). The client uses overlapped I/O so a hung or crashed daemon can never block the CLI forever.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `read_timeout_seconds` | int | `150` | Per-operation seconds the client waits for daemon progress before raising `ConnectionError`. Applied per overlapped read/write, not a hard ceiling on total response time (a large response streams across multiple intervals). Must exceed the daemon's slowest legitimate operation (grounding two-pass ≈ 60s) |
+
 ## Environment Variables
 
 | Variable | Overrides | Description |

@@ -98,6 +98,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "daemon": {
         "idle_timeout_minutes": 30,
     },
+    "ipc": {
+        "read_timeout_seconds": 150,  # Client seconds to wait for a daemon response (H-02)
+    },
     "clipboard": {
         "method": "system",  # "system" (PowerShell) or "keyboard" (simulate Ctrl+C/V)
     },
