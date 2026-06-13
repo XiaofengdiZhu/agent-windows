@@ -208,6 +208,20 @@ class TestPipeServerSecurity:
             with pytest.raises(DaemonStartupError):
                 pipe_mod.create_pipe_server(r"\\.\pipe\agent-windows-test-m02")
 
+    def test_security_attributes_actually_build(self):
+        """M-02 regression: the security helper must succeed for real on Windows,
+        not just return None into the fail-closed path. The sibling test mocks the
+        helper, which hid a ``win32security.GetUserName`` AttributeError — the
+        helper ALWAYS failed and returned None, so the daemon could never start
+        securely. This exercises the real win32 calls end-to-end."""
+        from agent_windows.ipc.pipe import _create_pipe_security_attributes
+
+        sa = _create_pipe_security_attributes()
+        assert sa is not None, (
+            "owner-only SECURITY_ATTRIBUTES could not be built — the daemon would "
+            "refuse to start (fail-closed). Check the win32 API calls."
+        )
+
     def test_main_loop_aborts_without_spinning(self):
         """M-02 regression (caught by review): create_pipe_server raising must
         make _main_pipe_loop ABORT (call once → break + request_shutdown), not be

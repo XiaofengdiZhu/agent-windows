@@ -41,9 +41,10 @@ def _create_pipe_security_attributes():
     """
     import win32security
     import ntsecuritycon
+    import win32api
 
     try:
-        user_sid = win32security.LookupAccountName(None, win32security.GetUserName())[0]
+        user_sid = win32security.LookupAccountName(None, win32api.GetUserName())[0]
         dacl = win32security.ACL()
         dacl.AddAccessAllowedAce(
             win32security.ACL_REVISION,
