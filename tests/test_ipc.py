@@ -52,6 +52,48 @@ class TestJSONRPCRequest:
         req2 = JSONRPCRequest.from_json(req.to_json())
         assert req2.params["text"] == "你好世界"
 
+    # ── M-08: structural validation (valid JSON, invalid Request) ──
+
+    def test_non_string_method_raises_value_error(self):
+        """M-08: a non-string 'method' is a structurally invalid request, not a
+        parse error. from_json must reject it so the daemon maps it to
+        INVALID_REQUEST (-32600) rather than letting a non-string key reach the
+        handler registry as METHOD_NOT_FOUND 'Unknown method: 123'."""
+        with pytest.raises(ValueError):
+            JSONRPCRequest.from_json('{"jsonrpc":"2.0","id":1,"method":123}')
+
+    def test_non_dict_params_raises_value_error(self):
+        """M-08: 'params' must be an object here (all handlers take a dict). A
+        list would otherwise leak to a handler and surface as a cryptic
+        DAEMON_INTERNAL_ERROR TypeError on params["key"]."""
+        with pytest.raises(ValueError):
+            JSONRPCRequest.from_json(
+                '{"jsonrpc":"2.0","id":1,"method":"click","params":[1,2]}'
+            )
+
+    def test_non_object_body_raises_value_error(self):
+        """M-08: valid JSON that isn't an object (e.g. a bare array) is not a
+        valid Request object → INVALID_REQUEST, not PARSE_ERROR. Previously this
+        raised AttributeError on obj.get."""
+        with pytest.raises(ValueError):
+            JSONRPCRequest.from_json("[1, 2, 3]")
+
+    def test_missing_method_raises_value_error(self):
+        """M-08: a request without 'method' is structurally invalid. Previously
+        obj["method"] raised KeyError → PARSE_ERROR; now a clear ValueError →
+        INVALID_REQUEST."""
+        with pytest.raises(ValueError):
+            JSONRPCRequest.from_json('{"jsonrpc":"2.0","id":1}')
+
+    def test_garbage_raises_json_decode_error(self):
+        """M-08 regression: bytes that aren't JSON at all must still raise
+        JSONDecodeError (→ PARSE_ERROR), staying distinct from the
+        structurally-invalid ValueError path. Guards the server's except
+        ordering (JSONDecodeError before ValueError — the former is a subclass
+        of the latter)."""
+        with pytest.raises(json.JSONDecodeError):
+            JSONRPCRequest.from_json("not json at all")
+
 
 class TestJSONRPCResponse:
     def test_result_response(self):

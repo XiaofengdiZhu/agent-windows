@@ -8,6 +8,7 @@ Threads:
 Usage: python -m agent_windows --daemon [--debug]
 """
 
+import json
 import logging
 import os
 import queue
@@ -369,11 +370,22 @@ def _main_pipe_loop(state):
 
                 logger.debug("Received: %s", request_str[:200])
 
-                # Parse JSON-RPC request
+                # Parse JSON-RPC request. Distinguish unparseable input
+                # (PARSE_ERROR — the bytes weren't valid JSON) from a
+                # structurally invalid Request object (INVALID_REQUEST — the
+                # JSON parsed but method/params are the wrong type). The former
+                # is json.JSONDecodeError, which is a subclass of ValueError, so
+                # it MUST be caught first or it would be misfiled as
+                # INVALID_REQUEST. (M-08)
                 try:
                     request = JSONRPCRequest.from_json(request_str)
-                except Exception as e:
+                except json.JSONDecodeError as e:
                     error_resp = make_error(PARSE_ERROR, f"Parse error: {e}")
+                    write_pipe(pipe, error_resp.to_json())
+                    disconnect_pipe(pipe)
+                    continue
+                except ValueError as e:
+                    error_resp = make_error(INVALID_REQUEST, f"Invalid request: {e}")
                     write_pipe(pipe, error_resp.to_json())
                     disconnect_pipe(pipe)
                     continue

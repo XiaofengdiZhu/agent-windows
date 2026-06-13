@@ -22,11 +22,25 @@ class JSONRPCRequest:
 
     @classmethod
     def from_json(cls, data: str) -> "JSONRPCRequest":
+        # json.loads raises json.JSONDecodeError for non-JSON input (→ PARSE_ERROR
+        # at the server). The checks below reject JSON that parses but isn't a
+        # valid Request object (→ INVALID_REQUEST): method must be a string and
+        # params, when present, must be an object — this codebase's handlers all
+        # take a dict, so a list/str params would otherwise leak to a handler as
+        # the wrong type and surface as a cryptic DAEMON_INTERNAL_ERROR (M-08).
         obj = json.loads(data)
+        if not isinstance(obj, dict):
+            raise ValueError("JSON-RPC request must be a JSON object")
+        method = obj.get("method")
+        if not isinstance(method, str):
+            raise ValueError("JSON-RPC 'method' must be a string")
+        params = obj.get("params")
+        if params is not None and not isinstance(params, dict):
+            raise ValueError("JSON-RPC 'params' must be an object")
         return cls(
             id=obj.get("id"),
-            method=obj["method"],
-            params=obj.get("params"),
+            method=method,
+            params=params,
         )
 
 
