@@ -4,14 +4,16 @@ Config file: ~/.agent-windows/config.toml
 Data directory: ~/.agent-windows/
 """
 
+import logging
 import os
-import stat
 import threading
 import time
 from pathlib import Path
 from typing import Any
 
 import toml
+
+logger = logging.getLogger(__name__)
 
 # ── Config cache ───────────────────────────────────────────────────
 
@@ -139,6 +141,14 @@ def load_config() -> dict[str, Any]:
         # Deep merge: user values override defaults
         merged = _deep_merge(DEFAULT_CONFIG, user_config)
 
+        # Decrypt the api_key if it was stored as a DPAPI blob (M-01). Legacy
+        # plaintext values pass through unchanged for backward compatibility.
+        g = merged.get("grounding")
+        if isinstance(g, dict):
+            raw_key = g.get("api_key", "")
+            if isinstance(raw_key, str) and raw_key.startswith("dpapi:"):
+                g["api_key"] = _decrypt_secret(raw_key)
+
         # Environment variable overrides API key
         env_key = os.environ.get("AGENT_WINDOWS_GROUNDING_API_KEY", "")
         if env_key:
@@ -153,11 +163,32 @@ def load_config() -> dict[str, Any]:
 
 
 def save_config(config: dict[str, Any]) -> None:
-    """Save config dict to TOML file."""
+    """Save config dict to TOML file.
+
+    The ``grounding.api_key`` is DPAPI-encrypted at rest; all other values are
+    non-secret. The file is also restricted to its owner via an ACL (M-01). The
+    caller's dict is not mutated — encryption is applied to a shallow copy used
+    only for serialization, so the in-memory config keeps the usable key.
+    """
     global _config_cache
     config_path = get_config_path()
-    config_path.write_text(toml.dumps(config), encoding="utf-8")
-    config_path.chmod(stat.S_IRUSR | stat.S_IWUSR)  # 0o600
+
+    # Encrypt the api_key on a copy so the caller's dict keeps the plaintext.
+    to_write = dict(config)
+    grounding = to_write.get("grounding")
+    if isinstance(grounding, dict):
+        grounding = dict(grounding)
+        key = grounding.get("api_key", "")
+        # Mirror the decrypt-side guard: only a real non-empty plaintext string
+        # gets encrypted. A pre-prefixed dpapi: blob is written through unchanged
+        # (avoids double-encryption), and a non-string key (e.g. a hand-edited
+        # ``api_key = 123``) is left as-is rather than crashing in .encode().
+        if isinstance(key, str) and key and not key.startswith("dpapi:"):
+            grounding["api_key"] = _encrypt_secret(key)
+        to_write["grounding"] = grounding
+
+    config_path.write_text(toml.dumps(to_write), encoding="utf-8")
+    _secure_config_file(config_path)
     _config_cache = None  # Clear cache
 
 
@@ -232,6 +263,84 @@ def get_screenshot_save_dir() -> Path:
 
 
 # ── Helpers ───────────────────────────────────────────────────────
+
+
+# ── Secret protection (DPAPI) ──────────────────────────────────────
+
+
+def _encrypt_secret(plaintext: str) -> str:
+    """Protect a secret with Windows DPAPI (current-user scope).
+
+    Returns ``dpapi:<base64 blob>`` for storage. Only the same Windows account
+    can unprotect it, so a file copied to another account/machine or grabbed by
+    a backup yields an unusable blob (M-01). ``win32crypt`` is imported lazily
+    so configs without a stored key never pay the import cost.
+    """
+    import base64
+    import win32crypt
+
+    blob = win32crypt.CryptProtectData(
+        plaintext.encode("utf-8"), None, None, None, None, 0
+    )
+    return "dpapi:" + base64.b64encode(blob).decode("ascii")
+
+
+def _decrypt_secret(value: str) -> str:
+    """Unprotect a ``dpapi:``-prefixed secret; pass plaintext through unchanged.
+
+    Non-prefixed values (legacy plaintext keys, or hand-edited entries) are
+    returned as-is so existing configs keep working. A blob that cannot be
+    unprotected (corrupt, or not from this account) yields ``""`` — the key is
+    treated as unset rather than surfacing a raw blob upstream (M-01).
+    """
+    if not isinstance(value, str) or not value.startswith("dpapi:"):
+        return value
+    import base64
+    import win32crypt
+
+    try:
+        blob = base64.b64decode(value[len("dpapi:"):])
+        _, plaintext = win32crypt.CryptUnprotectData(blob, None, None, None, 0)
+        return plaintext.decode("utf-8")
+    except Exception:
+        logger.warning(
+            "Failed to decrypt DPAPI-protected api_key; treating as unset",
+            exc_info=True,
+        )
+        return ""
+
+
+def _secure_config_file(path: Path) -> None:
+    """Restrict a file to its owner via an owner-only DACL.
+
+    Replaces the POSIX ``chmod(0o600)``, which is a no-op on Windows. This is
+    defense-in-depth: the api_key is already DPAPI-encrypted at rest, so a
+    best-effort ACL with a warning is acceptable here (unlike the named pipe in
+    M-02, which had no other protection and must fail closed). If the ACL
+    cannot be applied, the encrypted blob still protects the secret.
+    """
+    import ntsecuritycon
+    import win32api
+    import win32security
+
+    try:
+        user_sid = win32security.LookupAccountName(None, win32api.GetUserName())[0]
+        dacl = win32security.ACL()
+        dacl.AddAccessAllowedAce(
+            win32security.ACL_REVISION, ntsecuritycon.FILE_ALL_ACCESS, user_sid
+        )
+        sd = win32security.SECURITY_DESCRIPTOR()
+        sd.SetSecurityDescriptorDacl(1, dacl, 0)
+        # Protect the DACL from parent-dir inheritance so the file is exactly
+        # owner-only — no inherited group ACEs could broaden access to the key.
+        sd.SetSecurityDescriptorControl(
+            win32security.SE_DACL_PROTECTED, win32security.SE_DACL_PROTECTED
+        )
+        win32security.SetFileSecurity(
+            str(path), win32security.DACL_SECURITY_INFORMATION, sd
+        )
+    except Exception:
+        logger.warning("Failed to set owner-only ACL on %s", path, exc_info=True)
 
 
 def _deep_merge(base: dict, override: dict) -> dict:

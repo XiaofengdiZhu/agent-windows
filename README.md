@@ -118,7 +118,7 @@ CLI (Typer, ~5ms) → Named Pipe IPC → Daemon (COM STA, ~20ms response)
 
 Config file: `~/.agent-windows/config.toml` (auto-created with owner-only permissions)
 
-> **Security**: API keys in `config show` output are automatically masked. Use the `AGENT_WINDOWS_GROUNDING_API_KEY` environment variable for CI/CD or shared environments — it takes priority over the config file.
+> **Security**: The `grounding.api_key` is **encrypted at rest** with Windows DPAPI (current-user scope) and the file is restricted to your Windows account via an owner-only ACL. Decryption happens transparently on load — you only ever set the plaintext key. Legacy plaintext keys in an existing file still work and are encrypted on the next `config set`. API keys in `config show` output are automatically masked. For CI/CD or shared environments, use the `AGENT_WINDOWS_GROUNDING_API_KEY` environment variable — it takes priority over the config file and is never written to disk.
 
 ```toml
 [grounding]

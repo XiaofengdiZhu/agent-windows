@@ -38,7 +38,7 @@ Vision model settings for `ground`, `detect`, and `ask-vision`.
 | `engine` | str | `"openai"` | Vision engine: `openai`, `anthropic`, or `gemini` |
 | `model` | str | `"gpt-4o-mini"` | Default model for vision calls |
 | `api_base` | str | `"https://api.openai.com/v1"` | API endpoint URL |
-| `api_key` | str | `""` | API key (or use `AGENT_WINDOWS_GROUNDING_API_KEY` env var) |
+| `api_key` | str | `""` | API key. **Encrypted at rest** with Windows DPAPI (current-user scope); set via `config set grounding.api_key sk-...` and it is transparently decrypted on load. Legacy plaintext values still work and are re-encrypted on next write. (Or use the `AGENT_WINDOWS_GROUNDING_API_KEY` env var) |
 | `timeout` | int | `30` | Request timeout in seconds |
 | `width` | int | `1000` | Screenshot resize width for model input |
 | `height` | int | `1000` | Screenshot resize height for model input |
