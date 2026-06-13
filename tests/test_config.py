@@ -66,6 +66,13 @@ class TestDefaultConfig:
     def test_has_screenshot(self):
         assert "screenshot" in DEFAULT_CONFIG
         assert DEFAULT_CONFIG["screenshot"]["backend"] == "auto"
+        assert DEFAULT_CONFIG["screenshot"]["resampling"] == "BILINEAR"
+
+    def test_grounding_image_encoding_defaults(self):
+        """H-08: vision API defaults to JPEG encoding."""
+        g = DEFAULT_CONFIG["grounding"]
+        assert g["image_format"] == "JPEG"
+        assert g["jpeg_quality"] == 85
 
     def test_has_tree(self):
         assert "tree" in DEFAULT_CONFIG

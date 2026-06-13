@@ -128,11 +128,14 @@ model = "gpt-4o-mini"
 api_base = "https://api.openai.com/v1"
 api_key = ""             # or AGENT_WINDOWS_GROUNDING_API_KEY env var
 timeout = 30
+image_format = "JPEG"   # JPEG (smaller/faster, default) or PNG for vision API
+jpeg_quality = 85        # JPEG quality (1-95), ignored when image_format = PNG
 
 [screenshot]
 backend = "auto"         # auto / dxcam / mss / pillow
 max_width = 1920
 max_height = 1080
+resampling = "BILINEAR"  # downscale filter: BILINEAR (default) / LANCZOS / NEAREST
 
 [tree]
 max_depth = 30
@@ -140,6 +143,8 @@ max_depth = 30
 [clipboard]
 method = "system"      # "system" (PowerShell API) or "keyboard" (simulate Ctrl+C/V)
 ```
+
+> **Performance**: Vision model input is resized with BILINEAR (not LANCZOS) and encoded as JPEG by default — together this cuts each grounding call's image-prepare + upload cost substantially with no loss the model can perceive. Saved screenshots likewise default to BILINEAR; set `screenshot.resampling = "LANCZOS"` if you need maximum fidelity.
 
 ## Desktop Automation Tips
 

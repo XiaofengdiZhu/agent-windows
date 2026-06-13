@@ -228,6 +228,24 @@ def save_and_cleanup(image: Image.Image, output_path: str | None = None) -> Path
     return path
 
 
+def _get_resampling_filter() -> int:
+    """Resolve the PIL resampling filter for saved screenshots from config.
+
+    Controlled by [screenshot] resampling: defaults to BILINEAR (fast), since
+    downscaled screenshots don't benefit from LANCZOS's extra cost. (H-05)
+
+    Returns:
+        Image.LANCZOS, Image.BILINEAR, or Image.NEAREST.
+    """
+    config = load_config()
+    name = str(config.get("screenshot", {}).get("resampling", "BILINEAR")).upper()
+    if name == "LANCZOS":
+        return Image.LANCZOS
+    if name == "NEAREST":
+        return Image.NEAREST
+    return Image.BILINEAR
+
+
 def scale_screenshot(image: Image.Image, max_width: int = 0, max_height: int = 0, scale: float = 1.0) -> Image.Image:
     """Scale an image if needed, maintaining aspect ratio."""
     if scale == 1.0 and not max_width and not max_height:
@@ -239,7 +257,7 @@ def scale_screenshot(image: Image.Image, max_width: int = 0, max_height: int = 0
 
     if final_scale < 1.0:
         new_size = (int(image.width * final_scale), int(image.height * final_scale))
-        return image.resize(new_size, Image.LANCZOS)
+        return image.resize(new_size, _get_resampling_filter())
     return image
 
 
@@ -356,7 +374,7 @@ def diff_images(
 
     # Resize B to match A if needed
     if image_b.size != image_a.size:
-        image_b = image_b.resize(image_a.size, Image.LANCZOS)
+        image_b = image_b.resize(image_a.size, _get_resampling_filter())
 
     # Convert both to RGB
     a = image_a.convert("RGB")

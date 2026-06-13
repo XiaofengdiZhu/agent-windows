@@ -75,6 +75,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "crop_size": 400,
         "crop_height": 300,
         "max_drift": 40,
+        "image_format": "JPEG",  # Vision API image encoding: "JPEG" or "PNG"
+        "jpeg_quality": 85,  # JPEG quality (1-95) for vision API, ignored when PNG
     },
     "screenshot": {
         "backend": "auto",
@@ -83,6 +85,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "max_height": 1080,
         "format": "png",
         "jpeg_quality": 85,
+        "resampling": "BILINEAR",  # Resampling filter for saved screenshots: "BILINEAR", "LANCZOS", "NEAREST"
         "max_screenshot_age_days": 7,
         "max_screenshot_dir_mb": 500,
         "cleanup_interval_minutes": 10,

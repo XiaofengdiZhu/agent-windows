@@ -45,6 +45,8 @@ Vision model settings for `ground`, `detect`, and `ask-vision`.
 | `crop_size` | int | `400` | Crop width for fine-pass in `ground` |
 | `crop_height` | int | `300` | Crop height for fine-pass in `ground` |
 | `max_drift` | int | `40` | Max pixel drift for accepting fine-pass result |
+| `image_format` | str | `"JPEG"` | Encoding format for images sent to the vision API: `JPEG` or `PNG`. JPEG is ~5-10x smaller with no loss the model perceives. |
+| `jpeg_quality` | int | `85` | JPEG quality (1-95) for vision API images. Ignored when `image_format = PNG`. |
 
 ### [screenshot]
 
@@ -58,6 +60,7 @@ Screenshot capture and storage settings.
 | `max_height` | int | `1080` | Maximum screenshot height |
 | `format` | str | `"png"` | Image format: `png` or `jpeg` |
 | `jpeg_quality` | int | `85` | JPEG quality (1-100, ignored for PNG) |
+| `resampling` | str | `"BILINEAR"` | Downscale filter for saved screenshots: `BILINEAR` (fast, default), `LANCZOS` (highest quality), or `NEAREST` |
 | `max_screenshot_age_days` | int | `7` | Auto-delete screenshots older than this |
 | `max_screenshot_dir_mb` | int | `500` | Auto-cleanup when screenshot dir exceeds this size |
 | `cleanup_interval_minutes` | int | `10` | How often to run auto-cleanup check |

@@ -2,6 +2,7 @@
 
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from PIL import Image
@@ -69,13 +70,28 @@ class TestHighlightRegion:
     def test_auto_generate_path(self):
         """When output_path is None, auto-generates path in screenshot dir."""
         img = _solid_image(100, 100)
-        from unittest.mock import patch
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch("agent_windows.core.screenshot.get_screenshot_save_dir", return_value=Path(tmpdir)), \
                  patch("agent_windows.core.screenshot.cleanup_screenshots"):
                 path = highlight_region(img, [{"x1": 0, "y1": 0, "x2": 50, "y2": 50}])
                 assert path.exists()
                 assert path.name.startswith("highlight-")
+
+
+class TestResamplingFilter:
+    """H-05: saved screenshots use a config-driven resampling filter (default BILINEAR)."""
+
+    def _filter(self, resampling):
+        from agent_windows.core.screenshot import _get_resampling_filter
+        cfg = {"screenshot": {"resampling": resampling} if resampling is not None else {}}
+        with patch("agent_windows.core.screenshot.load_config", return_value=cfg):
+            return _get_resampling_filter()
+
+    def test_default_is_bilinear(self):
+        assert self._filter(None) == Image.BILINEAR
+
+    def test_lanczos(self):
+        assert self._filter("LANCZOS") == Image.LANCZOS
 
 
 class TestDiffImages:

@@ -40,8 +40,10 @@ def prepare_model_input(
     pad_y = (model_height - new_h) // 2
 
     # Create padded image
+    # BILINEAR is sufficient for vision-model input and ~5-10x faster than LANCZOS;
+    # the model's effective resolution is far below LANCZOS fidelity. (H-05)
     result = Image.new("RGB", (model_width, model_height), (0, 0, 0))
-    resized = image.resize((new_w, new_h), Image.LANCZOS)
+    resized = image.resize((new_w, new_h), Image.BILINEAR)
     result.paste(resized, (pad_x, pad_y))
 
     return result, scale, scale, pad_x, pad_y

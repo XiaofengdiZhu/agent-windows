@@ -17,13 +17,17 @@ _client_cache: dict[str, Any] = {}
 _client_lock = threading.Lock()
 
 
-def encode_image(image: Image.Image, format: str = "PNG", max_size: int = 0) -> str:
+def encode_image(image: Image.Image, format: str = "JPEG", max_size: int = 0, quality: int = 85) -> str:
     """Encode a PIL Image to base64 string.
+
+    Defaults to JPEG — a 1000x1000 frame is ~5-10x smaller than PNG while being
+    visually indistinguishable to a vision model, cutting upload time and cost. (H-08)
 
     Args:
         image: PIL Image to encode.
-        format: Image format (PNG or JPEG).
+        format: Image format ("JPEG" or "PNG"). Defaults to "JPEG".
         max_size: Optional max dimension for resizing before encoding.
+        quality: JPEG quality (1-95). Ignored for PNG.
 
     Returns:
         Base64-encoded string of the image.
@@ -31,11 +35,38 @@ def encode_image(image: Image.Image, format: str = "PNG", max_size: int = 0) -> 
     if max_size > 0 and (image.width > max_size or image.height > max_size):
         scale = min(max_size / image.width, max_size / image.height)
         new_size = (int(image.width * scale), int(image.height * scale))
-        image = image.resize(new_size, Image.LANCZOS)
+        # BILINEAR is plenty for model input and much faster than LANCZOS. (H-05)
+        image = image.resize(new_size, Image.BILINEAR)
+
+    fmt = format.upper()
+    if fmt == "JPG":
+        fmt = "JPEG"
+
+    # JPEG cannot encode alpha or palette modes — flatten to RGB first
+    if fmt == "JPEG" and image.mode not in ("RGB", "L"):
+        image = image.convert("RGB")
 
     buf = io.BytesIO()
-    image.save(buf, format=format, optimize=True)
+    if fmt == "JPEG":
+        image.save(buf, format="JPEG", quality=quality, optimize=True)
+    else:
+        image.save(buf, format="PNG", optimize=True)
     return base64.b64encode(buf.getvalue()).decode("utf-8")
+
+
+def _resolve_image_format(config: dict[str, Any]) -> tuple[str, int]:
+    """Resolve the vision API image format and JPEG quality from grounding config.
+
+    Returns:
+        (format, quality) where format is "JPEG" or "PNG".
+    """
+    image_format = str(config.get("image_format", "JPEG")).upper()
+    if image_format == "JPG":
+        image_format = "JPEG"
+    if image_format not in ("JPEG", "PNG"):
+        image_format = "JPEG"
+    quality = int(config.get("jpeg_quality", 85))
+    return image_format, quality
 
 
 def call_vision_model(
@@ -86,7 +117,8 @@ def _call_openai_compatible(image: Image.Image, prompt: str, config: dict, max_t
             )
         client = _client_cache[cache_key]
 
-    b64 = encode_image(image)
+    image_format, jpeg_quality = _resolve_image_format(config)
+    b64 = encode_image(image, format=image_format, quality=jpeg_quality)
     model = config.get("model", "gpt-4o-mini")
 
     response = client.chat.completions.create(
@@ -99,7 +131,7 @@ def _call_openai_compatible(image: Image.Image, prompt: str, config: dict, max_t
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": f"data:image/png;base64,{b64}",
+                            "url": f"data:image/{image_format.lower()};base64,{b64}",
                         },
                     },
                 ],
@@ -122,7 +154,8 @@ def _call_anthropic(image: Image.Image, prompt: str, config: dict, max_tokens: i
             _client_cache[cache_key] = anthropic.Anthropic(api_key=api_key, timeout=float(config.get("timeout", 30)))
         client = _client_cache[cache_key]
 
-    b64 = encode_image(image)
+    image_format, jpeg_quality = _resolve_image_format(config)
+    b64 = encode_image(image, format=image_format, quality=jpeg_quality)
     model = config.get("model", "claude-sonnet-4-6-20250514")
 
     response = client.messages.create(
@@ -137,7 +170,7 @@ def _call_anthropic(image: Image.Image, prompt: str, config: dict, max_tokens: i
                         "type": "image",
                         "source": {
                             "type": "base64",
-                            "media_type": "image/png",
+                            "media_type": f"image/{image_format.lower()}",
                             "data": b64,
                         },
                     },
