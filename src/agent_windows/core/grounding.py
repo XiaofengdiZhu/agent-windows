@@ -46,12 +46,17 @@ def _load_image_for_vision(image_path: str) -> Image.Image:
 def ground_element(
     description: str,
     screenshot: Image.Image | None = None,
+    single_pass: bool | None = None,
 ) -> dict[str, Any]:
     """Locate an element by visual description using two-pass grounding.
 
     Args:
         description: Natural language description of the target element.
         screenshot: Optional PIL Image. If None, captures fresh screenshot.
+        single_pass: Skip the fine-pass API call — one network round-trip instead
+            of two (~2x faster, ~half the cost) at the cost of click precision.
+            When ``None`` (default), reads ``grounding.single_pass`` from config;
+            an explicit ``True``/``False`` overrides the config for this call. (H-07)
 
     Returns:
         Dict with: coordinate (x,y), confidence, method, screenshot_path.
@@ -73,6 +78,16 @@ def ground_element(
     crop_w = ground_config.get("crop_size", 400)
     crop_h = ground_config.get("crop_height", 300)
     max_drift = ground_config.get("max_drift", 40)
+
+    # H-07: single_pass skips the fine API call. Default from config; a per-call
+    # value (CLI --single-pass / RPC param) wins. String values are coerced so a
+    # flag passed as text can't trip the bool("false") == True footgun.
+    if single_pass is None:
+        single_pass = bool(ground_config.get("single_pass", False))
+    elif isinstance(single_pass, str):
+        single_pass = single_pass.strip().lower() in ("1", "true", "yes", "on")
+    else:
+        single_pass = bool(single_pass)
 
     # Load prompts
     prompts = ground_config.get("prompts", {})
@@ -98,48 +113,57 @@ def ground_element(
     px, py = model_to_physical(mx1, my1, model_w, model_h, src_width, src_height)
     logger.info("Coarse coordinate: model(%d,%d) → physical(%d,%d)", mx1, my1, px, py)
 
-    # ── Pass 2: Fine locate ────────────────────────────────────
-    logger.info("Grounding pass 2: fine locate")
-
-    cropped, crop_x, crop_y = crop_around_point(screenshot, px, py, crop_w, crop_h)
-    fine_model_img, *_ = prepare_model_input(cropped, model_w, model_h)
-
-    fine_prompt_text = fine_prompt.format(
-        description=description,
-        x=px, y=py,
-        cx=crop_x, cy=crop_y,
-    )
-
-    response2 = call_vision_model(fine_model_img, fine_prompt_text, ground_config)
-    logger.debug("Fine response: %s", response2)
-
-    coords2 = parse_model_coordinates(response2)
-    if coords2 is None:
-        logger.warning("Failed to parse fine coordinates, using coarse result")
+    if single_pass:
+        # Single-pass (H-07): skip the fine API call entirely — one network
+        # round-trip instead of two. ~2x faster and ~half the cost, at the cost
+        # of click precision (no sub-element refinement).
+        logger.info("Single-pass mode: using coarse coordinate (fine pass skipped)")
         final_x, final_y = px, py
-        confidence = "low"
-        method = "visual-coarse-only"
+        confidence = "medium"
+        method = "visual-single-pass"
     else:
-        mx2, my2 = coords2
-        # Convert fine model coords to physical (relative to crop region)
-        crop_src_w, crop_src_h = cropped.size
-        fine_x, fine_y = model_to_physical(mx2, my2, model_w, model_h, crop_src_w, crop_src_h)
+        # ── Pass 2: Fine locate ────────────────────────────────────
+        logger.info("Grounding pass 2: fine locate")
 
-        # Offset by crop region position
-        fine_x += crop_x
-        fine_y += crop_y
+        cropped, crop_x, crop_y = crop_around_point(screenshot, px, py, crop_w, crop_h)
+        fine_model_img, *_ = prepare_model_input(cropped, model_w, model_h)
 
-        # Drift check
-        distance = ((fine_x - px) ** 2 + (fine_y - py) ** 2) ** 0.5
-        if distance > max_drift:
-            logger.warning("Drift too large (%.1f > %d), using coarse result", distance, max_drift)
+        fine_prompt_text = fine_prompt.format(
+            description=description,
+            x=px, y=py,
+            cx=crop_x, cy=crop_y,
+        )
+
+        response2 = call_vision_model(fine_model_img, fine_prompt_text, ground_config)
+        logger.debug("Fine response: %s", response2)
+
+        coords2 = parse_model_coordinates(response2)
+        if coords2 is None:
+            logger.warning("Failed to parse fine coordinates, using coarse result")
             final_x, final_y = px, py
-            confidence = "medium"
-            method = "visual-two-pass-drift"
+            confidence = "low"
+            method = "visual-coarse-only"
         else:
-            final_x, final_y = fine_x, fine_y
-            confidence = "high"
-            method = "visual-two-pass"
+            mx2, my2 = coords2
+            # Convert fine model coords to physical (relative to crop region)
+            crop_src_w, crop_src_h = cropped.size
+            fine_x, fine_y = model_to_physical(mx2, my2, model_w, model_h, crop_src_w, crop_src_h)
+
+            # Offset by crop region position
+            fine_x += crop_x
+            fine_y += crop_y
+
+            # Drift check
+            distance = ((fine_x - px) ** 2 + (fine_y - py) ** 2) ** 0.5
+            if distance > max_drift:
+                logger.warning("Drift too large (%.1f > %d), using coarse result", distance, max_drift)
+                final_x, final_y = px, py
+                confidence = "medium"
+                method = "visual-two-pass-drift"
+            else:
+                final_x, final_y = fine_x, fine_y
+                confidence = "high"
+                method = "visual-two-pass"
 
     logger.info("Final coordinate: (%d, %d) [%s, %s]", final_x, final_y, confidence, method)
 

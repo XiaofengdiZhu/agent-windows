@@ -53,9 +53,18 @@ def screenshot(
 def ground(
     ctx: typer.Context,
     description: str = typer.Argument(help="Element description to locate"),
+    single_pass: bool = typer.Option(
+        False,
+        "--single-pass",
+        help="Single-pass (coarse only): one API call, ~2x faster, lower precision. "
+             "Overrides config grounding.single_pass for this call.",
+    ),
 ) -> None:
     """Visual model grounding: locate element coordinates."""
-    result = dispatch("ground", {"description": description}, ctx)
+    params = {"description": description}
+    if single_pass:
+        params["single_pass"] = True
+    result = dispatch("ground", params, ctx)
     print_result(result, ctx)
 
 

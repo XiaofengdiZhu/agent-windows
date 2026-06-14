@@ -1,6 +1,9 @@
-"""Tests for coordinate conversion utilities."""
+"""Tests for grounding: coordinate conversion utilities and the two-pass /
+single-pass locate strategy (H-07)."""
 
 import pytest
+from pathlib import Path
+from unittest.mock import patch
 from PIL import Image
 
 from agent_windows.utils.coordinates import (
@@ -90,3 +93,55 @@ class TestParseModelCoordinates:
     def test_extra_numbers(self):
         # Structured pattern should match first
         assert parse_model_coordinates("width=50, point (320, 240)") == (320, 240)
+
+
+class TestSinglePassGrounding:
+    """H-07: single_pass mode does ONE vision API call (skips the fine pass)."""
+
+    def _patches(self, single_pass_config=False):
+        """Patch the network/disk calls and config so tests are hermetic."""
+        return (
+            patch(
+                "agent_windows.core.grounding.load_config",
+                return_value={"grounding": {"enabled": True, "single_pass": single_pass_config}},
+            ),
+            patch(
+                "agent_windows.core.grounding.call_vision_model",
+                return_value="(500, 500)",
+            ),
+            patch(
+                "agent_windows.core.grounding._save_marked_screenshot",
+                return_value=Path("/tmp/grounding-test.png"),
+            ),
+        )
+
+    def test_single_pass_param_makes_one_api_call(self):
+        """single_pass=True does only the coarse call — the H-07 latency win."""
+        from agent_windows.core.grounding import ground_element
+
+        cfg_patch, call_patch, save_patch = self._patches(single_pass_config=False)
+        with cfg_patch, call_patch as mock_call, save_patch:
+            result = ground_element("a button", screenshot=Image.new("RGB", (1920, 1080)), single_pass=True)
+        assert mock_call.call_count == 1, "single-pass must skip the fine API call"
+        assert result["method"] == "visual-single-pass"
+
+    def test_two_pass_default_makes_two_api_calls(self):
+        """No override + config single_pass=False keeps the original two-pass path
+        — the branch didn't regress the default behavior."""
+        from agent_windows.core.grounding import ground_element
+
+        cfg_patch, call_patch, save_patch = self._patches(single_pass_config=False)
+        with cfg_patch, call_patch as mock_call, save_patch:
+            ground_element("a button", screenshot=Image.new("RGB", (1920, 1080)))
+        assert mock_call.call_count == 2
+
+    def test_single_pass_defaults_from_config(self):
+        """single_pass=None reads grounding.single_pass from config (the
+        'configurable default' requirement)."""
+        from agent_windows.core.grounding import ground_element
+
+        cfg_patch, call_patch, save_patch = self._patches(single_pass_config=True)
+        with cfg_patch, call_patch as mock_call, save_patch:
+            result = ground_element("a button", screenshot=Image.new("RGB", (1920, 1080)))
+        assert mock_call.call_count == 1
+        assert result["method"] == "visual-single-pass"

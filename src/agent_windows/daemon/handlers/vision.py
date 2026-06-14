@@ -14,7 +14,7 @@ def _ground(params: dict) -> dict[str, Any]:
     if not description:
         raise ValueError("description is required")
 
-    result = ground_element(description)
+    result = ground_element(description, single_pass=params.get("single_pass"))
     return {
         "output": (
             f"## Grounding Result\n"

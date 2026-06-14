@@ -47,6 +47,7 @@ Vision model settings for `ground`, `detect`, and `ask-vision`.
 | `max_drift` | int | `40` | Max pixel drift for accepting fine-pass result |
 | `image_format` | str | `"JPEG"` | Encoding format for images sent to the vision API: `JPEG` or `PNG`. JPEG is ~5-10x smaller with no loss the model perceives. |
 | `jpeg_quality` | int | `85` | JPEG quality (1-95) for vision API images. Ignored when `image_format = PNG`. |
+| `single_pass` | bool | `false` | H-07: skip the fine-pass API call. One network round-trip instead of two (~2x faster, ~half the cost) at the cost of click precision — coarse coordinate only, no sub-element refinement. Override per call with `ground ... --single-pass`. Set globally with `config set grounding.single_pass true`. |
 
 ### [screenshot]
 
