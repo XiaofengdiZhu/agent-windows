@@ -44,9 +44,31 @@ def get_version_path() -> Path:
     return get_data_dir() / "daemon.version"
 
 
+_logs_dir_lock = threading.Lock()
+_logs_dir_secured = False
+
+
 def get_log_dir() -> Path:
+    global _logs_dir_secured
     d = get_data_dir() / "logs"
     d.mkdir(parents=True, exist_ok=True)
+    # M-01: lock logs/ to the owner with an inheritable DACL so every log file
+    # (daemon.log, shell_audit.log, rotated backups) is owner-only — full shell
+    # commands recorded there may carry secrets, and unlike config.toml there are
+    # many files, so one directory-level inheritable ACL covers them all. NTFS
+    # inheritance is applied at file creation, so the first call per process also
+    # re-secures any files already present: logs left from before this hardening
+    # were created under a broader inherited ACL and don't retroactively inherit
+    # the directory's new DACL, so they're locked down file-by-file. A daemon
+    # restart repeats this (covers upgrades). Guarded so concurrent first-callers
+    # run the securing once, not each.
+    with _logs_dir_lock:
+        if not _logs_dir_secured:
+            _secure_directory(d)
+            for entry in d.iterdir():
+                if entry.is_file():
+                    _apply_owner_only_acl(entry, inheritable=False)
+            _logs_dir_secured = True
     return d
 
 
@@ -318,14 +340,18 @@ def _decrypt_secret(value: str) -> str:
         return ""
 
 
-def _secure_config_file(path: Path) -> None:
-    """Restrict a file to its owner via an owner-only DACL.
+def _apply_owner_only_acl(path: Path, inheritable: bool = False) -> None:
+    """Set a protected owner-only DACL on a file or directory.
 
-    Replaces the POSIX ``chmod(0o600)``, which is a no-op on Windows. This is
-    defense-in-depth: the api_key is already DPAPI-encrypted at rest, so a
-    best-effort ACL with a warning is acceptable here (unlike the named pipe in
-    M-02, which had no other protection and must fail closed). If the ACL
-    cannot be applied, the encrypted blob still protects the secret.
+    The single ACE grants the current user full access; the DACL is protected
+    from parent-dir inheritance (SE_DACL_PROTECTED) so no inherited group ACE can
+    broaden access. When ``inheritable``, the ACE also carries OBJECT_INHERIT |
+    CONTAINER_INHERIT so files and subdirs created inside a directory inherit
+    owner-only access — used for ``logs/`` so daemon.log, shell_audit.log, and
+    rotated backups are all owner-only from one directory-level ACL (no per-file
+    calls). Best-effort: a failure is warned, not raised (the named pipe in M-02
+    is the only path that fails closed; files/dirs rely on DPAPI or their
+    contents being least-sensitive). (M-01)
     """
     import ntsecuritycon
     import win32api
@@ -333,14 +359,22 @@ def _secure_config_file(path: Path) -> None:
 
     try:
         user_sid = win32security.LookupAccountName(None, win32api.GetUserName())[0]
+        inheritance_flags = (
+            ntsecuritycon.OBJECT_INHERIT_ACE | ntsecuritycon.CONTAINER_INHERIT_ACE
+            if inheritable
+            else 0
+        )
         dacl = win32security.ACL()
-        dacl.AddAccessAllowedAce(
-            win32security.ACL_REVISION, ntsecuritycon.FILE_ALL_ACCESS, user_sid
+        dacl.AddAccessAllowedAceEx(
+            win32security.ACL_REVISION,
+            inheritance_flags,
+            ntsecuritycon.FILE_ALL_ACCESS,
+            user_sid,
         )
         sd = win32security.SECURITY_DESCRIPTOR()
         sd.SetSecurityDescriptorDacl(1, dacl, 0)
-        # Protect the DACL from parent-dir inheritance so the file is exactly
-        # owner-only — no inherited group ACEs could broaden access to the key.
+        # Protect the DACL from parent-dir inheritance so the target is exactly
+        # owner-only — no inherited group ACEs could broaden access.
         sd.SetSecurityDescriptorControl(
             win32security.SE_DACL_PROTECTED, win32security.SE_DACL_PROTECTED
         )
@@ -349,6 +383,27 @@ def _secure_config_file(path: Path) -> None:
         )
     except Exception:
         logger.warning("Failed to set owner-only ACL on %s", path, exc_info=True)
+
+
+def _secure_config_file(path: Path) -> None:
+    """Restrict a config file to its owner (non-inheritable owner-only DACL).
+
+    Replaces the POSIX ``chmod(0o600)`` no-op. Defense-in-depth: the api_key is
+    already DPAPI-encrypted at rest, so best-effort is acceptable. (M-01)
+    """
+    _apply_owner_only_acl(path, inheritable=False)
+
+
+def _secure_directory(path: Path) -> None:
+    """Restrict a directory to its owner with an inheritable owner-only DACL.
+
+    New files and subdirs created inside inherit owner-only access, so the whole
+    directory stays owner-only from a single ACL — used for ``logs/`` (M-01):
+    full shell commands recorded there may carry secrets, and unlike
+    ``config.toml`` there are many files (daemon.log, shell_audit.log, rotated
+    backups). ``get_log_dir`` calls this once per process.
+    """
+    _apply_owner_only_acl(path, inheritable=True)
 
 
 def _deep_merge(base: dict, override: dict) -> dict:

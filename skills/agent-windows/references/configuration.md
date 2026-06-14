@@ -101,7 +101,7 @@ Wait command polling settings.
 |-----|------|---------|-------------|
 | `blacklist` | str \| list[str] | `[]` | Case-insensitive regex pattern(s). A `shell` command matching any pattern is rejected with `PERMISSION_DENIED` (-1004) before execution. Empty disables filtering. A single string or a list of strings. Best-effort (PowerShell aliases/encodings can bypass) — pair with the audit log for a complete record. |
 
-Every `shell` execution attempt — allowed **or** blocked — is also recorded with the **full, untruncated** command in `~/.agent-windows/logs/shell_audit.log`, regardless of the blacklist setting. This is the forensic record (the daemon's own log truncates commands at 500 chars).
+Every `shell` execution attempt — allowed **or** blocked — is also recorded with the **full, untruncated** command in `~/.agent-windows/logs/shell_audit.log`, regardless of the blacklist setting. This is the forensic record (the daemon's own log truncates commands at 500 chars). The `logs/` directory is owner-only via an inheritable ACL (M-01), so these full-command records (which may contain secrets passed inline) are not readable by other users on a shared host.
 
 Setting the blacklist:
 
@@ -194,7 +194,7 @@ Contents:
 | `daemon.version` | Daemon version for mismatch detection |
 | `screenshots/` | Captured screenshots |
 | `prompts/` | Custom grounding prompt files |
-| `logs/` | Daemon log files (`daemon.log`) and the full-command `shell_audit.log` (M-05) |
+| `logs/` | Daemon log files (`daemon.log`) and the full-command `shell_audit.log` (M-05). Owner-only via an inheritable DACL (M-01): the directory and every file in it are readable only by the current user, so recorded commands (which may carry secrets) aren't exposed to other accounts on a shared host. |
 
 ## Screenshot Storage
 

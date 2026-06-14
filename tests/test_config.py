@@ -172,3 +172,103 @@ class TestSecretProtection:
         cfg._config_cache = None
         cfg.save_config({"grounding": {"api_key": 123}})  # must not raise
         assert cfg_path.exists()
+
+
+class TestSecureDirectory:
+    """M-01: lock logs/ with an inheritable owner-only DACL. The audit log
+    records full commands that may carry secrets; unlike config.toml there are
+    many files, so a single directory-level inheritable ACL secures them all."""
+
+    def test_directory_gets_protected_owner_only_dacl(self, tmp_path):
+        import win32api
+        import win32security
+        from agent_windows.utils.config import _secure_directory
+
+        _secure_directory(tmp_path)
+        sd = win32security.GetFileSecurity(
+            str(tmp_path), win32security.DACL_SECURITY_INFORMATION
+        )
+        dacl = sd.GetSecurityDescriptorDacl()
+        assert dacl is not None and dacl.GetAceCount() == 1, (
+            "logs dir must grant exactly the owner — no group ACEs leak history"
+        )
+        ctrl = sd.GetSecurityDescriptorControl()[0]
+        assert ctrl & win32security.SE_DACL_PROTECTED, (
+            "DACL must be protected from parent-dir inheritance"
+        )
+        ace_user = win32security.LookupAccountSid(None, dacl.GetAce(0)[2])[0]
+        assert ace_user.lower() == win32api.GetUserName().lower()
+
+    def test_files_in_dir_inherit_owner_only(self, tmp_path):
+        """The inheritable ACE is the whole point: a log file created in the
+        secured dir (daemon.log, shell_audit.log, a rotated .1 backup) is
+        owner-only with no per-file ACL call."""
+        import win32api
+        import win32security
+        from agent_windows.utils.config import _secure_directory
+
+        _secure_directory(tmp_path)
+        (tmp_path / "shell_audit.log").write_text("entry\n", encoding="utf-8")
+        sd = win32security.GetFileSecurity(
+            str(tmp_path / "shell_audit.log"),
+            win32security.DACL_SECURITY_INFORMATION,
+        )
+        dacl = sd.GetSecurityDescriptorDacl()
+        assert dacl is not None and dacl.GetAceCount() == 1, (
+            "log file must inherit exactly the owner ACE"
+        )
+        ace_user = win32security.LookupAccountSid(None, dacl.GetAce(0)[2])[0]
+        assert ace_user.lower() == win32api.GetUserName().lower()
+
+    def test_get_log_dir_secures_once_per_process(self, tmp_path, monkeypatch):
+        """get_log_dir secures logs/ on first call and skips thereafter (the flag
+        avoids a SetFileSecurity per shell command). The dir is owner-only
+        regardless of whether it pre-existed — covering upgrades."""
+        import win32security
+        import agent_windows.utils.config as cfg
+
+        monkeypatch.setattr(cfg, "get_data_dir", lambda: tmp_path)
+        cfg._logs_dir_secured = False  # reset per-process flag
+
+        log_dir = cfg.get_log_dir()
+        assert log_dir == tmp_path / "logs"
+
+        sd = win32security.GetFileSecurity(
+            str(log_dir), win32security.DACL_SECURITY_INFORMATION
+        )
+        assert sd.GetSecurityDescriptorControl()[0] & win32security.SE_DACL_PROTECTED
+        assert sd.GetSecurityDescriptorDacl().GetAceCount() == 1
+        assert cfg._logs_dir_secured is True  # set so later calls skip the win32 call
+
+    def test_pre_existing_files_re_secured_on_first_call(self, tmp_path, monkeypatch):
+        """NTFS inheritance applies at creation time, so a log file that predates
+        the hardening (created under a broader inherited ACL) does NOT
+        retroactively inherit the directory's new owner-only DACL. get_log_dir's
+        first call walks the dir and locks existing files down explicitly — this
+        is the upgrade path, the scenario the fix must actually cover. Where the
+        test temp dir already grants broader ACEs this is observable; on any
+        system the post-condition is owner-only."""
+        import win32api
+        import win32security
+        import agent_windows.utils.config as cfg
+
+        logs = tmp_path / "logs"
+        logs.mkdir()
+        pre_existing = logs / "daemon.log"  # predates the securing call
+        pre_existing.write_text("old entry\n", encoding="utf-8")
+
+        monkeypatch.setattr(cfg, "get_data_dir", lambda: tmp_path)
+        cfg._logs_dir_secured = False
+
+        cfg.get_log_dir()  # first call — must walk and lock the pre-existing file
+
+        sd = win32security.GetFileSecurity(
+            str(pre_existing), win32security.DACL_SECURITY_INFORMATION
+        )
+        dacl = sd.GetSecurityDescriptorDacl()
+        assert dacl is not None and dacl.GetAceCount() == 1, (
+            "pre-existing log must be re-secured to owner-only, not left at its "
+            "old broader inherited ACL"
+        )
+        ace_user = win32security.LookupAccountSid(None, dacl.GetAce(0)[2])[0]
+        assert ace_user.lower() == win32api.GetUserName().lower()
