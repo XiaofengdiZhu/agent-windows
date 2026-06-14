@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from agent_windows.utils.win32 import get_process_name
+from agent_windows.uia.enums import PropertyId
 
 logger = logging.getLogger(__name__)
 
@@ -314,10 +315,17 @@ def _traverse_window(
     """Traverse UIA tree for a single window."""
     start = time.time()
 
+    # M-25: fetch the per-node properties through a UIA CacheRequest so each
+    # element arrives WITH its properties already cached (one cross-process
+    # round-trip at retrieval) instead of six separate live CurrentX round-trips
+    # per node. Built per window — CreateCacheRequest + AddProperty is negligible
+    # next to the traversal itself.
+    cache_request = _build_traversal_cache(client)
+
     try:
-        root = client.IUIAutomation.ElementFromHandle(window.handle)
+        root = client.IUIAutomation.ElementFromHandleBuildCache(window.handle, cache_request)
     except Exception as e:
-        logger.debug("ElementFromHandle failed for %s: %s", window.title, e)
+        logger.debug("ElementFromHandleBuildCache failed for %s: %s", window.title, e)
         return
 
     if root is None:
@@ -326,8 +334,28 @@ def _traverse_window(
     _traverse_node(
         client, root, tree_lines, interactive,
         window, max_depth, include_invisible, include_offscreen,
-        indent, 0, start, timeout, max_elements, global_deadline,
+        indent, 0, start, timeout, max_elements, global_deadline, cache_request,
     )
+
+
+def _build_traversal_cache(client):
+    """Build a UIA CacheRequest for the properties read per node. (M-25)
+
+    Elements fetched through this request (``ElementFromHandleBuildCache`` and
+    the tree walker's ``*BuildCache`` overloads) arrive with these properties
+    already cached, so reading them via ``GetCachedPropertyValue`` is a local
+    lookup rather than a live cross-process COM round-trip.
+    ``AutomationElementMode`` is left at its default (Full) so cached elements
+    stay navigable for the recursive walk.
+    """
+    cache = client.IUIAutomation.CreateCacheRequest()
+    cache.AddProperty(PropertyId.NameProperty)
+    cache.AddProperty(PropertyId.ControlTypeProperty)
+    cache.AddProperty(PropertyId.IsEnabledProperty)
+    cache.AddProperty(PropertyId.IsOffscreenProperty)
+    cache.AddProperty(PropertyId.BoundingRectangleProperty)
+    cache.AddProperty(PropertyId.HasKeyboardFocusProperty)
+    return cache
 
 
 def _traverse_node(
@@ -345,6 +373,7 @@ def _traverse_node(
     timeout: float,
     max_elements: int,
     global_deadline: float,
+    cache_request,
 ) -> None:
     """Recursively traverse a UIA node."""
     if depth >= max_depth:
@@ -357,45 +386,55 @@ def _traverse_node(
         return
 
     try:
-        # Get basic properties
+        # Read the per-node properties from the element's cache (M-25) — each is
+        # a local lookup, not a live cross-process COM round-trip. Per-property
+        # try/except mirrors the old CurrentX code so a stale/missing cached
+        # value degrades to the same default rather than aborting the node.
         name = ""
         try:
-            name = node.CurrentName or ""
+            name = node.GetCachedPropertyValue(PropertyId.NameProperty) or ""
         except Exception:
-            logger.debug("Failed to get node property", exc_info=True)
+            logger.debug("Failed to get cached node property", exc_info=True)
 
         control_type = ""
         try:
-            ct = node.CurrentControlType
-            # Convert control type int to name
-            control_type = _control_type_name(ct)
+            ct = node.GetCachedPropertyValue(PropertyId.ControlTypeProperty)
+            control_type = _control_type_name(ct) if ct is not None else ""
         except Exception:
-            logger.debug("Failed to get node property", exc_info=True)
+            logger.debug("Failed to get cached node property", exc_info=True)
 
         is_enabled = True
         try:
-            is_enabled = node.CurrentIsEnabled
+            val = node.GetCachedPropertyValue(PropertyId.IsEnabledProperty)
+            is_enabled = bool(val) if val is not None else True
         except Exception:
-            logger.debug("Failed to get node property", exc_info=True)
+            logger.debug("Failed to get cached node property", exc_info=True)
 
         is_offscreen = False
         try:
-            is_offscreen = node.CurrentIsOffscreen
+            val = node.GetCachedPropertyValue(PropertyId.IsOffscreenProperty)
+            is_offscreen = bool(val) if val is not None else False
         except Exception:
-            logger.debug("Failed to get node property", exc_info=True)
+            logger.debug("Failed to get cached node property", exc_info=True)
 
-        # Get bounding rectangle
+        # Get bounding rectangle. GetCachedPropertyValue unwraps the cached
+        # BoundingRectangle VARIANT into a (left, top, WIDTH, HEIGHT) tuple of
+        # floats — NOT the edge-based RECT the typed CurrentBoundingRectangle
+        # accessor returns (whose .right/.bottom are screen-coordinate edges).
+        # Convert width/height back to edges so BoundingBox matches the old
+        # representation: right = left + width, bottom = top + height.
         bbox = None
         try:
-            rect = node.CurrentBoundingRectangle
+            rect = node.GetCachedPropertyValue(PropertyId.BoundingRectangleProperty)
+            left, top = int(rect[0]), int(rect[1])
             bbox = BoundingBox(
-                left=int(rect.left),
-                top=int(rect.top),
-                right=int(rect.right),
-                bottom=int(rect.bottom),
+                left=left,
+                top=top,
+                right=left + int(rect[2]),
+                bottom=top + int(rect[3]),
             )
         except Exception:
-            logger.debug("Failed to get node property", exc_info=True)
+            logger.debug("Failed to get cached node property", exc_info=True)
 
         # Filter
         if bbox and bbox.area == 0 and not include_invisible:
@@ -409,9 +448,9 @@ def _traverse_node(
         # Get focus state
         is_focused = False
         try:
-            is_focused = node.CurrentHasKeyboardFocus
+            is_focused = bool(node.GetCachedPropertyValue(PropertyId.HasKeyboardFocusProperty))
         except Exception:
-            logger.debug("Failed to get node property", exc_info=True)
+            logger.debug("Failed to get cached node property", exc_info=True)
 
         # Build tree line
         prefix = " " * indent + "├─ " if depth > 0 else " " * indent
@@ -443,18 +482,19 @@ def _traverse_node(
                     is_offscreen=is_offscreen,
                 ))
 
-        # Recurse into children
+        # Recurse into children — each child is fetched through the cache request
+        # so it arrives with its properties already cached (M-25).
         try:
             walker = client.ViewWalker
-            child = walker.GetFirstChildElement(node)
+            child = walker.GetFirstChildElementBuildCache(node, cache_request)
             while child:
                 _traverse_node(
                     client, child, tree_lines, interactive,
                     window, max_depth, include_invisible, include_offscreen,
                     indent, depth + 1, start_time, timeout,
-                    max_elements, global_deadline,
+                    max_elements, global_deadline, cache_request,
                 )
-                child = walker.GetNextSiblingElement(child)
+                child = walker.GetNextSiblingElementBuildCache(child, cache_request)
         except Exception as e:
             logger.debug("Error iterating children at depth %d: %s", depth, e)
 
