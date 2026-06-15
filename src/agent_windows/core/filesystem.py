@@ -49,6 +49,77 @@ def _validate_path(path: str) -> Path:
     return p
 
 
+def validate_read_path(path: str) -> Path:
+    """Validate a user-supplied read path (e.g. an image passed to a handler).
+
+    Public entry point applying the same blacklist as ``read_file``/``list_dir``,
+    so handlers that open arbitrary paths (screenshot ``highlight``/``diff``)
+    cannot read past the blacklist. (L-05)
+    """
+    return _validate_path(path)
+
+
+def _protected_write_roots() -> tuple[Path, ...]:
+    """Directories ``write_file`` must never touch (M-04).
+
+    - The agent's own package directory and (when it is a real directory) its
+      parent (source tree under ``src/`` or the installed ``site-packages/``):
+      overwriting the agent's source could neuter this very validator on the
+      next import.
+    - The data directory ``~/.agent-windows`` (mirrors
+      :func:`config.get_data_dir`'s location, computed directly to avoid a
+      core→utils import edge and the dir-creation side effect): holds
+      ``config.toml``, ``daemon.pid``, ``daemon.version``, and ``logs/``.
+
+    Screenshots and prompts are written by their own handlers, not this generic
+    writer, so blocking the data dir breaks no legitimate ``write_file`` call.
+    """
+    import agent_windows
+
+    install = Path(agent_windows.__file__).resolve().parent
+    data_dir = (Path.home() / ".agent-windows").resolve()
+    roots: list[Path] = [install, data_dir]
+    # Also block the install root's parent, but only when it is a real directory
+    # — never a bare drive root. A package laid out at e.g. C:\agent_windows
+    # would otherwise make install.parent == C:\ and forbid every write on that
+    # drive. (M-04-O1)
+    parent = install.parent
+    if len(parent.parts) > 1:
+        roots.append(parent)
+    return tuple(roots)
+
+
+def _validate_write_path(path: str) -> Path:
+    """Validate a write target (M-04).
+
+    Applies the base blacklist (:func:`_validate_path`) and additionally refuses
+    to write inside the agent's install tree or data directory: a
+    prompt-injected ``write_file`` must not be able to clobber the agent's own
+    source, config, daemon pid/version, or logs.
+    """
+    p = _validate_path(path)
+    resolved = p.resolve()
+    for root in _protected_write_roots():
+        try:
+            resolved.relative_to(root)
+        except ValueError:
+            continue
+        raise ValueError(
+            "Access denied: refusing to write inside the agent's install tree "
+            "or data directory (source/config protection, M-04)"
+        )
+    return p
+
+
+def validate_write_path(path: str) -> Path:
+    """Public write-path validator for handlers that write user-supplied output
+    paths (e.g. screenshot capture/highlight/diff). Mirrors ``write_file``'s
+    protection so a user-directed ``--output`` can't land inside the agent's
+    install tree or data directory. (M-04, L-05-W1)
+    """
+    return _validate_write_path(path)
+
+
 def read_file(path: str) -> dict[str, Any]:
     """Read a file and return its contents."""
     p = _validate_path(path)
@@ -73,7 +144,7 @@ def read_file(path: str) -> dict[str, Any]:
 
 def write_file(path: str, content: str) -> dict[str, Any]:
     """Write content to a file."""
-    p = _validate_path(path)
+    p = _validate_write_path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(content, encoding="utf-8")
     return {"output": f"## File Write\nPath: {p}\nSize: {len(content)} bytes"}
