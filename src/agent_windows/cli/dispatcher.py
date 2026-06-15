@@ -65,7 +65,7 @@ def dispatch(
         finally:
             pythoncom.CoUninitialize()
 
-    return call_daemon(method, params, no_daemon=no_daemon, debug=debug)
+    return call_daemon(method, params, debug=debug)
 
 
 def print_result(result: dict[str, Any], ctx: typer.Context | None = None) -> None:

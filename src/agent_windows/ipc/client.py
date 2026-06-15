@@ -45,7 +45,6 @@ def unwrap_response(response: JSONRPCResponse) -> dict:
 def call_daemon(
     method: str,
     params: dict | None = None,
-    no_daemon: bool = False,
     debug: bool = False,
 ) -> dict:
     """Send a JSON-RPC command to the daemon and return the result.
@@ -53,7 +52,6 @@ def call_daemon(
     Args:
         method: JSON-RPC method name (e.g. "ping", "screenshot").
         params: Optional parameters dict.
-        no_daemon: If True, raise (direct execution not yet supported at this layer).
         debug: Enable debug logging.
 
     Returns:
@@ -62,6 +60,11 @@ def call_daemon(
     Raises:
         ConnectionError: If daemon is unreachable.
         RuntimeError: If daemon returns an error.
+
+    Note:
+        This is the daemon-backed path only. The ``--no-daemon`` direct-execution
+        path is handled entirely in :func:`agent_windows.cli.dispatcher.dispatch`
+        (which never reaches this function when ``no_daemon`` is set).
     """
     request = JSONRPCRequest(id=1, method=method, params=params)
     message = request.to_json()
