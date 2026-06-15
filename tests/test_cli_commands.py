@@ -1,0 +1,507 @@
+"""Tests for the Typer CLI command modules: argument parsing, param assembly,
+and the inline logic in batch / wait / config / daemon commands.
+
+Uses typer.testing.CliRunner to invoke the real registered app, with `_cmd`
+(the dispatch sink) and `dispatch`/`print_result` patched so no daemon/IPC
+happens. test_dispatcher.py already covers dispatch()/print_result() directly;
+test_shell.py covers the core shell_runner. This file covers the CLI layer.
+"""
+
+import json
+from unittest.mock import patch, MagicMock
+
+import pytest
+from typer.testing import CliRunner
+
+from agent_windows.cli.main import app
+
+runner = CliRunner()
+
+
+def _cmd_calls(mock_cmd):
+    """Extract (method, params) from each _cmd call as a list of tuples."""
+    out = []
+    for c in mock_cmd.call_args_list:
+        args = c.args
+        # _cmd(ctx, method, **params) → args[0]=ctx, args[1]=method
+        method = args[1] if len(args) > 1 else None
+        params = dict(c.kwargs)
+        out.append((method, params))
+    return out
+
+
+# ── input command param parsing ──────────────────────────────────────
+
+
+class TestInputCommands:
+    @patch("agent_windows.cli.commands.input._cmd")
+    def test_click_forwards_coords_and_flags(self, mock_cmd):
+        result = runner.invoke(app, ["click", "100", "200", "--right", "--double"])
+        assert result.exit_code == 0
+        method, params = _cmd_calls(mock_cmd)[0]
+        assert method == "click"
+        assert params == {"x": 100, "y": 200, "right": True, "double": True}
+
+    @patch("agent_windows.cli.commands.input._cmd")
+    def test_click_defaults(self, mock_cmd):
+        runner.invoke(app, ["click", "1", "2"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params == {"x": 1, "y": 2, "right": False, "double": False}
+
+    @patch("agent_windows.cli.commands.input._cmd")
+    def test_type_with_at_option_parses_coords(self, mock_cmd):
+        """--at '10,20' → at_x/at_y ints."""
+        runner.invoke(app, ["type", "hello", "--at", "10,20"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params["at_x"] == 10
+        assert params["at_y"] == 20
+        assert params["text"] == "hello"
+
+    @patch("agent_windows.cli.commands.input._cmd")
+    def test_type_without_at_omits_coords(self, mock_cmd):
+        runner.invoke(app, ["type", "hi", "--enter", "--clear"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert "at_x" not in params
+        assert params == {"text": "hi", "enter": True, "clear": True}
+
+    @patch("agent_windows.cli.commands.input._cmd")
+    def test_type_at_ignored_when_not_two_parts(self, mock_cmd):
+        """A malformed --at (not exactly 'x,y') is silently ignored."""
+        runner.invoke(app, ["type", "hi", "--at", "onlyone"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert "at_x" not in params
+
+    @patch("agent_windows.cli.commands.input._cmd")
+    def test_mouse_down_button_option(self, mock_cmd):
+        runner.invoke(app, ["mouse-down", "5", "6", "--button", "middle"])
+        method, params = _cmd_calls(mock_cmd)[0]
+        assert method == "mouse_down"
+        assert params == {"x": 5, "y": 6, "button": "middle"}
+
+    @patch("agent_windows.cli.commands.input._cmd")
+    def test_scroll_direction_and_amount(self, mock_cmd):
+        runner.invoke(app, ["scroll", "1", "2", "--direction", "up", "--amount", "7"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params == {"x": 1, "y": 2, "direction": "up", "amount": 7}
+
+    @patch("agent_windows.cli.commands.input._cmd")
+    def test_drag_four_coords(self, mock_cmd):
+        runner.invoke(app, ["drag", "1", "2", "3", "4", "--right"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params == {"x1": 1, "y1": 2, "x2": 3, "y2": 4, "right": True}
+
+    @patch("agent_windows.cli.commands.input._cmd")
+    def test_shortcut_keys(self, mock_cmd):
+        runner.invoke(app, ["shortcut", "ctrl+c"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params == {"keys": "ctrl+c"}
+
+
+# ── observe/screenshot param assembly ────────────────────────────────
+
+
+class TestObserveCommands:
+    @patch("agent_windows.cli.commands.observe._cmd")
+    def test_observe_defaults_to_snapshot_and_screenshot(self, mock_cmd):
+        """No flags → snapshot=True, screenshot=True (the default branch)."""
+        runner.invoke(app, ["observe"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params == {"snapshot": True, "screenshot": True, "ground": ""}
+
+    @patch("agent_windows.cli.commands.observe._cmd")
+    def test_observe_explicit_flags(self, mock_cmd):
+        runner.invoke(app, ["observe", "--snapshot", "--ground", "the button"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params["snapshot"] is True
+        assert params["screenshot"] is False
+        assert params["ground"] == "the button"
+
+    @patch("agent_windows.cli.commands.observe._cmd")
+    def test_screenshot_bbox_parsed_to_ints(self, mock_cmd):
+        runner.invoke(app, ["screenshot", "--bbox", "10,20,30,40"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params["bbox"] == [10, 20, 30, 40]
+
+    @patch("agent_windows.cli.commands.observe._cmd")
+    def test_screenshot_selector_included_when_given(self, mock_cmd):
+        runner.invoke(app, ["screenshot", "--selector", "@e3"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params["selector"] == "@e3"
+
+    @patch("agent_windows.cli.commands.observe._cmd")
+    def test_screenshot_defaults_no_selector_no_bbox(self, mock_cmd):
+        runner.invoke(app, ["screenshot"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert "selector" not in params
+        assert "bbox" not in params
+        assert params == {"output": "", "monitor": -1}
+
+    @patch("agent_windows.cli.commands.observe._cmd")
+    def test_highlight_only_includes_non_default_options(self, mock_cmd):
+        """color defaults to 'red' and is omitted unless overridden; others added."""
+        runner.invoke(app, ["highlight", "0", "0", "10", "10", "--label", "L", "--color", "blue"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params == {"x1": 0, "y1": 0, "x2": 10, "y2": 10, "label": "L", "color": "blue"}
+
+    @patch("agent_windows.cli.commands.observe._cmd")
+    def test_highlight_default_color_omitted(self, mock_cmd):
+        runner.invoke(app, ["highlight", "0", "0", "1", "1"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert "color" not in params  # default 'red' not forwarded
+
+    @patch("agent_windows.cli.commands.observe._cmd")
+    def test_diff_baseline_and_threshold(self, mock_cmd):
+        runner.invoke(app, ["diff", "/a.png", "--compare", "/b.png", "--threshold", "50"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params == {"baseline": "/a.png", "threshold": 50, "compare": "/b.png"}
+
+    @patch("agent_windows.cli.commands.observe._cmd")
+    def test_is_visible_routes_to_element_state(self, mock_cmd):
+        runner.invoke(app, ["is", "visible", "@e3"])
+        method, params = _cmd_calls(mock_cmd)[0]
+        assert method == "element_state"
+        assert params == {"selector": "@e3", "check": "visible"}
+
+    @patch("agent_windows.cli.commands.observe._cmd")
+    def test_is_enabled_routes_to_element_state(self, mock_cmd):
+        runner.invoke(app, ["is", "enabled", "@e5"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params == {"selector": "@e5", "check": "enabled"}
+
+
+# ── system commands (app/fs/clipboard/process) ───────────────────────
+
+
+class TestSystemCommands:
+    @patch("agent_windows.cli.commands.system._cmd")
+    def test_app_launch_passes_args(self, mock_cmd):
+        runner.invoke(app, ["app", "launch", "notepad", "file.txt"])
+        method, params = _cmd_calls(mock_cmd)[0]
+        assert method == "app_launch"
+        assert params == {"name_or_path": "notepad", "args": ["file.txt"]}
+
+    @patch("agent_windows.cli.commands.system._cmd")
+    def test_app_launch_no_args_defaults_empty_list(self, mock_cmd):
+        runner.invoke(app, ["app", "launch", "notepad"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params["args"] == []
+
+    @patch("agent_windows.cli.commands.system._cmd")
+    def test_app_resize_required_width_height(self, mock_cmd):
+        runner.invoke(app, ["app", "resize", "win", "--width", "800", "--height", "600"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params == {"name_or_title": "win", "width": 800, "height": 600, "x": -1, "y": -1}
+
+    @patch("agent_windows.cli.commands.system._cmd")
+    def test_app_resize_missing_width_errors(self, mock_cmd):
+        """--width/--height are required options."""
+        result = runner.invoke(app, ["app", "resize", "win", "--height", "600"])
+        assert result.exit_code != 0
+        mock_cmd.assert_not_called()
+
+    @patch("agent_windows.cli.commands.system._cmd")
+    def test_fs_read_write_list(self, mock_cmd):
+        runner.invoke(app, ["fs", "read", "/p"])
+        runner.invoke(app, ["fs", "write", "/p", "content"])
+        runner.invoke(app, ["fs", "list", "/d"])
+        calls = _cmd_calls(mock_cmd)
+        assert calls[0] == ("fs_read", {"path": "/p"})
+        assert calls[1] == ("fs_write", {"path": "/p", "content": "content"})
+        assert calls[2] == ("fs_list", {"path": "/d"})
+
+    @patch("agent_windows.cli.commands.system._cmd")
+    def test_clipboard_get_keyboard_flag_only_when_set(self, mock_cmd):
+        """keyboard=None (option omitted) → not forwarded; --keyboard → True."""
+        runner.invoke(app, ["clipboard", "get"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params == {}
+        runner.invoke(app, ["clipboard", "get", "--keyboard"])
+        _, params = _cmd_calls(mock_cmd)[1]
+        assert params == {"keyboard": True}
+
+    @patch("agent_windows.cli.commands.system._cmd")
+    def test_clipboard_set(self, mock_cmd):
+        runner.invoke(app, ["clipboard", "set", "hello", "-k"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params == {"text": "hello", "keyboard": True}
+
+    @patch("agent_windows.cli.commands.system._cmd")
+    def test_process_kill(self, mock_cmd):
+        runner.invoke(app, ["process", "kill", "notepad"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params == {"pid_or_name": "notepad"}
+
+
+# ── batch command: JSON source resolution + error paths ─────────────
+
+
+class TestBatchCommand:
+    @patch("agent_windows.cli.commands.system._cmd")
+    def test_batch_from_argument(self, mock_cmd):
+        cmds = [{"method": "click", "params": {"x": 1, "y": 2}}]
+        result = runner.invoke(app, ["batch", json.dumps(cmds)])
+        assert result.exit_code == 0
+        method, params = _cmd_calls(mock_cmd)[0]
+        assert method == "batch"
+        assert params["commands"] == cmds
+        assert params["stop_on_error"] is True
+        assert params["delay"] == 0.0
+
+    @patch("agent_windows.cli.commands.system._cmd")
+    def test_batch_from_file(self, mock_cmd, tmp_path):
+        cmds = [{"method": "screenshot"}]
+        f = tmp_path / "cmds.json"
+        f.write_text(json.dumps(cmds), encoding="utf-8")
+        result = runner.invoke(app, ["batch", "--file", str(f), "--delay", "0.5", "--continue-on-error"])
+        assert result.exit_code == 0
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params["commands"] == cmds
+        assert params["delay"] == 0.5
+        assert params["stop_on_error"] is False
+
+    @patch("agent_windows.cli.commands.system._cmd")
+    def test_batch_from_stdin(self, mock_cmd):
+        cmds = [{"method": "ping"}]
+        result = runner.invoke(app, ["batch", "-"], input=json.dumps(cmds))
+        assert result.exit_code == 0
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params["commands"] == cmds
+
+    def test_batch_no_source_errors(self):
+        """No argument, no --file, no stdin → Exit(1) with a clear message."""
+        result = runner.invoke(app, ["batch"])
+        assert result.exit_code == 1
+        assert "provide commands" in result.output
+
+    def test_batch_invalid_json_errors(self):
+        result = runner.invoke(app, ["batch", "not json"])
+        assert result.exit_code == 1
+        assert "invalid JSON" in result.output
+
+    def test_batch_non_array_errors(self):
+        """A valid JSON object (not an array) is rejected."""
+        result = runner.invoke(app, ["batch", json.dumps({"method": "click"})])
+        assert result.exit_code == 1
+        assert "non-empty JSON array" in result.output
+
+    def test_batch_empty_array_errors(self):
+        result = runner.invoke(app, ["batch", "[]"])
+        assert result.exit_code == 1
+        assert "non-empty JSON array" in result.output
+
+    @patch("agent_windows.cli.commands.system._cmd")
+    def test_batch_file_takes_precedence_over_argument(self, mock_cmd, tmp_path):
+        """--file wins over a positional argument."""
+        f = tmp_path / "f.json"
+        f.write_text(json.dumps([{"method": "from_file"}]), encoding="utf-8")
+        runner.invoke(app, ["batch", json.dumps([{"method": "from_arg"}]), "--file", str(f)])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params["commands"] == [{"method": "from_file"}]
+
+
+# ── wait command: mode resolution + error paths ──────────────────────
+
+
+class TestWaitCommand:
+    @patch("agent_windows.cli.commands.wait.time")
+    @patch("agent_windows.cli.commands.wait.print_result")
+    def test_plain_seconds_does_local_sleep(self, mock_print, mock_time):
+        """A numeric target → local time.sleep, no daemon round-trip, then print."""
+        result = runner.invoke(app, ["wait", "3"])
+        assert result.exit_code == 0
+        mock_time.sleep.assert_called_once_with(3.0)
+        mock_print.assert_called_once()
+        out = mock_print.call_args.args[0]["output"]
+        assert "Slept 3" in out
+
+    @patch("agent_windows.cli.commands.wait.time")
+    @patch("agent_windows.cli.commands.wait.print_result")
+    def test_plain_seconds_zero_or_negative_errors(self, mock_print, mock_time):
+        result = runner.invoke(app, ["wait", "0"])
+        assert result.exit_code == 1
+        assert "positive number" in result.output
+        mock_time.sleep.assert_not_called()
+        mock_print.assert_not_called()
+
+    @patch("agent_windows.cli.commands.wait.time")
+    @patch("agent_windows.cli.commands.wait.print_result")
+    def test_invalid_target_errors(self, mock_print, mock_time):
+        """Neither @e, a number, nor --text → clear error."""
+        result = runner.invoke(app, ["wait", "notanumber"])
+        assert result.exit_code == 1
+        assert "invalid target" in result.output
+
+    @patch("agent_windows.cli.commands.wait.time")
+    @patch("agent_windows.cli.commands.wait.print_result")
+    def test_text_and_target_mutually_exclusive(self, mock_print, mock_time):
+        result = runner.invoke(app, ["wait", "@e3", "--text", "done"])
+        assert result.exit_code == 1
+        assert "cannot specify both" in result.output
+
+    @patch("agent_windows.cli.commands.wait.dispatch", return_value={"found": True, "element": "Btn"})
+    @patch("agent_windows.cli.commands.wait.time")
+    @patch("agent_windows.cli.commands.wait.print_result")
+    def test_selector_mode_polls_until_found(self, mock_print, mock_time, mock_dispatch):
+        """@e selector → one wait_check dispatch with {selector:...}, then print."""
+        # time.time must return real floats so the f-string formatting works.
+        mock_time.time.return_value = 1.0
+        result = runner.invoke(app, ["wait", "@e3"])
+        assert result.exit_code == 0
+        mock_dispatch.assert_called_once()
+        sent_params = mock_dispatch.call_args.args[1]
+        assert sent_params == {"selector": "@e3"}
+        out = mock_print.call_args.args[0]
+        assert "@e3" in out["output"]
+        assert out["selector"] == "@e3"
+
+    @patch("agent_windows.cli.commands.wait.dispatch", return_value={"found": False})
+    @patch("agent_windows.cli.commands.wait.time")
+    @patch("agent_windows.cli.commands.wait.print_result")
+    def test_selector_timeout_errors(self, mock_print, mock_time, mock_dispatch):
+        """Element never appears within --timeout → Exit(1) with message."""
+        # time.time() progression: start, then each loop iteration past timeout.
+        t = {"v": 0.0}
+        mock_time.time.side_effect = [0.0, 100.0]  # start=0, then 100 (>timeout)
+        result = runner.invoke(app, ["wait", "@e3", "--timeout", "5"])
+        assert result.exit_code == 1
+        assert "not found within 5" in result.output
+        # the probe was actually dispatched (not just short-circuited to error)
+        mock_dispatch.assert_called()
+
+    @patch("agent_windows.utils.config.load_config",
+           return_value={"wait": {"poll_interval": 0.25}})
+    @patch("agent_windows.cli.commands.wait.dispatch",
+           side_effect=[{"found": False}, {"found": True, "element": "X"}])
+    @patch("agent_windows.cli.commands.wait.time")
+    @patch("agent_windows.cli.commands.wait.print_result")
+    def test_poll_interval_defaults_from_config(self, mock_print, mock_time, mock_dispatch, mock_cfg):
+        """When --interval is 0, poll_interval comes from config['wait']['poll_interval']
+        and that value is what the loop sleeps with between probes."""
+        # Two probes: start, then within-timeout for the 2nd.
+        mock_time.time.side_effect = [0.0, 0.0, 0.0, 0.0]
+        result = runner.invoke(app, ["wait", "@e3", "--timeout", "5"])
+        assert result.exit_code == 0
+        assert mock_dispatch.call_count == 2
+        # the config poll_interval (0.25) reached time.sleep between the two probes
+        assert any(c.args == (0.25,) for c in mock_time.sleep.call_args_list)
+
+    @patch("agent_windows.cli.commands.wait.dispatch", return_value={"found": True, "matched_element": "X"})
+    @patch("agent_windows.cli.commands.wait.time")
+    @patch("agent_windows.cli.commands.wait.print_result")
+    def test_text_mode(self, mock_print, mock_time, mock_dispatch):
+        mock_time.time.return_value = 1.0
+        result = runner.invoke(app, ["wait", "--text", "done", "--timeout", "5"])
+        assert result.exit_code == 0
+        assert mock_dispatch.call_args.args[1] == {"text": "done"}
+
+
+# ── config command: API-key masking ──────────────────────────────────
+
+
+class TestConfigCommand:
+    def test_show_masks_long_api_key(self):
+        with patch("agent_windows.cli.commands.config_cmd.load_config",
+                   return_value={"grounding": {"api_key": "sk-1234567890abcdef"}}):
+            result = runner.invoke(app, ["config", "show"])
+        assert result.exit_code == 0
+        # first 4 + "..." + last 4 (tail slice computation is part of the contract)
+        assert "sk-1" in result.output
+        assert "cdef" in result.output
+        assert "1234567890abcdef" not in result.output  # full key not leaked
+
+    def test_show_masks_short_api_key(self):
+        with patch("agent_windows.cli.commands.config_cmd.load_config",
+                   return_value={"grounding": {"api_key": "short"}}):
+            result = runner.invoke(app, ["config", "show"])
+        assert result.exit_code == 0
+        assert "***" in result.output
+        assert "short" not in result.output
+
+    def test_show_no_api_key_no_mask(self):
+        with patch("agent_windows.cli.commands.config_cmd.load_config",
+                   return_value={"grounding": {"model": "x"}}):
+            result = runner.invoke(app, ["config", "show"])
+        assert result.exit_code == 0
+
+    @patch("agent_windows.cli.commands.config_cmd.set_config_value")
+    def test_set_calls_set_config_value(self, mock_set):
+        result = runner.invoke(app, ["config", "set", "grounding.model", "gpt-4o"])
+        assert result.exit_code == 0
+        mock_set.assert_called_once_with("grounding.model", "gpt-4o")
+        assert "grounding.model = gpt-4o" in result.output
+
+
+# ── daemon command: start/stop/status branches ───────────────────────
+
+
+class TestDaemonCommand:
+    # daemon_cmd lazy-imports subprocess / call_daemon / pipe_exists inside the
+    # command functions, so patch at their source modules.
+    @patch("subprocess.Popen")
+    @patch("agent_windows.cli.commands.daemon_cmd.is_process_alive", return_value=True)
+    @patch("agent_windows.cli.commands.daemon_cmd.read_pid_file", return_value=(1234, 0.0))
+    def test_start_already_running(self, mock_pid, mock_alive, mock_popen):
+        result = runner.invoke(app, ["daemon", "start"])
+        assert result.exit_code == 0
+        assert "already running" in result.output
+        assert "1234" in result.output
+        mock_popen.assert_not_called()
+
+    @patch("subprocess.Popen")
+    @patch("agent_windows.cli.commands.daemon_cmd.is_process_alive", return_value=False)
+    @patch("agent_windows.cli.commands.daemon_cmd.read_pid_file", return_value=None)
+    def test_start_spawns_when_not_running(self, mock_pid, mock_alive, mock_popen):
+        mock_popen.return_value = MagicMock(pid=5678)
+        result = runner.invoke(app, ["daemon", "start"])
+        assert result.exit_code == 0
+        assert "5678" in result.output
+        mock_popen.assert_called_once()
+
+    @patch("agent_windows.ipc.pipe.pipe_exists", return_value=False)
+    def test_stop_when_not_running(self, mock_pipe):
+        result = runner.invoke(app, ["daemon", "stop"])
+        assert result.exit_code == 0
+        assert "not running" in result.output
+
+    @patch("agent_windows.ipc.client.call_daemon")
+    @patch("agent_windows.ipc.pipe.pipe_exists", return_value=True)
+    def test_stop_sends_shutdown(self, mock_pipe, mock_call):
+        result = runner.invoke(app, ["daemon", "stop"])
+        assert result.exit_code == 0
+        mock_call.assert_called_once_with("shutdown")
+        assert "shutdown requested" in result.output
+
+    @patch("agent_windows.ipc.pipe.pipe_exists", return_value=True)
+    @patch("agent_windows.cli.commands.daemon_cmd.is_process_alive", return_value=True)
+    @patch("agent_windows.cli.commands.daemon_cmd.read_pid_file", return_value=(1234, 0.0))
+    @patch("agent_windows.cli.commands.daemon_cmd.read_version_file",
+           return_value="0.1.0")  # matches agent_windows.__version__
+    def test_status_running_matching_version(self, mock_ver, mock_pid, mock_alive, mock_pipe):
+        result = runner.invoke(app, ["daemon", "status"])
+        assert result.exit_code == 0
+        assert result.exception is None
+        assert "Status: running" in result.output
+        # the recorded version matches the tool version → no mismatch warning
+        assert "Version mismatch" not in result.output
+
+    @patch("agent_windows.ipc.pipe.pipe_exists", return_value=True)
+    @patch("agent_windows.cli.commands.daemon_cmd.is_process_alive", return_value=True)
+    @patch("agent_windows.cli.commands.daemon_cmd.read_pid_file", return_value=(1234, 0.0))
+    @patch("agent_windows.cli.commands.daemon_cmd.read_version_file", return_value="9.9.9")
+    def test_status_version_mismatch_warns(self, mock_ver, mock_pid, mock_alive, mock_pipe):
+        """A recorded daemon version that differs from the tool version surfaces
+        the auto-restart mismatch warning."""
+        result = runner.invoke(app, ["daemon", "status"])
+        assert result.exit_code == 0
+        assert "Version mismatch" in result.output
+        assert "auto-restart" in result.output
+
+    @patch("agent_windows.ipc.pipe.pipe_exists", return_value=False)
+    @patch("agent_windows.cli.commands.daemon_cmd.is_process_alive", return_value=False)
+    @patch("agent_windows.cli.commands.daemon_cmd.read_pid_file", return_value=None)
+    @patch("agent_windows.cli.commands.daemon_cmd.read_version_file", return_value=None)
+    def test_status_stopped(self, mock_ver, mock_pid, mock_alive, mock_pipe):
+        result = runner.invoke(app, ["daemon", "status"])
+        assert result.exit_code == 0
+        assert result.exception is None
+        assert "Status: stopped" in result.output
