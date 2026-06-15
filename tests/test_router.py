@@ -87,7 +87,7 @@ class TestRequire:
                     "clipboard_get", "clipboard_set",
                     "process_list", "process_kill",
                     "app_launch", "app_switch", "app_list",
-                    "get_text", "element_state", "wait",
+                    "get_text", "element_state", "wait", "wait_check",
                     "highlight", "diff", "cleanup_screenshots",
                     "move", "drag", "hover", "dblclick",
                     "mouse_down", "mouse_up", "app_resize"}

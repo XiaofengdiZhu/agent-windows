@@ -2,6 +2,7 @@
 
 import pytest
 import time
+import typer
 from unittest.mock import patch, MagicMock
 
 from agent_windows.core.tree import ElementInfo, BoundingBox
@@ -144,3 +145,167 @@ def test_wait_custom_interval(mock_config, make_element):
     assert "appeared" in result["output"]
     # sleep should NOT have been called (element found immediately)
     mock_time.sleep.assert_not_called()
+
+
+# ── wait_check: single non-blocking probe (M-28) ──────────────────────
+
+
+@patch("agent_windows.utils.config.load_config")
+def test_wait_check_element_found(mock_config, make_element):
+    """wait_check for an existing element returns found=True, no sleep."""
+    from agent_windows.daemon.router import HANDLERS
+
+    mock_config.return_value = {"tree": {}}
+    handler = HANDLERS["wait_check"]
+
+    with patch("agent_windows.core.tree.resolve_element") as mock_resolve, \
+         patch("agent_windows.daemon.handlers.tree.time") as mock_time:
+        mock_resolve.return_value = make_element(name="Submit")
+        result = handler({"selector": "@e3"})
+
+    assert result["found"] is True
+    assert result["element"] == "Submit"
+    mock_time.sleep.assert_not_called()
+
+
+@patch("agent_windows.utils.config.load_config")
+def test_wait_check_element_not_found(mock_config):
+    """wait_check for a missing element returns found=False (no exception)."""
+    from agent_windows.daemon.router import HANDLERS
+
+    mock_config.return_value = {"tree": {}}
+    handler = HANDLERS["wait_check"]
+
+    with patch("agent_windows.core.tree.resolve_element") as mock_resolve:
+        mock_resolve.side_effect = IndexError("not found")
+        result = handler({"selector": "@e99"})
+
+    assert result["found"] is False
+
+
+@patch("agent_windows.utils.config.load_config")
+def test_wait_check_text_found(mock_config, make_element):
+    """wait_check for present text returns found=True with the matched element."""
+    from agent_windows.daemon.router import HANDLERS
+
+    mock_config.return_value = {"tree": {}}
+    handler = HANDLERS["wait_check"]
+
+    with patch("agent_windows.core.tree.get_tree_snapshot") as mock_snap:
+        mock_snap.return_value = {"interactive_elements": [make_element(name="提交成功")]}
+        result = handler({"text": "成功"})
+
+    assert result["found"] is True
+    assert result["matched_element"] == "提交成功"
+
+
+def test_wait_check_no_args():
+    """wait_check with neither selector nor text raises ValueError."""
+    from agent_windows.daemon.router import HANDLERS
+
+    handler = HANDLERS["wait_check"]
+    with pytest.raises(ValueError, match="selector or text is required"):
+        handler({})
+
+
+# ── CLI wait: client-side polling (M-28) ──────────────────────────────
+
+
+def _ctx() -> MagicMock:
+    """A minimal typer.Context-like mock with text-format obj."""
+    ctx = MagicMock()
+    ctx.obj = {"format": "text"}
+    return ctx
+
+
+@patch("agent_windows.utils.config.load_config")
+def test_cli_wait_sleep_is_local(mock_config):
+    """CLI sleep mode never hits the daemon."""
+    from agent_windows.cli.commands.wait import wait
+
+    mock_config.return_value = {"wait": {"poll_interval": 0.5}}
+    ctx = _ctx()
+
+    with patch("agent_windows.cli.commands.wait.time") as mock_time, \
+         patch("agent_windows.cli.commands.wait.dispatch") as mock_dispatch, \
+         patch("agent_windows.cli.commands.wait.print_result") as mock_print:
+        wait(ctx, target="3", timeout=30, text="", interval=0)
+
+    mock_dispatch.assert_not_called()
+    mock_time.sleep.assert_called_once_with(3.0)
+    assert "Slept 3.0s" in mock_print.call_args[0][0]["output"]
+
+
+@patch("agent_windows.utils.config.load_config")
+def test_cli_wait_element_polls_then_found(mock_config):
+    """CLI polls wait_check and prints when the element appears."""
+    from agent_windows.cli.commands.wait import wait
+
+    mock_config.return_value = {"wait": {"poll_interval": 0.5}}
+    ctx = _ctx()
+
+    with patch("agent_windows.cli.commands.wait.time") as mock_time, \
+         patch("agent_windows.cli.commands.wait.dispatch") as mock_dispatch, \
+         patch("agent_windows.cli.commands.wait.print_result") as mock_print:
+        mock_dispatch.return_value = {"found": True, "element": "Submit"}
+        mock_time.time.side_effect = [0.0, 0.5]
+        wait(ctx, target="@e3", timeout=5, text="", interval=0)
+
+    mock_dispatch.assert_called_once_with("wait_check", {"selector": "@e3"}, ctx)
+    mock_time.sleep.assert_not_called()
+    out = mock_print.call_args[0][0]
+    assert "appeared" in out["output"]
+    assert out["element"] == "Submit"
+
+
+@patch("agent_windows.utils.config.load_config")
+def test_cli_wait_text_polls_then_found(mock_config):
+    """CLI text-mode polling exercises the matched_element payload branch."""
+    from agent_windows.cli.commands.wait import wait
+
+    mock_config.return_value = {"wait": {"poll_interval": 0.5}}
+    ctx = _ctx()
+
+    with patch("agent_windows.cli.commands.wait.time") as mock_time, \
+         patch("agent_windows.cli.commands.wait.dispatch") as mock_dispatch, \
+         patch("agent_windows.cli.commands.wait.print_result") as mock_print:
+        mock_dispatch.return_value = {"found": True, "matched_element": "提交成功"}
+        mock_time.time.side_effect = [0.0, 0.5]
+        wait(ctx, target="", timeout=5, text="成功", interval=0)
+
+    mock_dispatch.assert_called_once_with("wait_check", {"text": "成功"}, ctx)
+    out = mock_print.call_args[0][0]
+    assert "appeared" in out["output"]
+    assert out["text"] == "成功"
+    assert out["matched_element"] == "提交成功"
+
+
+@patch("agent_windows.utils.config.load_config")
+def test_cli_wait_element_timeout_exits(mock_config):
+    """CLI polls until local timeout, then exits cleanly (no daemon block)."""
+    from agent_windows.cli.commands.wait import wait
+
+    mock_config.return_value = {"wait": {"poll_interval": 0.01}}
+    ctx = _ctx()
+
+    with patch("agent_windows.cli.commands.wait.time") as mock_time, \
+         patch("agent_windows.cli.commands.wait.dispatch") as mock_dispatch:
+        mock_dispatch.return_value = {"found": False}
+        mock_time.time.side_effect = [0.0, 0.0, 100.0]
+        with pytest.raises(typer.Exit):
+            wait(ctx, target="@e99", timeout=0.1, text="", interval=0)
+
+    assert mock_dispatch.call_count == 2
+
+
+def test_cli_wait_target_and_text_conflict():
+    """Specifying both a target and --text is rejected before any dispatch."""
+    from agent_windows.cli.commands.wait import wait
+
+    ctx = _ctx()
+
+    with patch("agent_windows.cli.commands.wait.dispatch") as mock_dispatch:
+        with pytest.raises(typer.Exit):
+            wait(ctx, target="@e3", timeout=30, text="foo", interval=0)
+
+    mock_dispatch.assert_not_called()

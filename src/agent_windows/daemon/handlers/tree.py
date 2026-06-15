@@ -72,6 +72,35 @@ def _element_state(params: dict) -> dict[str, Any]:
     }
 
 
+def _wait_check_once(selector: str, text: str, cfg: dict) -> tuple[bool, dict[str, Any]]:
+    """One non-blocking wait probe — does the element/text exist right now?
+
+    No sleep, no loop. Shared by the blocking ``wait`` handler (which loops it
+    server-side for ``batch``) and the non-blocking ``wait_check`` handler
+    (polled client-side by the CLI so the STA worker is never blocked for the
+    wait duration — M-28). Returns ``(found, payload)``.
+    """
+    from agent_windows.core.tree import resolve_element, get_tree_snapshot
+
+    if selector:
+        try:
+            el = resolve_element(selector)
+        except (ValueError, IndexError):
+            return False, {}
+        return True, {"element": el.name}
+
+    for el in get_tree_snapshot(
+        max_depth=cfg.get("max_depth", 15),
+        include_invisible=cfg.get("include_invisible", False),
+        include_offscreen=cfg.get("include_offscreen", False),
+        max_elements=cfg.get("max_elements", 200),
+        timeout=cfg.get("timeout", 10),
+    ).get("interactive_elements", []):
+        if text in (el.name or ""):
+            return True, {"matched_element": el.name}
+    return False, {}
+
+
 @handler("wait")
 def _wait(params: dict) -> dict[str, Any]:
     """Wait for a duration, element appearance, or text appearance.
@@ -80,9 +109,13 @@ def _wait(params: dict) -> dict[str, Any]:
         seconds > 0 and no selector/text → sleep
         selector → poll until resolve_element succeeds or timeout
         text → poll until an interactive element's name contains text
+
+    Note: this handler loops and sleeps ON the STA worker, blocking the daemon
+    for up to ``timeout``. It is retained for ``batch`` (whose single IPC
+    round-trip is inherently sequential); interactive CLI use polls
+    ``wait_check`` client-side instead (M-28).
     """
     from agent_windows.utils.config import load_config
-    from agent_windows.core.tree import resolve_element, get_tree_snapshot
 
     timeout = float(params.get("timeout", 30))
     selector = params.get("selector", "")
@@ -103,42 +136,46 @@ def _wait(params: dict) -> dict[str, Any]:
     start = time.time()
     cfg = load_config().get("tree", {})
 
-    # Mode 2: wait for element
-    if selector:
-        while True:
-            try:
-                el = resolve_element(selector)
-                elapsed = time.time() - start
+    # Mode 2/3: poll until found or timeout
+    while True:
+        found, payload = _wait_check_once(selector, text, cfg)
+        if found:
+            elapsed = time.time() - start
+            if selector:
                 return {
                     "output": f"## Wait\nElement {selector} appeared after {elapsed:.1f}s",
                     "selector": selector,
                     "elapsed": round(elapsed, 1),
-                    "element": el.name,
+                    **payload,
                 }
-            except (ValueError, IndexError):
-                pass
-            if time.time() - start >= timeout:
-                raise TimeoutError(f"Element {selector} not found within {timeout}s")
-            time.sleep(poll_interval)
-
-    # Mode 3: wait for text
-    while True:
-        data = get_tree_snapshot(
-            max_depth=cfg.get("max_depth", 15),
-            include_invisible=cfg.get("include_invisible", False),
-            include_offscreen=cfg.get("include_offscreen", False),
-            max_elements=cfg.get("max_elements", 200),
-            timeout=cfg.get("timeout", 10),
-        )
-        for el in data.get("interactive_elements", []):
-            if text in (el.name or ""):
-                elapsed = time.time() - start
-                return {
-                    "output": f"## Wait\nText '{text}' appeared after {elapsed:.1f}s",
-                    "text": text,
-                    "elapsed": round(elapsed, 1),
-                    "matched_element": el.name,
-                }
+            return {
+                "output": f"## Wait\nText '{text}' appeared after {elapsed:.1f}s",
+                "text": text,
+                "elapsed": round(elapsed, 1),
+                **payload,
+            }
         if time.time() - start >= timeout:
+            if selector:
+                raise TimeoutError(f"Element {selector} not found within {timeout}s")
             raise TimeoutError(f"Text '{text}' not found within {timeout}s")
         time.sleep(poll_interval)
+
+
+@handler("wait_check")
+def _wait_check(params: dict) -> dict[str, Any]:
+    """Single non-blocking wait probe: does the element/text exist right now?
+
+    Returns ``{"found": bool, ...}`` with no looping or sleeping. The CLI
+    ``wait`` command polls this client-side (sleeping between calls) so the
+    daemon's single STA worker is never tied up for the wait duration (M-28).
+    """
+    selector = params.get("selector", "")
+    text = params.get("text", "")
+    if not selector and not text:
+        raise ValueError("selector or text is required")
+
+    from agent_windows.utils.config import load_config
+
+    cfg = load_config().get("tree", {})
+    found, payload = _wait_check_once(selector, text, cfg)
+    return {"found": found, **payload}
