@@ -102,7 +102,7 @@ def call_vision_model(
         return _call_openai_compatible(image, prompt, config, max_tokens)
 
 
-def _call_openai_compatible(image: Image.Image, prompt: str, config: dict, max_tokens: int = 100) -> str:
+def _call_openai_compatible(image: Image.Image, prompt: str, config: dict[str, Any], max_tokens: int = 100) -> str:
     """Call an OpenAI-compatible vision API."""
     api_key = config.get("api_key", "") or _get_api_key_env()
     api_base = config.get("api_base", "https://api.openai.com/v1")
@@ -144,7 +144,7 @@ def _call_openai_compatible(image: Image.Image, prompt: str, config: dict, max_t
     return response.choices[0].message.content.strip()
 
 
-def _call_anthropic(image: Image.Image, prompt: str, config: dict, max_tokens: int = 100) -> str:
+def _call_anthropic(image: Image.Image, prompt: str, config: dict[str, Any], max_tokens: int = 100) -> str:
     """Call Anthropic Claude vision API."""
     api_key = config.get("api_key", "") or _get_api_key_env()
     cache_key = f"anthropic:{api_key}"
@@ -183,7 +183,7 @@ def _call_anthropic(image: Image.Image, prompt: str, config: dict, max_tokens: i
     return response.content[0].text.strip()
 
 
-def _call_gemini(image: Image.Image, prompt: str, config: dict, max_tokens: int = 100) -> str:
+def _call_gemini(image: Image.Image, prompt: str, config: dict[str, Any], max_tokens: int = 100) -> str:
     """Call Google Gemini vision API."""
     import google.generativeai as genai
 

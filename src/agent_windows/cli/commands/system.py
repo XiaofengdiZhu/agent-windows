@@ -16,7 +16,7 @@ app_cmd = typer.Typer(help="Application management")
 def app_launch(
     ctx: typer.Context,
     name_or_path: str = typer.Argument(help="App name or executable path"),
-    args: list[str] = typer.Argument(None, help="Application arguments"),
+    args: list[str] | None = typer.Argument(None, help="Application arguments"),
 ) -> None:
     """Launch an application."""
     _cmd(ctx, "app_launch", name_or_path=name_or_path, args=args or [])

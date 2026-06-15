@@ -80,11 +80,6 @@ def get_monitor_count() -> int:
     return ctypes.windll.user32.GetSystemMetrics(80)  # SM_CMONITORS
 
 
-def get_primary_monitor() -> int:
-    """Return 1-based index of primary monitor (always 1 for API consistency)."""
-    return 1
-
-
 # ── Backend capture functions ─────────────────────────────────────
 
 
@@ -173,8 +168,9 @@ def capture_screenshot(
         # Build bbox for a specific monitor
         bbox = _monitor_bbox(monitor)
 
+    global _last_successful_backend
+
     if backend_config == "auto":
-        global _last_successful_backend
         # Try last successful backend first
         if _last_successful_backend:
             for name, capture_fn in BACKEND_CHAIN:

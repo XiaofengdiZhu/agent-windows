@@ -31,10 +31,7 @@ def _observe(params: dict) -> dict[str, Any]:
     if ground_desc:
         if parts:
             parts.append("---\n")
-        if "ground" in HANDLERS:
-            ground_result = HANDLERS["ground"]({"description": ground_desc})
-            parts.append(ground_result.get("output", ""))
-        else:
-            parts.append("## Grounding\nNot yet implemented (Phase 4)")
+        ground_result = HANDLERS["ground"]({"description": ground_desc})
+        parts.append(ground_result.get("output", ""))
 
     return {"output": "\n".join(parts)}

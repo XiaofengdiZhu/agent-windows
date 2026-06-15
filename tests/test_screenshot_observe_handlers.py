@@ -327,19 +327,6 @@ class TestObserveHandler:
         assert "G" in r["output"]
         ground_mock.assert_called_once_with({"description": "the button"})
 
-    def test_ground_unregistered_falls_back(self):
-        """When 'ground' handler isn't registered, emit the not-implemented notice."""
-        # clear=True isolates the set; keep observe + snapshot + screenshot, and
-        # intentionally OMIT 'ground' so the fallback branch is taken.
-        from agent_windows.daemon.handlers import observe as observe_mod
-        with patch.dict(HANDLERS, {
-            "observe": observe_mod._observe,
-            "snapshot": MagicMock(return_value={"output": "S"}),
-            "screenshot": MagicMock(return_value={"output": "T"}),
-        }, clear=True):
-            r = HANDLERS["observe"]({"ground": "x"})
-        assert "Not yet implemented" in r["output"]
-
     def test_ground_only(self):
         with patch.dict(HANDLERS, {"ground": MagicMock(return_value={"output": "G"})}):
             r = HANDLERS["observe"]({"ground": "x"})

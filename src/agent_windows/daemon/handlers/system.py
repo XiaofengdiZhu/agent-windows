@@ -77,13 +77,17 @@ def _fs_list(params: dict) -> dict[str, Any]:
 # ── Clipboard ───────────────────────────────────────────────────────
 
 
+def _default_keyboard() -> bool:
+    """Default clipboard keyboard flag from config (true when method == 'keyboard')."""
+    from agent_windows.utils.config import load_config
+    return load_config().get("clipboard", {}).get("method", "system") == "keyboard"
+
+
 @handler("clipboard_get")
 def _clipboard_get(params: dict) -> dict[str, Any]:
     """Get clipboard content."""
     from agent_windows.core.clipboard import get_clipboard
-    from agent_windows.utils.config import load_config
-    cfg_method = load_config().get("clipboard", {}).get("method", "system")
-    keyboard = params.get("keyboard", cfg_method == "keyboard")
+    keyboard = params.get("keyboard", _default_keyboard())
     return get_clipboard(keyboard=keyboard)
 
 
@@ -91,9 +95,7 @@ def _clipboard_get(params: dict) -> dict[str, Any]:
 def _clipboard_set(params: dict) -> dict[str, Any]:
     """Set clipboard content."""
     from agent_windows.core.clipboard import set_clipboard
-    from agent_windows.utils.config import load_config
-    cfg_method = load_config().get("clipboard", {}).get("method", "system")
-    keyboard = params.get("keyboard", cfg_method == "keyboard")
+    keyboard = params.get("keyboard", _default_keyboard())
     return set_clipboard(require(params, "text", str), keyboard=keyboard)
 
 

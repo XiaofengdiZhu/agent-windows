@@ -19,7 +19,7 @@ from typing import Any
 from PIL import Image
 
 from agent_windows.utils.api import call_vision_model, encode_image
-from agent_windows.utils.config import load_config, get_screenshot_save_dir, get_api_key
+from agent_windows.utils.config import load_config, get_screenshot_save_dir
 from agent_windows.utils.coordinates import (
     prepare_model_input,
     model_to_physical,

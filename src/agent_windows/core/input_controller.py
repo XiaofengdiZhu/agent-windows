@@ -382,17 +382,21 @@ def type_text(text: str, interval: float = 0.02, wait_time: float = 0.3) -> None
     time.sleep(wait_time)
 
 
+def clear_field() -> None:
+    """Clear the focused text field via Ctrl+A then Delete."""
+    shortcut("ctrl+a")
+    time.sleep(0.05)
+    _send_vk_key(VK_DELETE)
+    time.sleep(0.05)
+
+
 def type_text_at(text: str, x: int, y: int, clear: bool = False,
                  enter: bool = False) -> None:
     """Click at position, optionally clear, then type text."""
     click(x, y)
 
     if clear:
-        # Select all (Ctrl+A) then delete
-        shortcut("ctrl+a")
-        time.sleep(0.05)
-        _send_vk_key(VK_DELETE)
-        time.sleep(0.05)
+        clear_field()
 
     type_text(text)
 

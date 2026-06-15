@@ -1,6 +1,5 @@
 """Input handlers: mouse and keyboard automation."""
 
-import time
 from typing import Any
 
 from agent_windows.daemon.router import handler, require
@@ -65,7 +64,7 @@ def _mouse_up(params: dict) -> dict[str, Any]:
 @handler("type")
 def _type(params: dict) -> dict[str, Any]:
     """Type text."""
-    from agent_windows.core.input_controller import type_text, type_text_at, shortcut, _send_vk_key
+    from agent_windows.core.input_controller import type_text, type_text_at, clear_field, _send_vk_key
 
     text = require(params, "text", str)
     at_x = params.get("at_x")
@@ -77,10 +76,7 @@ def _type(params: dict) -> dict[str, Any]:
         type_text_at(text, at_x, at_y, clear=clear, enter=enter)
     else:
         if clear:
-            shortcut("ctrl+a")
-            time.sleep(0.05)
-            _send_vk_key(0x2E)  # VK_DELETE
-            time.sleep(0.05)
+            clear_field()
         type_text(text)
         if enter:
             _send_vk_key(0x0D)  # VK_RETURN
