@@ -2,7 +2,7 @@
 
 import typer
 
-from agent_windows.cli.dispatcher import dispatch, print_result
+from agent_windows.cli.dispatcher import _cmd
 
 app = typer.Typer(help="Observation commands")
 
@@ -19,16 +19,13 @@ def observe(
     if not snapshot and not screenshot and not ground:
         snapshot = True
         screenshot = True
-    params = {"snapshot": snapshot, "screenshot": screenshot, "ground": ground}
-    result = dispatch("observe", params, ctx)
-    print_result(result, ctx)
+    _cmd(ctx, "observe", snapshot=snapshot, screenshot=screenshot, ground=ground)
 
 
 @app.command()
 def snapshot(ctx: typer.Context) -> None:
     """UIA accessibility tree traversal, returns semantic text."""
-    result = dispatch("snapshot", {}, ctx)
-    print_result(result, ctx)
+    _cmd(ctx, "snapshot")
 
 
 @app.command()
@@ -45,8 +42,7 @@ def screenshot(
         params["selector"] = selector
     if bbox:
         params["bbox"] = [int(v) for v in bbox.split(",")]
-    result = dispatch("screenshot", params, ctx)
-    print_result(result, ctx)
+    _cmd(ctx, "screenshot", **params)
 
 
 @app.command()
@@ -64,8 +60,7 @@ def ground(
     params = {"description": description}
     if single_pass:
         params["single_pass"] = True
-    result = dispatch("ground", params, ctx)
-    print_result(result, ctx)
+    _cmd(ctx, "ground", **params)
 
 
 @app.command(name="ask-vision")
@@ -84,8 +79,7 @@ def ask_vision(
         params["model"] = model
     if output:
         params["output"] = output
-    result = dispatch("ask-vision", params, ctx)
-    print_result(result, ctx)
+    _cmd(ctx, "ask-vision", **params)
 
 
 @app.command()
@@ -105,15 +99,13 @@ def detect(
         params["model"] = model
     if output:
         params["output"] = output
-    result = dispatch("detect", params, ctx)
-    print_result(result, ctx)
+    _cmd(ctx, "detect", **params)
 
 
 @app.command()
 def cleanup(ctx: typer.Context) -> None:
     """Clean up old/oversized screenshots based on age and size limits."""
-    result = dispatch("cleanup_screenshots", {}, ctx)
-    print_result(result, ctx)
+    _cmd(ctx, "cleanup_screenshots")
 
 
 @app.command()
@@ -138,8 +130,7 @@ def highlight(
         params["image"] = image
     if output:
         params["output"] = output
-    result = dispatch("highlight", params, ctx)
-    print_result(result, ctx)
+    _cmd(ctx, "highlight", **params)
 
 
 @app.command(name="diff")
@@ -156,8 +147,7 @@ def diff_screenshot(
         params["compare"] = compare
     if output:
         params["output"] = output
-    result = dispatch("diff", params, ctx)
-    print_result(result, ctx)
+    _cmd(ctx, "diff", **params)
 
 
 @app.command(name="get-text")
@@ -166,8 +156,7 @@ def get_text(
     selector: str = typer.Argument(help="UIA element ref (e.g. @e3)"),
 ) -> None:
     """Get text content of a UIA element."""
-    result = dispatch("get_text", {"selector": selector}, ctx)
-    print_result(result, ctx)
+    _cmd(ctx, "get_text", selector=selector)
 
 
 # ── is sub-command group ────────────────────────────────────────────
@@ -181,8 +170,7 @@ def is_visible(
     selector: str = typer.Argument(help="UIA element ref (e.g. @e3)"),
 ) -> None:
     """Check if a UIA element is visible (not offscreen)."""
-    result = dispatch("element_state", {"selector": selector, "check": "visible"}, ctx)
-    print_result(result, ctx)
+    _cmd(ctx, "element_state", selector=selector, check="visible")
 
 
 @is_cmd.command("enabled")
@@ -191,5 +179,4 @@ def is_enabled(
     selector: str = typer.Argument(help="UIA element ref (e.g. @e3)"),
 ) -> None:
     """Check if a UIA element is enabled."""
-    result = dispatch("element_state", {"selector": selector, "check": "enabled"}, ctx)
-    print_result(result, ctx)
+    _cmd(ctx, "element_state", selector=selector, check="enabled")

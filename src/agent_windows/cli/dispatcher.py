@@ -101,3 +101,17 @@ def print_result(result: dict[str, Any], ctx: typer.Context | None = None) -> No
     except Exception:
         # Fallback: let typer handle it (may fail on non-UTF-8 characters)
         typer.echo(text)
+
+
+def _cmd(ctx: typer.Context, method: str, **params: Any) -> None:
+    """Dispatch ``method`` to the daemon and print the result.
+
+    The shared two-line tail every dispatch-backed CLI command repeats (H-11):
+    package params, call the daemon, print. ``**params`` accepts inline kwargs
+    (``_cmd(ctx, "click", x=x, y=y)``) or a pre-built dict
+    (``_cmd(ctx, "type", **params)``), so commands that assemble params
+    conditionally keep their logic verbatim. ``params`` is always a dict
+    (``{}`` for no-arg commands), matching what every command passed before —
+    never ``None``.
+    """
+    print_result(dispatch(method, params, ctx), ctx)

@@ -2,7 +2,7 @@
 
 import typer
 
-from agent_windows.cli.dispatcher import dispatch, print_result
+from agent_windows.cli.dispatcher import _cmd
 
 app = typer.Typer(help="Input commands")
 
@@ -16,9 +16,7 @@ def click(
     double: bool = typer.Option(False, "--double", help="Double-click"),
 ) -> None:
     """Mouse click at (x, y)."""
-    params = {"x": x, "y": y, "right": right, "double": double}
-    result = dispatch("click", params, ctx)
-    print_result(result, ctx)
+    _cmd(ctx, "click", x=x, y=y, right=right, double=double)
 
 
 @app.command()
@@ -36,8 +34,7 @@ def type_text(
         if len(parts) == 2:
             params["at_x"] = int(parts[0])
             params["at_y"] = int(parts[1])
-    result = dispatch("type", params, ctx)
-    print_result(result, ctx)
+    _cmd(ctx, "type", **params)
 
 
 @app.command()
@@ -49,9 +46,7 @@ def scroll(
     amount: int = typer.Option(3, "--amount", help="Scroll amount"),
 ) -> None:
     """Scroll at position (x, y)."""
-    params = {"x": x, "y": y, "direction": direction, "amount": amount}
-    result = dispatch("scroll", params, ctx)
-    print_result(result, ctx)
+    _cmd(ctx, "scroll", x=x, y=y, direction=direction, amount=amount)
 
 
 @app.command()
@@ -61,8 +56,7 @@ def move(
     y: int = typer.Argument(help="Y coordinate"),
 ) -> None:
     """Move mouse to (x, y)."""
-    result = dispatch("move", {"x": x, "y": y}, ctx)
-    print_result(result, ctx)
+    _cmd(ctx, "move", x=x, y=y)
 
 
 @app.command()
@@ -73,9 +67,7 @@ def dblclick(
     right: bool = typer.Option(False, "--right", help="Right-button double-click"),
 ) -> None:
     """Double-click at (x, y)."""
-    params = {"x": x, "y": y, "right": right}
-    result = dispatch("dblclick", params, ctx)
-    print_result(result, ctx)
+    _cmd(ctx, "dblclick", x=x, y=y, right=right)
 
 
 @app.command()
@@ -85,8 +77,7 @@ def hover(
     y: int = typer.Argument(help="Y coordinate"),
 ) -> None:
     """Move mouse to (x, y) and trigger hover event."""
-    result = dispatch("hover", {"x": x, "y": y}, ctx)
-    print_result(result, ctx)
+    _cmd(ctx, "hover", x=x, y=y)
 
 
 @app.command(name="mouse-down")
@@ -97,8 +88,7 @@ def mouse_down(
     button: str = typer.Option("left", "--button", help="Mouse button: left, right, middle"),
 ) -> None:
     """Press and hold mouse button at (x, y)."""
-    result = dispatch("mouse_down", {"x": x, "y": y, "button": button}, ctx)
-    print_result(result, ctx)
+    _cmd(ctx, "mouse_down", x=x, y=y, button=button)
 
 
 @app.command(name="mouse-up")
@@ -109,8 +99,7 @@ def mouse_up(
     button: str = typer.Option("left", "--button", help="Mouse button: left, right, middle"),
 ) -> None:
     """Release mouse button at (x, y)."""
-    result = dispatch("mouse_up", {"x": x, "y": y, "button": button}, ctx)
-    print_result(result, ctx)
+    _cmd(ctx, "mouse_up", x=x, y=y, button=button)
 
 
 @app.command()
@@ -123,9 +112,7 @@ def drag(
     right: bool = typer.Option(False, "--right", help="Right-button drag"),
 ) -> None:
     """Drag from (x1,y1) to (x2,y2)."""
-    params = {"x1": x1, "y1": y1, "x2": x2, "y2": y2, "right": right}
-    result = dispatch("drag", params, ctx)
-    print_result(result, ctx)
+    _cmd(ctx, "drag", x1=x1, y1=y1, x2=x2, y2=y2, right=right)
 
 
 @app.command()
@@ -134,5 +121,4 @@ def shortcut(
     keys: str = typer.Argument(help="Keyboard shortcut, e.g. 'ctrl+c'"),
 ) -> None:
     """Send keyboard shortcut."""
-    result = dispatch("shortcut", {"keys": keys}, ctx)
-    print_result(result, ctx)
+    _cmd(ctx, "shortcut", keys=keys)

@@ -19,26 +19,13 @@ def _screenshot(params: dict) -> dict[str, Any]:
     selector = params.get("selector", "")
     selector_warn = ""
 
-    # UIA element selector → bbox
+    # UIA element selector → bbox. resolve_element owns the selector parsing +
+    # snapshot lookup; this handler only adds the bbox-existence check and the
+    # (left, top, right, bottom) crop list. (M-20)
     if selector and selector.startswith("@e"):
         try:
-            index = int(selector[2:]) - 1  # @e{N} is 1-based
-            if index < 0:
-                raise IndexError(f"Invalid selector: {selector}")
-            from agent_windows.core.tree import get_tree_snapshot
-            from agent_windows.utils.config import load_config as _lc
-            cfg = _lc().get("tree", {})
-            data = get_tree_snapshot(
-                max_depth=cfg.get("max_depth", 15),
-                include_invisible=cfg.get("include_invisible", False),
-                include_offscreen=cfg.get("include_offscreen", False),
-                max_elements=cfg.get("max_elements", 200),
-                timeout=cfg.get("timeout", 10),
-            )
-            elements = data.get("interactive_elements", [])
-            if index >= len(elements):
-                raise IndexError(f"Element {selector} not found ({len(elements)} elements)")
-            el = elements[index]
+            from agent_windows.core.tree import resolve_element
+            el = resolve_element(selector)
             if not el.bbox:
                 raise ValueError(f"Element {selector} has no bounding box")
             bbox = [el.bbox.left, el.bbox.top, el.bbox.right, el.bbox.bottom]

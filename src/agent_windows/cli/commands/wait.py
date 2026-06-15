@@ -2,7 +2,7 @@
 
 import typer
 
-from agent_windows.cli.dispatcher import dispatch, print_result
+from agent_windows.cli.dispatcher import _cmd
 
 
 def wait(
@@ -56,5 +56,4 @@ def wait(
             typer.echo(f"Error: invalid target {target!r} (expected seconds or @eN)", err=True)
             raise typer.Exit(1)
 
-    result = dispatch("wait", params, ctx)
-    print_result(result, ctx)
+    _cmd(ctx, "wait", **params)

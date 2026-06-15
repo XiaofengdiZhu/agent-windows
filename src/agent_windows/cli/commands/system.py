@@ -5,7 +5,7 @@ import sys
 
 import typer
 
-from agent_windows.cli.dispatcher import dispatch, print_result
+from agent_windows.cli.dispatcher import _cmd
 
 # ── app sub-commands ──────────────────────────────────────────────
 
@@ -19,9 +19,7 @@ def app_launch(
     args: list[str] = typer.Argument(None, help="Application arguments"),
 ) -> None:
     """Launch an application."""
-    params = {"name_or_path": name_or_path, "args": args or []}
-    result = dispatch("app_launch", params, ctx)
-    print_result(result, ctx)
+    _cmd(ctx, "app_launch", name_or_path=name_or_path, args=args or [])
 
 
 @app_cmd.command("switch")
@@ -30,8 +28,7 @@ def app_switch(
     name_or_title: str = typer.Argument(help="Window title or process name"),
 ) -> None:
     """Switch to an application window."""
-    result = dispatch("app_switch", {"name_or_title": name_or_title}, ctx)
-    print_result(result, ctx)
+    _cmd(ctx, "app_switch", name_or_title=name_or_title)
 
 
 @app_cmd.command("resize")
@@ -44,16 +41,13 @@ def app_resize(
     y: int = typer.Option(-1, "--y", help="Window Y position (-1 to keep)"),
 ) -> None:
     """Resize and reposition an application window."""
-    params = {"name_or_title": name_or_title, "width": width, "height": height, "x": x, "y": y}
-    result = dispatch("app_resize", params, ctx)
-    print_result(result, ctx)
+    _cmd(ctx, "app_resize", name_or_title=name_or_title, width=width, height=height, x=x, y=y)
 
 
 @app_cmd.command("list")
 def app_list(ctx: typer.Context) -> None:
     """List all visible windows."""
-    result = dispatch("app_list", {}, ctx)
-    print_result(result, ctx)
+    _cmd(ctx, "app_list")
 
 
 # ── shell (top-level command) ────────────────────────────────────
@@ -64,8 +58,7 @@ def shell(
     command: str = typer.Argument(help="PowerShell command to execute"),
 ) -> None:
     """Execute a PowerShell command."""
-    result = dispatch("shell", {"command": command}, ctx)
-    print_result(result, ctx)
+    _cmd(ctx, "shell", command=command)
 
 
 # ── fs ────────────────────────────────────────────────────────────
@@ -79,8 +72,7 @@ def fs_read(
     path: str = typer.Argument(help="File path to read"),
 ) -> None:
     """Read a file."""
-    result = dispatch("fs_read", {"path": path}, ctx)
-    print_result(result, ctx)
+    _cmd(ctx, "fs_read", path=path)
 
 
 @fs_cmd.command("write")
@@ -90,8 +82,7 @@ def fs_write(
     content: str = typer.Argument(help="Content to write"),
 ) -> None:
     """Write to a file."""
-    result = dispatch("fs_write", {"path": path, "content": content}, ctx)
-    print_result(result, ctx)
+    _cmd(ctx, "fs_write", path=path, content=content)
 
 
 @fs_cmd.command("list")
@@ -100,8 +91,7 @@ def fs_list(
     path: str = typer.Argument(help="Directory path to list"),
 ) -> None:
     """List directory contents."""
-    result = dispatch("fs_list", {"path": path}, ctx)
-    print_result(result, ctx)
+    _cmd(ctx, "fs_list", path=path)
 
 
 # ── clipboard ─────────────────────────────────────────────────────
@@ -118,8 +108,7 @@ def clipboard_get(
     params: dict = {}
     if keyboard is not None:
         params["keyboard"] = keyboard
-    result = dispatch("clipboard_get", params, ctx)
-    print_result(result, ctx)
+    _cmd(ctx, "clipboard_get", **params)
 
 
 @clip_cmd.command("set")
@@ -132,8 +121,7 @@ def clipboard_set(
     params: dict = {"text": text}
     if keyboard is not None:
         params["keyboard"] = keyboard
-    result = dispatch("clipboard_set", params, ctx)
-    print_result(result, ctx)
+    _cmd(ctx, "clipboard_set", **params)
 
 
 # ── batch (top-level command) ──────────────────────────────────────
@@ -196,13 +184,7 @@ def batch(
         typer.echo("Error: commands must be a non-empty JSON array", err=True)
         raise typer.Exit(1)
 
-    params = {
-        "commands": commands,
-        "stop_on_error": stop_on_error,
-        "delay": delay,
-    }
-    result = dispatch("batch", params, ctx)
-    print_result(result, ctx)
+    _cmd(ctx, "batch", commands=commands, stop_on_error=stop_on_error, delay=delay)
 
 
 # ── process ───────────────────────────────────────────────────────
@@ -213,8 +195,7 @@ proc_cmd = typer.Typer(help="Process management")
 @proc_cmd.command("list")
 def process_list(ctx: typer.Context) -> None:
     """List running processes."""
-    result = dispatch("process_list", {}, ctx)
-    print_result(result, ctx)
+    _cmd(ctx, "process_list")
 
 
 @proc_cmd.command("kill")
@@ -223,5 +204,4 @@ def process_kill(
     pid_or_name: str = typer.Argument(help="PID or process name"),
 ) -> None:
     """Kill a process."""
-    result = dispatch("process_kill", {"pid_or_name": pid_or_name}, ctx)
-    print_result(result, ctx)
+    _cmd(ctx, "process_kill", pid_or_name=pid_or_name)
