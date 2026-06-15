@@ -135,14 +135,14 @@ class TestPrintResult:
         assert "status: ok" in captured.out
         assert "count: 5" in captured.out
 
-    def test_none_result_no_crash(self, capsys):
-        """Passing a dict without 'output' key should not crash."""
+    def test_empty_result_no_crash(self, capsys):
+        """A result dict with no printable keys (empty dict, or only a falsy
+        'output') must print an empty line, not crash."""
         from agent_windows.cli.dispatcher import print_result
-        # print_result expects a dict, not None — test empty dict instead
-        print_result({"output": ""})
+        # No keys at all → kv-pairs loop produces nothing → empty text
+        print_result({})
         captured = capsys.readouterr()
-        # empty output string is falsy, so it falls through to kv pairs
-        # but there are no other keys, so result is empty string
+        assert captured.out == "\n"
 
 
 class TestStdoutRobustness:

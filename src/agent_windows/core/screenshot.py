@@ -24,6 +24,14 @@ _last_successful_backend: str | None = None
 _mss_instance = None
 _mss_lock = threading.Lock()
 
+# numpy availability is a process-lifetime constant; probe once at import so
+# diff_images doesn't repeat the import attempt on every call. (PERF3-08)
+try:
+    import numpy as _np  # noqa: F401
+    _HAS_NUMPY = True
+except ImportError:
+    _HAS_NUMPY = False
+
 
 def release_capture_backends() -> None:
     """Release the cached capture-backend singletons (L-29).
@@ -410,15 +418,9 @@ def diff_images(
     # Raw per-channel difference → grayscale
     diff_gray = ImageChops.difference(a, b).convert("L")
 
-    # Check numpy availability once
-    _has_numpy = False
-    try:
+    # numpy availability resolved once at module load (PERF3-08)
+    if _HAS_NUMPY:
         import numpy as np
-        _has_numpy = True
-    except ImportError:
-        pass
-
-    if _has_numpy:
         mask_arr = np.array(diff_gray)
         diff_mask = mask_arr > threshold
         diff_pixels = int(np.count_nonzero(diff_mask))
