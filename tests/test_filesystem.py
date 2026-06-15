@@ -197,3 +197,115 @@ class TestExecutableLaunchProtection:
         """Legit system apps under System32 stay launchable (not blocklisted)."""
         from agent_windows.core.filesystem import validate_executable_path
         validate_executable_path(r"C:\Windows\System32\notepad.exe")  # must not raise
+
+
+class TestReparsePointEvasion:
+    """M-03: junctions, 8.3 short names, and case must not bypass the blacklist.
+
+    ``resolve()`` in :func:`_validate_path` follows directory junctions (and
+    symlinks, via the same reparse-point traversal) and expands 8.3 names + case,
+    so a benign-named link into a credential dir still resolves to the blocked
+    ``.ssh`` component. These tests exercise junctions — symlinks need elevation
+    on Windows and are skipped, but they hit the identical resolve() code path.
+    They lock the defense in so a future refactor can't silently swap
+    ``resolve()`` for a non-resolving check and reopen the bypass.
+    """
+
+    @staticmethod
+    def _make_junction(link: Path, target: Path) -> None:
+        """Create a Windows directory junction (needs no elevation); skip on failure."""
+        import subprocess
+
+        r = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+            capture_output=True,
+        )
+        if r.returncode != 0 or not link.exists():
+            pytest.skip(f"cannot create junction on this host (rc={r.returncode})")
+
+    @staticmethod
+    def _short_name(path: Path) -> Path | None:
+        """8.3 short form of ``path`` via GetShortPathName, or None when 8.3
+        generation is off on the volume (short name == long name)."""
+        try:
+            import win32api
+        except ImportError:
+            pytest.skip("pywin32 not available")
+        short = Path(win32api.GetShortPathName(str(path)))
+        if short.name.lower() == path.name.lower():
+            return None  # 8.3 generation disabled on this volume
+        return short
+
+    def test_junction_into_credential_dir_blocked(self, tmp_path):
+        """A benign-named junction directly into .ssh resolves to .ssh → blocked."""
+        from agent_windows.core.filesystem import _validate_path
+
+        home = tmp_path / "home"
+        cred = home / ".ssh"
+        cred.mkdir(parents=True)
+        (cred / "id_rsa").write_text("x")
+        link = home / "datalink"
+        self._make_junction(link, cred)
+        with pytest.raises(ValueError, match=r"\.ssh"):
+            _validate_path(str(link / "id_rsa"))
+
+    def test_junction_as_intermediate_blocked(self, tmp_path):
+        """A junction used as a mid-path component still resolves to .ssh."""
+        from agent_windows.core.filesystem import _validate_path
+
+        home = tmp_path / "home"
+        cred = home / ".ssh"
+        cred.mkdir(parents=True)
+        (cred / "id_rsa").write_text("x")
+        proj = home / "project" / "data"
+        proj.mkdir(parents=True)
+        link = proj / "misc"
+        self._make_junction(link, cred)
+        with pytest.raises(ValueError, match=r"\.ssh"):
+            _validate_path(str(link / "id_rsa"))
+
+    def test_short_name_8_3_blocked(self, tmp_path):
+        """An 8.3 alias (e.g. SSH~1) of .ssh expands back to .ssh → blocked."""
+        from agent_windows.core.filesystem import _validate_path
+
+        home = tmp_path / "home"
+        cred = home / ".ssh"
+        cred.mkdir(parents=True)
+        (cred / "id_rsa").write_text("x")
+        short_cred = self._short_name(cred)
+        if short_cred is None:
+            pytest.skip("8.3 short names disabled on this volume")
+        victim = short_cred / "id_rsa"
+        assert victim.exists(), "short-name path should resolve to the same file"
+        with pytest.raises(ValueError, match=r"\.ssh"):
+            _validate_path(str(victim))
+
+    def test_case_variant_blocked(self):
+        """A different-case component (.SSH) lower-cases to .ssh → blocked."""
+        from agent_windows.core.filesystem import _validate_path
+
+        with pytest.raises(ValueError, match="restricted"):
+            _validate_path(r"C:\Users\alice\.SSH\id_rsa")
+
+    @pytest.mark.parametrize(
+        "validator, fname",
+        [
+            ("validate_read_path", "id_rsa"),
+            ("validate_write_path", "evil.txt"),
+            ("validate_executable_path", "payload.exe"),
+        ],
+    )
+    def test_public_validators_defeat_junction(self, tmp_path, validator, fname):
+        """The handler-facing validators (not just _validate_path) block a
+        junction into .ssh — the defense reaches the actual attack surface."""
+        import agent_windows.core.filesystem as fs
+
+        fn = getattr(fs, validator)
+        home = tmp_path / "home"
+        cred = home / ".ssh"
+        cred.mkdir(parents=True)
+        (cred / fname).write_text("x")
+        link = home / "datalink"
+        self._make_junction(link, cred)
+        with pytest.raises(ValueError):
+            fn(str(link / fname))

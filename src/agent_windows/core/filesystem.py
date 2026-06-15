@@ -42,6 +42,13 @@ _CREDENTIAL_DIRS = frozenset({
 
 def _validate_path(path: str) -> Path:
     """Validate that a file path is not in the blacklist."""
+    # M-03: resolve() is the reparse-point defense. It follows directory
+    # junctions and symlinks and expands 8.3 short names (SSH~1 -> .ssh) and
+    # case, so a benign-named link into a credential dir still resolves to the
+    # blocked ".ssh" component and is rejected here. Verified on py3.13/Win11;
+    # requires-python>=3.13 guarantees this. DO NOT replace with a faster
+    # non-resolving check — that reopens the bypass. Regression-locked by
+    # TestReparsePointEvasion in tests/test_filesystem.py.
     p = Path(path).expanduser().resolve()
     parts = [part.lower() for part in p.parts]
 
@@ -150,6 +157,11 @@ def validate_executable_path(path: str) -> None:
     if not p.is_absolute() and not p.drive and len(p.parts) <= 1:
         return
 
+    # M-03: same reparse-point / 8.3 / case defense as _validate_path's
+    # resolve() — a junction or short name into a credential dir resolves to
+    # ".ssh" etc. and is caught below. This validator does NOT delegate to
+    # _validate_path (it checks only the credential-subset, not the full
+    # blacklist), so it normalizes its own path here.
     resolved = p.expanduser().resolve()
     parts = {part.lower() for part in resolved.parts}
 
