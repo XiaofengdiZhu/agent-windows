@@ -1,10 +1,14 @@
 """Tests for the IPC client (call_daemon, unwrap_response)."""
 
-import pytest
+import subprocess
+import sys
 from types import SimpleNamespace
+from unittest.mock import patch, MagicMock
 
-from agent_windows.ipc.client import unwrap_response
-from agent_windows.ipc.protocol import JSONRPCResponse
+import pytest
+
+from agent_windows.ipc.client import unwrap_response, call_daemon, _start_daemon_process
+from agent_windows.ipc.protocol import JSONRPCRequest, JSONRPCResponse
 
 
 class TestUnwrapResponse:
@@ -93,3 +97,112 @@ class TestEnsureDaemonRunning:
         monkeypatch.setattr(client.time, "sleep", lambda _: None)
         with pytest.raises(ConnectionError, match="did not become ready"):
             client.ensure_daemon_running()
+
+
+class TestCallDaemon:
+    """call_daemon orchestrates: build request → ensure_daemon_running →
+    send_to_daemon → unwrap_response. Test the plumbing with each stage mocked."""
+
+    def test_success_returns_unwrapped_result(self):
+        """A successful round-trip returns the response's result dict."""
+        from agent_windows.ipc import client
+
+        ok_json = JSONRPCResponse(id=1, result={"status": "ok"}).to_json()
+        with patch.object(client, "ensure_daemon_running") as m_ensure, \
+             patch.object(client, "send_to_daemon", return_value=ok_json) as m_send:
+            result = call_daemon("ping", params=None)
+        m_ensure.assert_called_once_with(debug=False)  # default threads through
+        m_send.assert_called_once()
+        assert result == {"status": "ok"}
+
+    def test_builds_jsonrpc_request_with_method_and_params(self):
+        """The request sent over the wire carries the method + params."""
+        from agent_windows.ipc import client
+
+        captured = {}
+
+        def fake_send(message, pipe_name):
+            captured["message"] = message
+            captured["pipe_name"] = pipe_name
+            return JSONRPCResponse(id=1, result={}).to_json()
+
+        with patch.object(client, "ensure_daemon_running"), \
+             patch.object(client, "send_to_daemon", side_effect=fake_send):
+            call_daemon("screenshot", params={"monitor": 1})
+        req = JSONRPCRequest.from_json(captured["message"])
+        assert req.method == "screenshot"
+        assert req.params == {"monitor": 1}
+        # send_to_daemon is called with the module's PIPE_NAME
+        from agent_windows.ipc.pipe import PIPE_NAME
+        assert captured["pipe_name"] == PIPE_NAME
+
+    def test_daemon_error_response_raises_runtime_error(self):
+        """An error response propagates via unwrap_response as RuntimeError."""
+        from agent_windows.ipc import client
+
+        err_json = JSONRPCResponse(id=1, error={"code": -32602, "message": "bad"}).to_json()
+        with patch.object(client, "ensure_daemon_running"), \
+             patch.object(client, "send_to_daemon", return_value=err_json):
+            with pytest.raises(RuntimeError, match="-32602"):
+                call_daemon("fs_read")
+
+    def test_passes_debug_flag_to_ensure_daemon(self):
+        from agent_windows.ipc import client
+
+        ok_json = JSONRPCResponse(id=1, result={}).to_json()
+        with patch.object(client, "ensure_daemon_running") as m_ensure, \
+             patch.object(client, "send_to_daemon", return_value=ok_json):
+            call_daemon("ping", debug=True)
+        m_ensure.assert_called_once_with(debug=True)
+
+    def test_connection_error_propagates_from_ensure(self):
+        """If ensure_daemon_running can't reach the daemon, it raises and
+        call_daemon surfaces it (no send attempted)."""
+        from agent_windows.ipc import client
+
+        with patch.object(client, "ensure_daemon_running",
+                          side_effect=ConnectionError("no pipe")), \
+             patch.object(client, "send_to_daemon") as m_send:
+            with pytest.raises(ConnectionError, match="no pipe"):
+                call_daemon("ping")
+        m_send.assert_not_called()
+
+
+class TestStartDaemonProcess:
+    """_start_daemon_process builds the `[python -m agent_windows --daemon]`
+    command, appends --debug when requested, and detaches the subprocess."""
+
+    def test_base_command_uses_module_invocation(self):
+        """Must invoke via `python -m agent_windows --daemon`, not a bare exe,
+        so sys.executable + -m is used."""
+        fake_proc = MagicMock(pid=999)
+        with patch("agent_windows.ipc.client.subprocess.Popen", return_value=fake_proc) as m_popen:
+            proc = _start_daemon_process()
+        assert m_popen.call_args.args[0] == [sys.executable, "-m", "agent_windows", "--daemon"]
+        assert proc.pid == 999
+
+    def test_debug_flag_appended(self):
+        fake_proc = MagicMock(pid=1)
+        with patch("agent_windows.ipc.client.subprocess.Popen", return_value=fake_proc) as m_popen:
+            _start_daemon_process(debug=True)
+        assert m_popen.call_args.args[0][-1] == "--debug"
+
+    def test_no_debug_does_not_append_flag(self):
+        fake_proc = MagicMock(pid=1)
+        with patch("agent_windows.ipc.client.subprocess.Popen", return_value=fake_proc) as m_popen:
+            _start_daemon_process(debug=False)
+        assert "--debug" not in m_popen.call_args.args[0]
+
+    def test_subprocess_is_detached(self):
+        """The daemon must survive the parent CLI exiting — DETACHED_PROCESS +
+        CREATE_NEW_PROCESS_GROUP, and stdio redirected to DEVNULL."""
+        fake_proc = MagicMock(pid=1)
+        with patch("agent_windows.ipc.client.subprocess.Popen", return_value=fake_proc) as m_popen:
+            _start_daemon_process()
+        kw = m_popen.call_args.kwargs
+        flags = kw["creationflags"]
+        assert flags & subprocess.CREATE_NEW_PROCESS_GROUP
+        assert flags & subprocess.DETACHED_PROCESS
+        assert kw["stdout"] is subprocess.DEVNULL
+        assert kw["stderr"] is subprocess.DEVNULL
+        assert kw["stdin"] is subprocess.DEVNULL
