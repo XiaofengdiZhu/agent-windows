@@ -272,3 +272,72 @@ class TestSecureDirectory:
         )
         ace_user = win32security.LookupAccountSid(None, dacl.GetAce(0)[2])[0]
         assert ace_user.lower() == win32api.GetUserName().lower()
+
+
+class TestSetConfigAllowlist:
+    """L-07: set_config_value rejects arbitrary keys, accepts only the schema."""
+
+    def test_known_leaves_are_settable(self):
+        from agent_windows.utils.config import _settable_config_keys
+        keys = _settable_config_keys()
+        assert "grounding.model" in keys
+        # shell.blacklist is documented as string-settable (shell_runner reads str|list).
+        assert "shell.blacklist" in keys
+        # Optional key read with a fallback, not in DEFAULT_CONFIG.
+        assert "screenshot.dir" in keys
+
+    def test_section_names_are_not_settable(self):
+        """Setting a bare section name would clobber the whole section."""
+        from agent_windows.utils.config import _settable_config_keys
+        keys = _settable_config_keys()
+        assert "grounding" not in keys
+        assert "screenshot" not in keys
+
+    def test_rejects_unknown_section(self):
+        from agent_windows.utils.config import set_config_value
+        with pytest.raises(ValueError, match="unknown config key"):
+            set_config_value("evil.payload", "pwned")
+
+    def test_rejects_unknown_key_in_known_section(self):
+        from agent_windows.utils.config import set_config_value
+        with pytest.raises(ValueError, match="unknown config key"):
+            set_config_value("grounding.evil_key", "pwned")
+
+    def test_rejects_bare_section_name(self):
+        from agent_windows.utils.config import set_config_value
+        with pytest.raises(ValueError, match="unknown config key"):
+            set_config_value("grounding", "pwned")
+
+    def test_accepts_known_key(self, tmp_path, monkeypatch):
+        import agent_windows.utils.config as cfg
+
+        cfg_path = tmp_path / "config.toml"
+        monkeypatch.setattr(cfg, "get_config_path", lambda: cfg_path)
+        monkeypatch.delenv("AGENT_WINDOWS_GROUNDING_API_KEY", raising=False)
+        cfg._config_cache = None
+
+        cfg.set_config_value("grounding.model", "gpt-test")
+        assert cfg.load_config()["grounding"]["model"] == "gpt-test"
+
+    def test_accepts_optional_key(self, tmp_path, monkeypatch):
+        import agent_windows.utils.config as cfg
+
+        cfg_path = tmp_path / "config.toml"
+        monkeypatch.setattr(cfg, "get_config_path", lambda: cfg_path)
+        monkeypatch.delenv("AGENT_WINDOWS_GROUNDING_API_KEY", raising=False)
+        cfg._config_cache = None
+
+        cfg.set_config_value("screenshot.dir", str(tmp_path))
+        assert cfg.load_config()["screenshot"]["dir"] == str(tmp_path)
+
+    def test_accepts_shell_blacklist_as_string(self, tmp_path, monkeypatch):
+        """shell.blacklist is documented as settable as a single string pattern."""
+        import agent_windows.utils.config as cfg
+
+        cfg_path = tmp_path / "config.toml"
+        monkeypatch.setattr(cfg, "get_config_path", lambda: cfg_path)
+        monkeypatch.delenv("AGENT_WINDOWS_GROUNDING_API_KEY", raising=False)
+        cfg._config_cache = None
+
+        cfg.set_config_value("shell.blacklist", "rm -rf")
+        assert cfg.load_config()["shell"]["blacklist"] == "rm -rf"

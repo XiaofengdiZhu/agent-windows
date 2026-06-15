@@ -153,3 +153,47 @@ class TestWriteProtection:
         from agent_windows.core.filesystem import _validate_write_path
         p = _validate_write_path(str(tmp_path / "ok.txt"))
         assert isinstance(p, Path)
+
+
+class TestExecutableLaunchProtection:
+    """L-03: launch_app refuses binaries from credential dirs / agent tree."""
+
+    @pytest.mark.parametrize("cred", [".ssh", ".aws", ".azure", ".kube", ".docker", ".gnupg"])
+    def test_refuses_credential_dir(self, cred):
+        from agent_windows.core.filesystem import validate_executable_path
+        with pytest.raises(ValueError, match="credential"):
+            validate_executable_path(rf"C:\Users\alice\{cred}\payload.exe")
+
+    def test_refuses_data_dir(self):
+        from agent_windows.core.filesystem import validate_executable_path
+        target = Path.home() / ".agent-windows" / "payload.exe"
+        with pytest.raises(ValueError, match="install tree"):
+            validate_executable_path(str(target))
+
+    def test_refuses_install_tree(self):
+        from agent_windows.core.filesystem import validate_executable_path, _protected_write_roots
+        install = _protected_write_roots()[0]
+        with pytest.raises(ValueError, match="install tree"):
+            validate_executable_path(str(install / "payload.exe"))
+
+    def test_allows_bare_name(self):
+        """A PATH-resolved bare name (no dir) never matches a credential dir."""
+        from agent_windows.core.filesystem import validate_executable_path
+        validate_executable_path("notepad")  # must not raise
+
+    def test_bare_name_passes_even_from_install_cwd(self, monkeypatch):
+        """L-03-O1: a bare name must pass even when the daemon cwd is inside the
+        install tree — resolve() would otherwise anchor it there and falsely
+        deny a legit launch."""
+        from agent_windows.core.filesystem import validate_executable_path, _protected_write_roots
+        monkeypatch.chdir(str(_protected_write_roots()[0]))
+        validate_executable_path("notepad")  # must not raise
+
+    def test_allows_normal_path(self, tmp_path):
+        from agent_windows.core.filesystem import validate_executable_path
+        validate_executable_path(str(tmp_path / "app.exe"))  # must not raise
+
+    def test_allows_system32(self):
+        """Legit system apps under System32 stay launchable (not blocklisted)."""
+        from agent_windows.core.filesystem import validate_executable_path
+        validate_executable_path(r"C:\Windows\System32\notepad.exe")  # must not raise

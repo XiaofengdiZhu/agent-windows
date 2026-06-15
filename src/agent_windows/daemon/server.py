@@ -445,6 +445,17 @@ def _shutdown_daemon(state):
     idle_monitor.stop()
     idle_monitor.join(timeout=2.0)
 
+    # Release the cached capture-backend singletons now that the STA worker
+    # (the only capture thread) has stopped — prompt, ordered cleanup rather
+    # than waiting for the atexit safety net (which doesn't run on os._exit or
+    # fatal signals). Idempotent, so the atexit re-call at teardown is a no-op.
+    # (L-29)
+    try:
+        from agent_windows.core.screenshot import release_capture_backends
+        release_capture_backends()
+    except Exception:
+        logger.debug("Capture-backend release on shutdown failed", exc_info=True)
+
     # Remove PID file
     pid_path.unlink(missing_ok=True)
     logger.info("Daemon stopped")

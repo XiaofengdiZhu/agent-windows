@@ -28,6 +28,17 @@ _BLOCKED_PART_PREFIXES: tuple[tuple[tuple[str, ...], str], ...] = (
     (("windows", "system"), "Windows System directory"),
 )
 
+# Credential/secret directories. This is intentionally a SUBSET of
+# ``_BLOCKED_PARTS``: ``launch_app`` runs arbitrary binaries, so a
+# prompt-injected agent must not execute a payload smuggled into credential
+# storage (e.g. ``.ssh/ hook.exe``, ``.aws/credential-helper.exe``). But
+# launching legitimate system applications — including ones living under
+# System32 — must stay allowed, so the full read/write blacklist does NOT apply
+# here. (L-03)
+_CREDENTIAL_DIRS = frozenset({
+    ".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker",
+})
+
 
 def _validate_path(path: str) -> Path:
     """Validate that a file path is not in the blacklist."""
@@ -118,6 +129,50 @@ def validate_write_path(path: str) -> Path:
     install tree or data directory. (M-04, L-05-W1)
     """
     return _validate_write_path(path)
+
+
+def validate_executable_path(path: str) -> None:
+    """Refuse to launch a binary from a sensitive location (L-03).
+
+    ``launch_app`` runs arbitrary binaries detached; a prompt-injected agent
+    must not be coerced into executing a payload smuggled into credential
+    storage (``.ssh``/``.aws``/…) or planted inside the agent's own install or
+    data tree. Only the credential-dir subset of the blacklist applies —
+    launching legitimate system applications (System32, etc.) stays allowed.
+    Raises :class:`ValueError` (→ ``INVALID_PARAMS``) on refusal.
+
+    A bare PATH-resolved name (``notepad``, no drive or separator) carries no
+    location and is returned unchecked: the OS resolves it via PATH, and
+    ``resolve()`` would otherwise anchor it to the daemon's cwd — which can sit
+    inside the install tree and falsely deny a legitimate launch. (L-03-O1)
+    """
+    p = Path(path)
+    if not p.is_absolute() and not p.drive and len(p.parts) <= 1:
+        return
+
+    resolved = p.expanduser().resolve()
+    parts = {part.lower() for part in resolved.parts}
+
+    hit = parts & _CREDENTIAL_DIRS
+    if hit:
+        raise ValueError(
+            "Access denied: refusing to launch a binary from a credential "
+            f"directory ({next(iter(hit))}) (L-03)"
+        )
+
+    # Defense-in-depth: refuse to launch from the agent's own install/data tree
+    # even though writes there are already blocked (M-04) — closes a direct
+    # launch-of-planted-payload path. ``resolve()`` defeats junction/case/8.3
+    # escapes the same way it does for write protection.
+    for root in _protected_write_roots():
+        try:
+            resolved.relative_to(root)
+        except ValueError:
+            continue
+        raise ValueError(
+            "Access denied: refusing to launch a binary inside the agent's "
+            "install tree or data directory (L-03)"
+        )
 
 
 def read_file(path: str) -> dict[str, Any]:

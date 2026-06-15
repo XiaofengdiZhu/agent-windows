@@ -231,11 +231,52 @@ def init_config() -> Path:
     return config_path
 
 
+# Keys that are legitimately settable via ``config set`` but intentionally NOT
+# in DEFAULT_CONFIG — read with a fallback elsewhere (screenshot.dir by
+# get_screenshot_save_dir). Listed explicitly so the allowlist stays in sync
+# with such optional reads instead of silently rejecting a valid knob. (L-07)
+_OPTIONAL_SETTABLE_KEYS = frozenset({"screenshot.dir"})
+
+
+def _settable_config_keys() -> frozenset[str]:
+    """Dotted config keys :func:`set_config_value` may write (L-07).
+
+    Every leaf path present in :data:`DEFAULT_CONFIG` plus the optional keys in
+    :data:`_OPTIONAL_SETTABLE_KEYS`. Generated from the schema so it stays in
+    sync with DEFAULT_CONFIG automatically — no hand-maintained list to drift.
+    """
+    leaves: list[str] = []
+
+    def _walk(prefix: str, node: Any) -> None:
+        if not isinstance(node, dict):
+            leaves.append(prefix)
+            return
+        for k, v in node.items():
+            _walk(f"{prefix}.{k}" if prefix else k, v)
+
+    _walk("", DEFAULT_CONFIG)
+    return frozenset(leaves) | _OPTIONAL_SETTABLE_KEYS
+
+
 def set_config_value(key: str, value: str) -> None:
     """Set a dotted key value in config (e.g. 'grounding.model' → config['grounding']['model']).
 
     Value is parsed as int/float/bool if possible, otherwise kept as string.
+
+    Only keys present in the default schema (plus a few documented optional
+    keys) are accepted; any other key raises ``ValueError`` (→
+    ``INVALID_PARAMS``). This is defense-in-depth for the CLI ``config set``
+    path — there is no config-mutation RPC today, but an allowlist prevents an
+    arbitrary key from creating a bogus section (``evil.payload``) or clobbering
+    a whole section (``grounding``) by setting its name, and guards a future
+    config RPC if one is added. (L-07)
     """
+    if key not in _settable_config_keys():
+        raise ValueError(
+            f"Refusing to set unknown config key {key!r}: only keys present in "
+            "the default schema are settable (L-07). Run `config show` for the "
+            "valid keys."
+        )
     config = load_config()
     parts = key.split(".")
     # Navigate to parent dict

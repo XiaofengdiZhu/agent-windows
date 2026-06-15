@@ -21,6 +21,13 @@ WNDENUMPROC = ctypes.WINFUNCTYPE(
 
 def launch_app(name_or_path: str, args: list[str] | None = None) -> dict[str, Any]:
     """Launch an application by name or path."""
+    # L-03: refuse to launch a binary planted in credential storage or the
+    # agent's own install/data tree. A bare PATH-resolved name (e.g. "notepad")
+    # passes through; only sensitive *locations* are blocked. ``args`` are
+    # program arguments, not executables, so they are intentionally unchecked.
+    from agent_windows.core.filesystem import validate_executable_path
+    validate_executable_path(name_or_path)
+
     cmd = [name_or_path] + (args or [])
     try:
         proc = subprocess.Popen(

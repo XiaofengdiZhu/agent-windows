@@ -3,6 +3,7 @@
 Auto-selects the best available backend. Saves to disk and returns path info.
 """
 
+import atexit
 import logging
 import threading
 import time
@@ -22,6 +23,36 @@ _last_successful_backend: str | None = None
 
 _mss_instance = None
 _mss_lock = threading.Lock()
+
+
+def release_capture_backends() -> None:
+    """Release the cached capture-backend singletons (L-29).
+
+    ``mss`` holds a screen-DC handle and ``dxcam`` holds DXGI resources; both
+    were leaked on exit because the module-level singletons were never
+    released. Registered with :mod:`atexit` so every exit path (daemon idle
+    shutdown, Ctrl+C, the no-daemon CLI path) releases them. Safe to call
+    repeatedly — the singletons are lazily re-created on the next capture.
+
+    (Windows reclaims all handles at process death regardless; this makes the
+    release explicit and prompt rather than waiting for teardown, and keeps
+    long-lived runs from accumulating backend state.)
+    """
+    global _dxcam_camera, _mss_instance
+    with _mss_lock:
+        if _mss_instance is not None:
+            try:
+                _mss_instance.close()
+            except Exception:
+                logger.debug("mss.close() failed", exc_info=True)
+            _mss_instance = None
+    with _dxcam_lock:
+        # dxcam's DXCamera exposes no public close(); drop the reference so its
+        # __del__ releases the DXGI resources via GC. Best-effort.
+        _dxcam_camera = None
+
+
+atexit.register(release_capture_backends)
 
 # ── Virtual screen helpers ────────────────────────────────────────
 

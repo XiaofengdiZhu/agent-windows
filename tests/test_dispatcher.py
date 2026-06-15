@@ -143,3 +143,91 @@ class TestPrintResult:
         captured = capsys.readouterr()
         # empty output string is falsy, so it falls through to kv pairs
         # but there are no other keys, so result is empty string
+
+
+class TestStdoutRobustness:
+    """L-15: print_result must never raise, however hostile stdout is."""
+
+    def test_no_buffer_stream_still_outputs(self, monkeypatch):
+        """A stdout replacement with no ``.buffer`` (IDLE, test captures) must
+        still emit text via the echo fallback instead of AttributeError."""
+        from agent_windows.cli.dispatcher import print_result
+
+        class _NoBuffer:
+            encoding = "utf-8"
+
+            def __init__(self):
+                self.parts = []
+
+            def write(self, s):
+                self.parts.append(s.decode("utf-8", "replace") if isinstance(s, bytes) else s)
+
+            def flush(self):
+                pass
+
+            def isatty(self):
+                return False
+
+        fake = _NoBuffer()
+        monkeypatch.setattr("sys.stdout", fake)
+        print_result({"output": "hello"})  # must not raise
+        assert "hello" in "".join(fake.parts)
+
+    def test_broken_buffer_falls_back_to_echo(self, monkeypatch):
+        """If the raw buffer write raises, the echo fallback must still emit."""
+        from agent_windows.cli.dispatcher import print_result
+
+        class _BadBuffer:
+            def write(self, _b):
+                raise OSError("broken pipe")
+
+            def flush(self):
+                pass
+
+        class _Broken:
+            encoding = "utf-8"
+
+            def __init__(self):
+                self.buffer = _BadBuffer()
+                self.parts = []
+
+            def write(self, s):
+                self.parts.append(s.decode("utf-8", "replace") if isinstance(s, bytes) else s)
+
+            def flush(self):
+                pass
+
+            def isatty(self):
+                return False
+
+        fake = _Broken()
+        monkeypatch.setattr("sys.stdout", fake)
+        print_result({"output": "recover"})  # must not raise
+        assert "recover" in "".join(fake.parts)
+
+    def test_unencodable_chars_coerced_not_raised(self, monkeypatch):
+        """A character outside the console codepage must be replaced, not raise
+        UnicodeEncodeError (the old typer.echo fallback crashed here)."""
+        from agent_windows.cli.dispatcher import print_result
+
+        class _AsciiNoBuffer:
+            encoding = "ascii"
+
+            def __init__(self):
+                self.parts = []
+
+            def write(self, s):
+                self.parts.append(s.decode("utf-8", "replace") if isinstance(s, bytes) else s)
+
+            def flush(self):
+                pass
+
+            def isatty(self):
+                return False
+
+        fake = _AsciiNoBuffer()
+        monkeypatch.setattr("sys.stdout", fake)
+        print_result({"output": "café ☕"})  # must not raise
+        out = "".join(fake.parts)
+        assert "caf" in out          # text still emitted
+        assert "é" not in out        # non-ASCII coerced (replaced), not raised

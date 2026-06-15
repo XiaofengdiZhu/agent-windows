@@ -33,7 +33,12 @@ logger = logging.getLogger(__name__)
 
 def _load_image_for_vision(image_path: str) -> Image.Image:
     """Load an image file for vision-model input, ensuring RGB/L mode."""
-    p = Path(image_path)
+    from agent_windows.core.filesystem import validate_read_path
+
+    # L-06: blacklist-check the user-supplied image path before opening or even
+    # probing existence, so ask-vision/detect can't read past the filesystem
+    # blacklist (and don't leak whether a sensitive path exists).
+    p = validate_read_path(image_path)
     if not p.exists():
         raise ValueError(f"Image file not found: {image_path}")
     with Image.open(p) as img:
@@ -254,6 +259,13 @@ def ask_vision(
     if model:
         effective_config["model"] = model
 
+    # L-06: validate a user-supplied output path before any image work or the
+    # vision API call, so a marked screenshot can't be dropped into the install
+    # tree or data dir — and a bad path fails fast instead of after a paid call.
+    if output_path:
+        from agent_windows.core.filesystem import validate_write_path
+        output_path = str(validate_write_path(output_path))
+
     # Load image from file or capture screenshot
     if image_path:
         image = _load_image_for_vision(image_path)
@@ -345,6 +357,12 @@ def detect_elements(
     effective_config = dict(ground_config)
     if model:
         effective_config["model"] = model
+
+    # L-06: validate output path before the (paid) vision API call — see
+    # ask_vision.
+    if output_path:
+        from agent_windows.core.filesystem import validate_write_path
+        output_path = str(validate_write_path(output_path))
 
     # Load image from file or capture screenshot
     if image_path:

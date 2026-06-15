@@ -93,14 +93,27 @@ def print_result(result: dict[str, Any], ctx: typer.Context | None = None) -> No
                 lines.append(f"{key}: {value}")
             text = "\n".join(lines)
 
-    # Write to stdout buffer with UTF-8, bypassing Windows GBK console encoding
-    try:
-        sys.stdout.buffer.write(text.encode("utf-8", errors="replace"))
-        sys.stdout.buffer.write(b"\n")
-        sys.stdout.buffer.flush()
-    except Exception:
-        # Fallback: let typer handle it (may fail on non-UTF-8 characters)
-        typer.echo(text)
+    # Write to stdout, bypassing Windows' GBK console codepage via the raw
+    # buffer with UTF-8. Robust to streams that have no ``.buffer`` (IDLE, test
+    # captures, redirected text streams) and to characters the console codepage
+    # can't encode: the echo fallback coerces through the stream's own encoding
+    # with ``errors="replace"`` instead of raising ``UnicodeEncodeError`` (L-15).
+    out = sys.stdout
+    buf = getattr(out, "buffer", None)
+    if buf is not None:
+        try:
+            buf.write(text.encode("utf-8", errors="replace"))
+            buf.write(b"\n")
+            buf.flush()
+            return
+        except Exception:
+            logger.debug("stdout.buffer write failed; falling back to echo", exc_info=True)
+    enc = getattr(out, "encoding", None) or "utf-8"
+    # Coerce through the stream's own codepage first: every char it can't
+    # encode becomes '?', so the subsequent typer.echo can't raise
+    # UnicodeEncodeError. Crash-proof by construction ('?' is encodable
+    # everywhere).
+    typer.echo(text.encode(enc, errors="replace").decode(enc, errors="replace"))
 
 
 def _cmd(ctx: typer.Context, method: str, **params: Any) -> None:
