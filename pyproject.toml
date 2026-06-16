@@ -34,6 +34,9 @@ build-backend = "uv_build"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "e2e: end-to-end daemon smoke test (opt-in via AGENT_WINDOWS_E2E=1)",
+]
 
 [dependency-groups]
 dev = [
