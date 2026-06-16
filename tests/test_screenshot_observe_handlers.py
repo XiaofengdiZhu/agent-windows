@@ -341,3 +341,32 @@ class TestObserveHandler:
             r = HANDLERS["observe"]({"snapshot": True, "ground": "x"})
         # S, then separator, then G
         assert r["output"].index("S") < r["output"].index("---") < r["output"].index("G")
+
+    def test_sub_command_error_surfaces_inline_not_internal_error(self):
+        """ARCH3-01: a failing sub-command surfaces its message inline rather
+        than collapsing the whole observe into DAEMON_INTERNAL_ERROR. observe
+        runs each sub-command via route_request, so a ValueError in a handler
+        maps to INVALID_PARAMS and is reported inline (not raised)."""
+        # ground raises ValueError ("description is required") → INVALID_PARAMS
+        def ground_boom(_params):
+            raise ValueError("grounding API key missing")
+
+        with patch.dict(HANDLERS, {
+            "snapshot": MagicMock(return_value={"output": "SNAP"}),
+            "ground": ground_boom,
+        }):
+            r = HANDLERS["observe"]({"snapshot": True, "ground": "x"})
+        # The snapshot still appears; the ground failure is noted inline.
+        assert "SNAP" in r["output"]
+        assert "ground failed" in r["output"]
+        assert "grounding API key missing" in r["output"]
+
+    def test_all_sub_commands_failing_still_returns_output(self):
+        """Even if every sub-command fails, observe returns a dict (not raise)."""
+        with patch.dict(HANDLERS, {
+            "snapshot": MagicMock(side_effect=ValueError("no UIA")),
+            "screenshot": MagicMock(side_effect=RuntimeError("no backend")),
+        }):
+            r = HANDLERS["observe"]({})
+        assert "snapshot failed" in r["output"]
+        assert "screenshot failed" in r["output"]
