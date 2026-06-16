@@ -29,6 +29,9 @@ class TestPrepareModelInput:
 
 
 class TestModelToPhysicalRoundTrip:
+    # physical_to_model has no production caller — it exists as the symmetric
+    # inverse of model_to_physical and is used HERE to verify that inverse via
+    # round-trip (physical→model→physical ≈ identity). See coordinates.py. (QUAL3-06)
     def test_center_roundtrip(self):
         """Center of image should round-trip accurately."""
         src_w, src_h = 1920, 1080

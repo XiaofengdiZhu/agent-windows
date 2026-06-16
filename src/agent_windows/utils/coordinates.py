@@ -86,7 +86,17 @@ def physical_to_model(
     src_width: int,
     src_height: int,
 ) -> tuple[int, int]:
-    """Convert physical pixel coordinates to model-space coordinates."""
+    """Convert physical pixel coordinates to model-space coordinates.
+
+    This is the inverse of :func:`model_to_physical`. The grounding algorithm
+    only ever converts model→physical (the model predicts coordinates, which are
+    mapped back to physical pixels), so this function has **no production caller**
+    today. It is kept as the symmetric partner of ``model_to_physical`` and is
+    exercised by ``tests/test_grounding.py``'s round-trip tests (physical→model→
+    physical) to verify the inverse is correct. If a future feature needs the
+    forward direction (e.g. mapping a known physical point into model space to
+    pass to a prompt), it is ready to use. (QUAL3-06)
+    """
     scale = min(model_width / src_width, model_height / src_height)
     new_w = int(src_width * scale)
     new_h = int(src_height * scale)
