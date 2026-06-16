@@ -228,6 +228,11 @@ def traverse_tree(
     # every node/window is checked against the same absolute deadline.
     global_deadline = (time.time() + timeout) if timeout > 0 else float("inf")
 
+    # PERF3-04: the CacheRequest's property set is constant, so build it once
+    # for the whole traversal instead of per-window (CreateCacheRequest + 6
+    # AddProperty calls per window was pure redundant work).
+    cache_request = _build_traversal_cache(client)
+
     for win in all_windows:
         if time.time() > global_deadline:
             logger.info(
@@ -243,7 +248,7 @@ def traverse_tree(
                            max_depth=max_depth, include_invisible=include_invisible,
                            include_offscreen=include_offscreen, indent=4,
                            timeout=timeout_per_window, max_elements=max_elements,
-                           global_deadline=global_deadline)
+                           global_deadline=global_deadline, cache_request=cache_request)
         except Exception as e:
             logger.warning("Failed to traverse window '%s': %s", win.title, e)
             tree_lines.append(f"      [traversal error: {e}]")
@@ -311,6 +316,7 @@ def _traverse_window(
     timeout: float,
     max_elements: int,
     global_deadline: float,
+    cache_request,
 ) -> None:
     """Traverse UIA tree for a single window."""
     start = time.time()
@@ -318,9 +324,8 @@ def _traverse_window(
     # M-25: fetch the per-node properties through a UIA CacheRequest so each
     # element arrives WITH its properties already cached (one cross-process
     # round-trip at retrieval) instead of six separate live CurrentX round-trips
-    # per node. Built per window — CreateCacheRequest + AddProperty is negligible
-    # next to the traversal itself.
-    cache_request = _build_traversal_cache(client)
+    # per node. The request is built once per traversal in traverse_tree and
+    # passed in (PERF3-04) — its property set is constant across windows.
 
     try:
         root = client.IUIAutomation.ElementFromHandleBuildCache(window.handle, cache_request)

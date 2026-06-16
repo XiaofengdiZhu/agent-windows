@@ -55,7 +55,12 @@ def dispatch(
             ctypes.windll.shcore.SetProcessDpiAwareness(2)
         except Exception:
             logger.debug("DPI awareness setup failed (non-critical)", exc_info=True)
-        pythoncom.CoInitialize()
+        # QUAL3-11: guard CoInitialize so a COM init failure surfaces as a clear
+        # error instead of an uncaught traceback out of the no-daemon path.
+        try:
+            pythoncom.CoInitialize()
+        except Exception as e:
+            raise RuntimeError(f"COM initialization failed in no-daemon mode: {e}") from e
         try:
             from agent_windows.daemon.router import route_request
             from agent_windows.ipc.protocol import JSONRPCRequest
