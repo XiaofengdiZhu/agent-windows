@@ -368,6 +368,52 @@ class TestTypeText:
         assert up.union.ki.dwFlags & ic.KEY_UNICODE
         assert up.union.ki.dwFlags & ic.KEY_UP
 
+
+# ── INPUT struct dedup (QUAL-07) ─────────────────────────────────────
+
+
+class TestInputStructDedup:
+    """input_controller reuses the ctypes INPUT/MOUSEINPUT/KEYBDINPUT/_INPUTUnion
+    from uia.enums instead of redefining them. Lock that the four names are the
+    SAME objects as the vendored ones (no silent local re-definition) and that
+    sizeof(INPUT) is unchanged — the vendored union adds a HARDWAREINPUT branch,
+    but MOUSEINPUT is the largest member so the union (and INPUT) size is
+    identical. A regression that re-introduced a local struct or that drifted
+    the field layout would fail here."""
+
+    def test_structs_are_the_uia_enums_objects(self):
+        from agent_windows.uia.enums import (
+            INPUT as UiaInput,
+            MOUSEINPUT as UiaMouse,
+            KEYBDINPUT as UiaKeybd,
+            _INPUTUnion as UiaUnion,
+        )
+        # Same class objects — not parallel re-definitions.
+        assert ic.INPUT is UiaInput
+        assert ic.MOUSEINPUT is UiaMouse
+        assert ic.KEYBDINPUT is UiaKeybd
+        assert ic._INPUTUnion is UiaUnion
+
+    def test_sizeof_INPUT_unchanged(self):
+        """sizeof(INPUT) must be 40 — the value before and after the dedup.
+        MOUSEINPUT (32B) is the largest union member; HARDWAREINPUT (8B) and
+        KEYBDINPUT (24B) don't grow the union, so the vendored 3-branch union
+        has the same size as the old 2-branch one."""
+        import ctypes
+        assert ctypes.sizeof(ic.INPUT) == 40
+        assert ctypes.sizeof(ic._INPUTUnion) == 32  # == max member (MOUSEINPUT)
+
+    def test_mouse_and_key_helpers_build_valid_inputs(self):
+        """The 3 private helpers construct INPUT via the imported structs with
+        the mi/ki union branches — both exist in the vendored 3-branch union."""
+        m = ic._mouse_input(100, 200, 0, 0x0002)
+        assert m.type == ic.INPUT_MOUSE
+        assert m.union.mi.dx == 100
+        assert m.union.mi.dy == 200
+        k = ic._key_input(0x0D, 0, 0)
+        assert k.type == ic.INPUT_KEYBOARD
+        assert k.union.ki.wVk == 0x0D
+
     def test_type_text_one_pair_per_char(self):
         with patch.object(ic, "_send_unicode_char") as mock_char, \
              patch.object(ic.time, "sleep"):

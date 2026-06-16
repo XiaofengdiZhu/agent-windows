@@ -9,6 +9,13 @@ import ctypes.wintypes
 import time
 import logging
 
+# The ctypes INPUT/MOUSEINPUT/KEYBDINPUT/_INPUTUnion structures are reused from
+# the vendored uia.enums module rather than redefined here — the canonical Win32
+# definition (which also carries HARDWAREINPUT) lives there, and MOUSEINPUT is
+# the largest union member so sizeof(INPUT) is identical. core → uia.enums is the
+# same established direction tree.py already uses. (QUAL-07)
+from agent_windows.uia.enums import MOUSEINPUT, KEYBDINPUT, _INPUTUnion, INPUT
+
 logger = logging.getLogger(__name__)
 
 # ── Constants ─────────────────────────────────────────────────────
@@ -113,38 +120,6 @@ SPECIAL_KEYS: dict[str, int] = {
 
 # Hold keys (modifier keys that stay pressed until released)
 HOLD_KEYS = {"Ctrl", "Shift", "Alt", "Win"}
-
-
-# ── ctypes structures ─────────────────────────────────────────────
-
-
-class MOUSEINPUT(ctypes.Structure):
-    _fields_ = (
-        ("dx", ctypes.wintypes.LONG),
-        ("dy", ctypes.wintypes.LONG),
-        ("mouseData", ctypes.wintypes.DWORD),
-        ("dwFlags", ctypes.wintypes.DWORD),
-        ("time", ctypes.wintypes.DWORD),
-        ("dwExtraInfo", ctypes.wintypes.PULONG),
-    )
-
-
-class KEYBDINPUT(ctypes.Structure):
-    _fields_ = (
-        ("wVk", ctypes.wintypes.WORD),
-        ("wScan", ctypes.wintypes.WORD),
-        ("dwFlags", ctypes.wintypes.DWORD),
-        ("time", ctypes.wintypes.DWORD),
-        ("dwExtraInfo", ctypes.wintypes.PULONG),
-    )
-
-
-class _INPUTUnion(ctypes.Union):
-    _fields_ = (("mi", MOUSEINPUT), ("ki", KEYBDINPUT))
-
-
-class INPUT(ctypes.Structure):
-    _fields_ = (("type", ctypes.wintypes.DWORD), ("union", _INPUTUnion))
 
 
 # ── Low-level API wrappers ────────────────────────────────────────
