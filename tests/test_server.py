@@ -229,6 +229,35 @@ class TestSubmitHandshake:
         assert 3 not in w._result_events
         assert 3 not in w.results
 
+    def test_reentrant_submit_rejected(self):
+        """PERF3-01: a second submit with an already-in-flight cmd_id is rejected
+        rather than racing on the event slot. The daemon serializes one command
+        per id; a re-entrant submit must surface clearly instead of silently
+        dropping a completion signal."""
+        w = COMWorkerThread()
+        # Pre-seed an in-flight event for cmd_id 5 (simulating an active submit).
+        import threading as _t
+        w._result_events[5] = _t.Event()
+        with pytest.raises(RuntimeError, match="already in flight"):
+            w.submit(JSONRPCRequest(id=5, method="ping"), timeout=0.1)
+
+    def test_submit_clears_stale_result_from_prior_timeout(self):
+        """PERF3-02: a timed-out command leaves a late result in self.results;
+        the next submit with the same id must clear it before waiting, so the
+        stale response can't be returned for the new request."""
+        w = COMWorkerThread()
+        # Simulate a leftover result from a previous timed-out command.
+        w.results[6] = {"response": '{"jsonrpc":"2.0","id":6,"result":{"stale":true}}'}
+        drainer = self._start_drainer(w)
+        try:
+            resp = w.submit(JSONRPCRequest(id=6, method="ping"), timeout=5.0)
+        finally:
+            w.stop()
+            drainer.join(timeout=2.0)
+        # The new ping response must be returned, not the stale one.
+        assert json.loads(resp)["result"]["status"] == "ok"
+        assert "stale" not in json.loads(resp)["result"]
+
 
 # ── COMWorkerThread: stop / wait_ready ───────────────────────────────
 

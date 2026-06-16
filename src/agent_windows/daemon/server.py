@@ -134,8 +134,12 @@ class COMWorkerThread(threading.Thread):
             with self._results_lock:
                 self.results[cmd_id] = {"response": error_resp.to_json()}
         finally:
-            # Signal completion
-            evt = self._result_events.get(cmd_id)
+            # Signal completion. _result_events is read here (STA worker thread)
+            # and written in submit() (I/O thread) — guard both under the same
+            # lock so a re-entrant submit or a future second client can't lose
+            # the completion signal. (PERF3-01)
+            with self._results_lock:
+                evt = self._result_events.get(cmd_id)
             if evt:
                 evt.set()
 
@@ -147,13 +151,25 @@ class COMWorkerThread(threading.Thread):
         """
         cmd_id = request.id
         event = threading.Event()
-        self._result_events[cmd_id] = event
+        with self._results_lock:
+            # Enforce the single-in-flight invariant explicitly: a re-entrant
+            # submit or a second client would race on the event slot and could
+            # silently drop a completion signal. (PERF3-01)
+            if cmd_id in self._result_events:
+                raise RuntimeError(
+                    f"Command id {cmd_id} already in flight — the daemon serializes "
+                    "one command at a time per id")
+            self._result_events[cmd_id] = event
+            # Clear a result left by a previously-retired (timed-out) command so
+            # its stale response can't be returned for this new request. (PERF3-02)
+            # NOTE: this guards against a *retired* prior command's leftover
+            # result; the daemon's serial single-client model means a second
+            # command for the same id cannot register while the worker is still
+            # mid-execution (enforced by the single-in-flight check above), so a
+            # racing late write is not reachable today.
+            self.results.pop(cmd_id, None)
 
         try:
-            # Clear previous result
-            with self._results_lock:
-                self.results.pop(cmd_id, None)
-
             self.command_queue.put({"id": cmd_id, "request": request})
 
             # Wait for result
@@ -168,8 +184,9 @@ class COMWorkerThread(threading.Thread):
 
             return result["response"]
         finally:
-            self._result_events.pop(cmd_id, None)
-            self.results.pop(cmd_id, None)
+            with self._results_lock:
+                self._result_events.pop(cmd_id, None)
+                self.results.pop(cmd_id, None)
 
     def stop(self):
         """Signal the worker thread to stop."""
