@@ -6,6 +6,7 @@ Supports OpenAI-compatible API (covers most providers), Anthropic, and Google Ge
 import base64
 import io
 import logging
+import os
 import threading
 from typing import Any
 
@@ -91,20 +92,26 @@ def call_vision_model(
     """
     engine = config.get("engine", "openai").lower()
 
+    # Resolve the API key ONCE here. The production caller passes the grounding
+    # sub-config from load_config(), which already merges the env-var override
+    # (config.py:183-186); for raw-config callers (tests), fall back to the env
+    # var directly. This removes the per-backend duplication of the same
+    # `config.get("api_key") or env` resolution. (ARCH3-03)
+    api_key = config.get("api_key") or os.environ.get("AGENT_WINDOWS_GROUNDING_API_KEY", "")
+
     if engine in ("openai", "doubao", "gemini_compatible"):
-        return _call_openai_compatible(image, prompt, config, max_tokens)
+        return _call_openai_compatible(image, prompt, config, api_key, max_tokens)
     elif engine == "anthropic":
-        return _call_anthropic(image, prompt, config, max_tokens)
+        return _call_anthropic(image, prompt, config, api_key, max_tokens)
     elif engine == "gemini":
-        return _call_gemini(image, prompt, config, max_tokens)
+        return _call_gemini(image, prompt, config, api_key, max_tokens)
     else:
         # Default to OpenAI-compatible for unknown engines
-        return _call_openai_compatible(image, prompt, config, max_tokens)
+        return _call_openai_compatible(image, prompt, config, api_key, max_tokens)
 
 
-def _call_openai_compatible(image: Image.Image, prompt: str, config: dict[str, Any], max_tokens: int = 100) -> str:
+def _call_openai_compatible(image: Image.Image, prompt: str, config: dict[str, Any], api_key: str, max_tokens: int = 100) -> str:
     """Call an OpenAI-compatible vision API."""
-    api_key = config.get("api_key", "") or _get_api_key_env()
     api_base = config.get("api_base", "https://api.openai.com/v1")
     cache_key = f"openai:{api_base}:{api_key}"
     with _client_lock:
@@ -144,9 +151,8 @@ def _call_openai_compatible(image: Image.Image, prompt: str, config: dict[str, A
     return response.choices[0].message.content.strip()
 
 
-def _call_anthropic(image: Image.Image, prompt: str, config: dict[str, Any], max_tokens: int = 100) -> str:
+def _call_anthropic(image: Image.Image, prompt: str, config: dict[str, Any], api_key: str, max_tokens: int = 100) -> str:
     """Call Anthropic Claude vision API."""
-    api_key = config.get("api_key", "") or _get_api_key_env()
     cache_key = f"anthropic:{api_key}"
     with _client_lock:
         if cache_key not in _client_cache:
@@ -183,11 +189,10 @@ def _call_anthropic(image: Image.Image, prompt: str, config: dict[str, Any], max
     return response.content[0].text.strip()
 
 
-def _call_gemini(image: Image.Image, prompt: str, config: dict[str, Any], max_tokens: int = 100) -> str:
+def _call_gemini(image: Image.Image, prompt: str, config: dict[str, Any], api_key: str, max_tokens: int = 100) -> str:
     """Call Google Gemini vision API."""
     import google.generativeai as genai
 
-    api_key = config.get("api_key", "") or _get_api_key_env()
     cache_key = f"gemini:{api_key}"
     with _client_lock:
         if cache_key not in _client_cache:
@@ -201,9 +206,3 @@ def _call_gemini(image: Image.Image, prompt: str, config: dict[str, Any], max_to
                                            max_output_tokens=max_tokens,
                                        ))
     return response.text.strip()
-
-
-def _get_api_key_env() -> str:
-    """Get API key from environment variable."""
-    import os
-    return os.environ.get("AGENT_WINDOWS_GROUNDING_API_KEY", "")

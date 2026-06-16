@@ -6,7 +6,7 @@ and _resolve_image_format default/png/invalid. This file adds:
 - encode_image: max_size downscale, JPG alias, palette-mode flatten, JPEG quality
 - _client_cache: same key reuses client, different keys create new clients
 - call_vision_model: engine routing (openai/anthropic/gemini/unknown→openai)
-- _get_api_key_env fallback
+- env-key fallback when config api_key is empty
 """
 
 import base64
@@ -20,7 +20,6 @@ import agent_windows.utils.api as api
 from agent_windows.utils.api import (
     encode_image,
     call_vision_model,
-    _get_api_key_env,
 )
 
 
@@ -93,19 +92,6 @@ class TestEncodeImageFormatAlias:
         low = len(base64.b64decode(encode_image(img, quality=10)))
         high = len(base64.b64decode(encode_image(img, quality=95)))
         assert high > low
-
-
-# ── _get_api_key_env ─────────────────────────────────────────────────
-
-
-class TestGetApiKeyEnv:
-    def test_reads_env_var(self, monkeypatch):
-        monkeypatch.setenv("AGENT_WINDOWS_GROUNDING_API_KEY", "sk-test-123")
-        assert _get_api_key_env() == "sk-test-123"
-
-    def test_missing_returns_empty(self, monkeypatch):
-        monkeypatch.delenv("AGENT_WINDOWS_GROUNDING_API_KEY", raising=False)
-        assert _get_api_key_env() == ""
 
 
 # ── call_vision_model: engine routing ────────────────────────────────
