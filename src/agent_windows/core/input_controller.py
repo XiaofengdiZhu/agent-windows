@@ -161,6 +161,33 @@ def _get_virtual_screen() -> tuple[int, int, int, int]:
     return left, top, width, height
 
 
+def validate_coordinates(x, y) -> tuple[int, int]:
+    """Validate and coerce input coordinates, checking the virtual-screen bounds.
+
+    Accepts int/float (float is truncated to int, matching mouse_event's integer
+    pixel grid). Rejects non-numeric types and out-of-bounds values with a
+    ``CoordinateRangeError`` (→ COORDINATE_OUT_OF_RANGE). (SEC3-02)
+    """
+    from agent_windows.daemon.router import CoordinateRangeError
+
+    if isinstance(x, bool) or not isinstance(x, (int, float)):
+        raise CoordinateRangeError(
+            f"coordinate 'x' must be a number, got {type(x).__name__}")
+    if isinstance(y, bool) or not isinstance(y, (int, float)):
+        raise CoordinateRangeError(
+            f"coordinate 'y' must be a number, got {type(y).__name__}")
+
+    xi, yi = int(x), int(y)
+    vl, vt, vw, vh = _get_virtual_screen()
+    # Allow a 1px grace on each edge so clicking the very last pixel of a
+    # monitor still works despite rounding; reject wildly out-of-range values.
+    if xi < vl - 1 or xi > vl + vw or yi < vt - 1 or yi > vt + vh:
+        raise CoordinateRangeError(
+            f"coordinate ({xi}, {yi}) is outside the virtual screen "
+            f"({vl},{vt})-({vl + vw},{vt + vh})")
+    return xi, yi
+
+
 def _normalize(x: int, y: int) -> tuple[int, int]:
     """Convert pixel coordinates to normalized absolute coordinates (0-65535).
 

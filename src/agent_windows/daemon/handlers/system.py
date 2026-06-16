@@ -12,7 +12,13 @@ from agent_windows.daemon.router import handler, require
 def _app_launch(params: dict) -> dict[str, Any]:
     """Launch an application."""
     from agent_windows.core.app_manager import launch_app
-    return launch_app(require(params, "name_or_path", str), params.get("args"))
+    args = params.get("args")
+    if args is not None:
+        # args must be a list of strings; anything else crashes Popen or
+        # smuggles unintended argument shapes. (SEC3-06)
+        if not isinstance(args, list) or not all(isinstance(a, str) for a in args):
+            raise ValueError("parameter 'args' must be a list of strings")
+    return launch_app(require(params, "name_or_path", str), args)
 
 
 @handler("app_switch")
@@ -22,13 +28,22 @@ def _app_switch(params: dict) -> dict[str, Any]:
     return switch_window(require(params, "name_or_title", str))
 
 
+def _positive_int(params: dict, key: str) -> int:
+    """Extract a required parameter that must be a positive int (e.g. window
+    width/height). Rejects non-ints and non-positive values as INVALID_PARAMS."""
+    value = require(params, key, int)
+    if isinstance(value, bool) or value <= 0:
+        raise ValueError(f"parameter '{key}' must be a positive integer, got {value!r}")
+    return value
+
+
 @handler("app_resize")
 def _app_resize(params: dict) -> dict[str, Any]:
     """Resize an application window."""
     from agent_windows.core.app_manager import resize_window
     return resize_window(
         require(params, "name_or_title", str),
-        require(params, "width"), require(params, "height"),
+        _positive_int(params, "width"), _positive_int(params, "height"),
         params.get("x", -1), params.get("y", -1),
     )
 

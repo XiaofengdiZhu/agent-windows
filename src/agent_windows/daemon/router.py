@@ -16,6 +16,7 @@ from agent_windows.ipc.protocol import (
     INVALID_REQUEST,
     METHOD_NOT_FOUND,
     INVALID_PARAMS,
+    COORDINATE_OUT_OF_RANGE,
     DAEMON_INTERNAL_ERROR,
     WAIT_TIMEOUT,
     PERMISSION_DENIED,
@@ -25,6 +26,15 @@ logger = logging.getLogger(__name__)
 
 # Global handler registry
 HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {}
+
+
+class CoordinateRangeError(ValueError):
+    """Raised when an input coordinate falls outside the virtual screen.
+
+    A ``ValueError`` subclass so handlers that don't care still surface it as
+    INVALID_PARAMS; ``route_request`` specifically maps it to
+    ``COORDINATE_OUT_OF_RANGE`` (-1002). (SEC3-02 / QUAL3-05)
+    """
 
 
 def handler(method: str):
@@ -77,6 +87,11 @@ def route_request(request: JSONRPCRequest) -> JSONRPCResponse:
     try:
         result = handler_func(request.params or {})
         return JSONRPCResponse(id=request.id, result=result)
+    except CoordinateRangeError as e:
+        # Out-of-screen coordinates → COORDINATE_OUT_OF_RANGE (-1002), a more
+        # specific code than the generic INVALID_PARAMS. Must be caught before
+        # the ValueError clause below since it's a subclass. (SEC3-02/QUAL3-05)
+        return make_error(COORDINATE_OUT_OF_RANGE, str(e), request.id)
     except (ValueError, IndexError) as e:
         return make_error(INVALID_PARAMS, str(e), request.id)
     except TimeoutError as e:

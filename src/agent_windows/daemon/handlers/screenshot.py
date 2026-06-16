@@ -71,9 +71,11 @@ def _highlight(params: dict) -> dict[str, Any]:
     regions = params.get("regions", [])
     # Single-region shortcut: x1,y1,x2,y2 + label
     if not regions and "x1" in params:
+        from agent_windows.core.input_controller import validate_coordinates
+        x1, y1 = validate_coordinates(require(params, "x1"), require(params, "y1"))
+        x2, y2 = validate_coordinates(require(params, "x2"), require(params, "y2"))
         regions = [{
-            "x1": require(params, "x1"), "y1": require(params, "y1"),
-            "x2": require(params, "x2"), "y2": require(params, "y2"),
+            "x1": x1, "y1": y1, "x2": x2, "y2": y2,
             "label": params.get("label", ""),
             "color": params.get("color", "red"),
         }]
