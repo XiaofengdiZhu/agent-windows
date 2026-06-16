@@ -83,6 +83,11 @@ def _audit_shell(command: str, status: str) -> None:
             command.replace("\\", "\\\\").replace("\r", "\\r").replace("\n", "\\n")
         )
         entry = f"{ts} | {status} | {one_line}\n"
+        # The full command (which may carry secrets) is written here. There is no
+        # DPAPI layer for logs — the owner-only ACL applied by get_log_dir() is
+        # the SOLE access control, and it is best-effort (see config.py
+        # _apply_owner_only_acl, SEC3-07). In multi-user environments, verify
+        # logs/ ACLs after first daemon start.
         path = get_log_dir() / "shell_audit.log"
         # Bound growth: rotate the active file to .1 when it exceeds the cap.
         # Best-effort — a rotation failure must not block the audit write below.

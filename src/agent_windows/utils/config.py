@@ -391,9 +391,24 @@ def _apply_owner_only_acl(path: Path, inheritable: bool = False) -> None:
     CONTAINER_INHERIT so files and subdirs created inside a directory inherit
     owner-only access — used for ``logs/`` so daemon.log, shell_audit.log, and
     rotated backups are all owner-only from one directory-level ACL (no per-file
-    calls). Best-effort: a failure is warned, not raised (the named pipe in M-02
-    is the only path that fails closed; files/dirs rely on DPAPI or their
-    contents being least-sensitive). (M-01)
+    calls).
+
+    **Best-effort — and intentionally so** (SEC3-07). A failure is warned, not
+    raised. The threat model differs by caller:
+      - ``config.toml``: the api_key is ALSO DPAPI-encrypted at rest (M-01), so
+        even if this ACL fails the key remains unreadable to other users. ACL
+        here is defense-in-depth.
+      - ``logs/`` (``shell_audit.log`` records full PowerShell commands and may
+        carry secrets; ``daemon.log`` may carry runtime data): there is NO DPAPI
+        layer, so this ACL is the SOLE access control. If it fails, those logs
+        fall back to the inherited directory default, which on some Windows
+        configurations is world- or group-readable.
+    Unlike the named pipe (M-02), which fails CLOSED (the daemon aborts if its
+    security descriptor can't be built), files do not fail closed — a process
+    that can't lock its logs still needs to run. Operators in multi-user or
+    high-security environments should verify ``logs/`` ACLs are owner-only after
+    first daemon start (the warning log line is the signal), or relocate the
+    data dir to an already-restricted location. (M-01)
     """
     import ntsecuritycon
     import win32api
