@@ -22,6 +22,30 @@ class TestReadFile:
         with pytest.raises(ValueError, match="directory"):
             read_file(str(tmp_path))
 
+    def test_read_large_file_truncated(self, tmp_path):
+        """A file exceeding MAX_READ_BYTES is truncated, not read whole. (SEC3-03)"""
+        from agent_windows.core import filesystem
+        from agent_windows.core.filesystem import read_file
+        # Write a file just over the cap.
+        cap = filesystem.MAX_READ_BYTES
+        f = tmp_path / "big.txt"
+        f.write_bytes(b"x" * (cap + 1000))
+        result = read_file(str(f))
+        assert result["truncated"] is True
+        assert result["size"] == cap + 1000  # full size reported
+        assert len(result["content"]) == cap  # content capped
+
+    def test_read_under_cap_not_truncated(self, tmp_path):
+        """A file under the cap reads fully and reports truncated=False."""
+        from agent_windows.core import filesystem
+        from agent_windows.core.filesystem import read_file
+        cap = filesystem.MAX_READ_BYTES
+        f = tmp_path / "small.txt"
+        f.write_bytes(b"y" * (cap - 1))
+        result = read_file(str(f))
+        assert result["truncated"] is False
+        assert len(result["content"]) == cap - 1
+
 
 class TestWriteFile:
     def test_write_creates_file(self, tmp_path):
@@ -61,6 +85,21 @@ class TestListDir:
         from agent_windows.core.filesystem import list_dir
         with pytest.raises(FileNotFoundError):
             list_dir("C:\\nonexistent_dir_xyz")
+
+    def test_list_huge_dir_truncated(self, tmp_path):
+        """A directory with more than MAX_LIST_ENTRIES is truncated, and the full
+        total is still reported in count. (SEC3-03)"""
+        from agent_windows.core import filesystem
+        from agent_windows.core.filesystem import list_dir
+        cap = filesystem.MAX_LIST_ENTRIES
+        for i in range(cap + 50):
+            (tmp_path / f"f{i}.txt").write_text("x", encoding="utf-8")
+        result = list_dir(str(tmp_path))
+        assert result["truncated"] is True
+        assert result["count"] == cap + 50  # real total
+        # output lists only the first `cap` entries (plus header/notice lines)
+        listed = [l for l in result["output"].splitlines() if l.startswith("  ")]
+        assert len(listed) == cap
 
 
 class TestPathBlacklist:

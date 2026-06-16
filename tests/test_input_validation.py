@@ -171,3 +171,20 @@ class TestAppResizeValidation:
         """bool is an int subclass; width=True must not pass as 1."""
         with pytest.raises(ValueError, match="positive integer"):
             HANDLERS["app_resize"]({"name_or_title": "w", "width": True, "height": 600})
+
+
+# ── type text length cap (SEC3-05) ────────────────────────────────────
+
+
+class TestTypeTextLength:
+    def test_text_under_cap_passes(self):
+        from agent_windows.daemon.handlers import input as input_mod
+        with patch("agent_windows.core.input_controller.type_text"):
+            HANDLERS["type"]({"text": "x" * input_mod.MAX_TYPE_TEXT_LEN})
+
+    def test_text_over_cap_rejected(self):
+        """type_text sleeps per char (~0.02s); an oversized string would block the
+        single STA worker for hours. Reject it instead. (SEC3-05)"""
+        from agent_windows.daemon.handlers import input as input_mod
+        with pytest.raises(ValueError, match="exceeds the"):
+            HANDLERS["type"]({"text": "x" * (input_mod.MAX_TYPE_TEXT_LEN + 1)})

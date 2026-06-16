@@ -7,6 +7,14 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# DoS bounds: cap single-read size and directory-listing length so a multi-GB
+# file or a directory with millions of entries can't exhaust daemon memory.
+# The IPC message cap (ipc/pipe.py) already truncates the serialized response,
+# but read_file/list_dir materialize the full payload in-process first.
+# (SEC3-03)
+MAX_READ_BYTES = 5 * 1024 * 1024  # 5 MiB
+MAX_LIST_ENTRIES = 5000
+
 # Path blacklist: match by path component to deny access to sensitive
 # directories and files. Each entry is a tuple: (match pattern, description)
 #   "part"   — matches any single component in the path (e.g. ".ssh" matches C:\Users\x\.ssh\config)
@@ -188,24 +196,39 @@ def validate_executable_path(path: str) -> None:
 
 
 def read_file(path: str) -> dict[str, Any]:
-    """Read a file and return its contents."""
+    """Read a file and return its contents.
+
+    Capped at ``MAX_READ_BYTES`` (5 MiB) to bound daemon memory — a larger file
+    is truncated with a notice rather than read whole. (SEC3-03)
+    """
     p = _validate_path(path)
     if not p.exists():
         raise FileNotFoundError(f"File not found: {path}")
     if p.is_dir():
         raise ValueError(f"Path is a directory, not a file: {path}")
 
+    size = p.stat().st_size
+    truncated = size > MAX_READ_BYTES
+
     try:
-        content = p.read_text(encoding="utf-8", errors="replace")
+        if truncated:
+            # Read only the leading slice to avoid loading a multi-GB file whole.
+            # errors="replace" means decode cannot raise; binary bytes become U+FFFD.
+            with p.open("rb") as f:
+                raw = f.read(MAX_READ_BYTES)
+            content = raw.decode("utf-8", errors="replace")
+        else:
+            content = p.read_text(encoding="utf-8", errors="replace")
     except UnicodeDecodeError:
         content = p.read_bytes()
         content = f"[Binary file, {len(content)} bytes]"
 
-    size = p.stat().st_size
+    note = f"\n\n[Truncated: file is {size} bytes, showed first {MAX_READ_BYTES}]" if truncated else ""
     return {
-        "output": f"## File Read\nPath: {p}\nSize: {size} bytes\n---\n{content}",
+        "output": f"## File Read\nPath: {p}\nSize: {size} bytes\n---\n{content}{note}",
         "content": content,
         "size": size,
+        "truncated": truncated,
     }
 
 
@@ -218,7 +241,11 @@ def write_file(path: str, content: str) -> dict[str, Any]:
 
 
 def list_dir(path: str) -> dict[str, Any]:
-    """List directory contents."""
+    """List directory contents.
+
+    Capped at ``MAX_LIST_ENTRIES`` so a directory with millions of entries can't
+    exhaust daemon memory. (SEC3-03)
+    """
     p = _validate_path(path)
     if not p.exists():
         raise FileNotFoundError(f"Directory not found: {path}")
@@ -226,7 +253,13 @@ def list_dir(path: str) -> dict[str, Any]:
         raise ValueError(f"Path is not a directory: {path}")
 
     entries = []
+    total = 0
+    truncated = False
     for entry in sorted(p.iterdir()):
+        total += 1
+        if len(entries) >= MAX_LIST_ENTRIES:
+            truncated = True
+            continue  # keep counting for the total, but stop formatting
         if entry.is_dir():
             entries.append(f"  {entry.name}/")
         else:
@@ -234,7 +267,9 @@ def list_dir(path: str) -> dict[str, Any]:
             entries.append(f"  {entry.name} ({size} bytes)")
 
     listing = "\n".join(entries) if entries else "(empty)"
+    note = f"\n\n[Truncated: directory has {total} entries, showed first {MAX_LIST_ENTRIES}]" if truncated else ""
     return {
-        "output": f"## Directory Listing\nPath: {p}\n---\n{listing}",
-        "count": len(entries),
+        "output": f"## Directory Listing\nPath: {p}\n---\n{listing}{note}",
+        "count": total,
+        "truncated": truncated,
     }

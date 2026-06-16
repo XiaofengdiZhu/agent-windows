@@ -5,6 +5,11 @@ from typing import Any
 from agent_windows.daemon.router import handler, require
 
 
+# DoS bound: type_text sleeps per character (default 0.02s), so a 10MB string
+# would block the single STA worker for ~56 hours. Cap the text length. (SEC3-05)
+MAX_TYPE_TEXT_LEN = 10000
+
+
 def _coords(params: dict) -> tuple[int, int]:
     """Extract and validate the (x, y) coordinates from params.
 
@@ -79,6 +84,9 @@ def _type(params: dict) -> dict[str, Any]:
     )
 
     text = require(params, "text", str)
+    if len(text) > MAX_TYPE_TEXT_LEN:
+        raise ValueError(
+            f"text length {len(text)} exceeds the {MAX_TYPE_TEXT_LEN}-character maximum")
     at_x = params.get("at_x")
     at_y = params.get("at_y")
     enter = params.get("enter", False)

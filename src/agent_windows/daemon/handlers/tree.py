@@ -5,6 +5,12 @@ from typing import Any
 
 from agent_windows.daemon.router import handler
 
+# DoS bound: ``wait`` sleeps/polls on the single STA worker thread, so an
+# unbounded ``seconds``/``timeout`` (e.g. 999999) blocks all other clients for
+# the duration — the 120s ``submit`` timeout only reports to the caller, it
+# doesn't interrupt the running sleep. Cap both at 5 minutes. (SEC3-01)
+MAX_WAIT_SECONDS = 300
+
 
 @handler("snapshot")
 def _snapshot(params: dict) -> dict[str, Any]:
@@ -121,6 +127,16 @@ def _wait(params: dict) -> dict[str, Any]:
     selector = params.get("selector", "")
     text = params.get("text", "")
     seconds = float(params.get("seconds", 0))
+
+    # SEC3-01: clamp both bounds so a single wait can't monopolize the STA
+    # worker. Values above the cap are rejected (not silently truncated) so the
+    # caller knows the limit applied.
+    if timeout > MAX_WAIT_SECONDS:
+        raise ValueError(
+            f"timeout {timeout}s exceeds the {MAX_WAIT_SECONDS}s maximum")
+    if seconds > MAX_WAIT_SECONDS:
+        raise ValueError(
+            f"seconds {seconds}s exceeds the {MAX_WAIT_SECONDS}s maximum")
 
     poll_interval = float(params.get("interval", 0)) or (
         load_config().get("wait", {}).get("poll_interval", 0.5)

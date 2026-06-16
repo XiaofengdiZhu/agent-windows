@@ -208,6 +208,41 @@ def test_wait_check_no_args():
         handler({})
 
 
+# ── wait: DoS bounds (SEC3-01) ───────────────────────────────────────
+
+
+def test_wait_seconds_over_cap_rejected():
+    """wait seconds exceeding MAX_WAIT_SECONDS is rejected, not silently run
+    (protects the single STA worker from an 11-day sleep)."""
+    from agent_windows.daemon.router import HANDLERS
+    from agent_windows.daemon.handlers import tree as tree_mod
+
+    with pytest.raises(ValueError, match="exceeds the"):
+        HANDLERS["wait"]({"seconds": tree_mod.MAX_WAIT_SECONDS + 1})
+
+
+def test_wait_timeout_over_cap_rejected():
+    """wait timeout exceeding MAX_WAIT_SECONDS is rejected."""
+    from agent_windows.daemon.router import HANDLERS
+    from agent_windows.daemon.handlers import tree as tree_mod
+
+    with pytest.raises(ValueError, match="exceeds the"):
+        HANDLERS["wait"]({
+            "selector": "@e1",
+            "timeout": tree_mod.MAX_WAIT_SECONDS + 1,
+        })
+
+
+def test_wait_seconds_at_cap_allowed():
+    """The exact cap value is accepted (boundary)."""
+    from agent_windows.daemon.router import HANDLERS
+    from agent_windows.daemon.handlers import tree as tree_mod
+
+    with patch("agent_windows.daemon.handlers.tree.time") as mock_time:
+        mock_time.time.side_effect = [0.0, 1.0]
+        HANDLERS["wait"]({"seconds": tree_mod.MAX_WAIT_SECONDS})
+
+
 # ── CLI wait: client-side polling (M-28) ──────────────────────────────
 
 
