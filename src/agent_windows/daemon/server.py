@@ -478,8 +478,38 @@ def _shutdown_daemon(state):
     logger.info("Daemon stopped")
 
 
+def _detach_console() -> None:
+    """Detach the daemon from its hosting console so no conhost window stays open.
+
+    The daemon is spawned with ``DETACHED_PROCESS``, but a venv ``python.exe``
+    is a trampoline that re-execs the real interpreter via its own
+    ``CreateProcess`` call — that re-exec does not propagate the detach flags
+    (and ``CREATE_NO_WINDOW`` is silently ignored whenever ``DETACHED_PROCESS``
+    is set, so adding it to the launcher buys nothing). The real interpreter
+    therefore lands without a parent console and Windows attaches a fresh
+    ``conhost.exe`` to it, which renders as a persistent visible window titled
+    with the venv path. Calling ``FreeConsole`` here drops that attachment
+    regardless of how the process was launched, closing the window.
+
+    Skipped under ``--debug``: debug mode streams logs to stderr (see
+    ``_setup_logging``), which needs the console, and the user is typically
+    watching that terminal anyway.
+    """
+    if "--debug" in sys.argv:
+        return
+    # Runs before _setup_logging, so the logger has no handlers yet — keep this
+    # silent on failure. FreeConsole failing is non-fatal (worst case: a
+    # lingering window), and it only fails when there is no console to free,
+    # which is itself the desired state.
+    try:
+        ctypes.windll.kernel32.FreeConsole()
+    except Exception:
+        pass
+
+
 def run_daemon() -> None:
     """Daemon entry point -- orchestrates init, worker startup, main loop, and shutdown."""
+    _detach_console()
     state = _init_daemon_state()
 
     if not _start_workers(state):
