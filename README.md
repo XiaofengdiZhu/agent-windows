@@ -4,9 +4,27 @@ Windows Computer-Use CLI for AI Agents. Provides desktop screenshot, UIA accessi
 
 ## Install
 
+Recommended — adds `agent-windows` to your PATH as a persistent command:
+
+```bash
+uv tool install agent-windows
+```
+
+One-off trial (runs without installing):
+
+```bash
+uvx agent-windows observe
+```
+
+> **Why `uv tool install` over `uvx` for regular use:** the daemon is long-lived (30 min idle timeout) and auto-restarts when its version no longer matches the CLI's. `uv tool install` pins both versions together; `uvx` runs from a cache that can be refreshed (new release, cache expiry, `uvx -U`) and silently bump the CLI, which triggers a daemon restart that drops any in-flight UIA state. If you see the daemon restarting on every few calls under `uvx`, that's the cause — install it with `uv tool install` instead.
+
+From source (a checkout of this repo):
+
 ```bash
 uv sync
+uv run agent-windows ...
 ```
+
 
 ## Quick Start
 
@@ -24,13 +42,15 @@ agent-windows snapshot
 agent-windows observe
 
 # Visual grounding (locate element by description)
-agent-windows ground "任务栏"
+agent-windows ground "the taskbar"
+# Single-pass: one API call, ~2x faster, lower precision (overrides config grounding.single_pass)
+agent-windows ground "the taskbar" --single-pass
 
 # Detect multiple targets (returns bounding boxes)
-agent-windows detect "桌面上的 PDF 文件图标"
+agent-windows detect "PDF file icons on the desktop"
 
 # Visual Q&A (custom prompt + screenshot)
-agent-windows ask-vision "屏幕上有哪些窗口？是否有错误弹窗？"
+agent-windows ask-vision "Which windows are open? Is there an error dialog?"
 
 # Mouse/keyboard
 agent-windows click 500 300
@@ -57,7 +77,7 @@ CLI (Typer, ~5ms) → Named Pipe IPC → Daemon (COM STA, ~20ms response)
 - **IPC**: Named Pipe with per-user DACL security. JSON-RPC 2.0 protocol.
 - **Auto-start**: First CLI call starts daemon automatically. Idle timeout (30min) stops it. Graceful shutdown via overlapped I/O.
 - **Caching**: UIA tree traversal (2s TTL), config loading (mtime-based), API clients, and screenshot backends are all cached for performance.
-- **Concurrency (serial by design)**: The daemon handles **one command at a time** — the named pipe is single-instance and the I/O thread blocks until each command finishes. This is intentional, not a limitation to fix: UIA/COM is STA-bound and `SendInput` mutates global GUI state, so concurrent commands would race and corrupt automation. A single client is naturally serial anyway (request → wait for response → reconnect), so it costs nothing in normal use. The one caveat: multiple agents sharing one daemon serialize against each other — a slow `shell` (~30s) or vision API call (2-10s) blocks the rest. Concurrent multi-client use is not supported; run separate daemon instances for isolation.
+- **Concurrency (serial by design)**: The daemon handles **one command at a time** — the named pipe is single-instance and the I/O thread blocks until each command finishes. This is intentional, not a limitation to fix: UIA/COM is STA-bound and `SendInput` mutates global GUI state, so concurrent commands would race and corrupt automation. A single client is naturally serial anyway (request → wait for response → reconnect), so it costs nothing in normal use. The one caveat: **multiple agents sharing one daemon serialize against each other** — a slow `shell` (~30s) or vision API call (2-10s) blocks the rest. Concurrent multi-client use is not supported; for isolation between agents, run separate daemon instances. Because the named-pipe path is per-user (`~/.agent-windows/`), the simplest isolation is **one Windows user account per agent** — each gets its own daemon, config, and screenshot directory with no contention. On a single account, stagger agent activity or accept the serialization.
 
 ## Commands
 
@@ -67,7 +87,7 @@ CLI (Typer, ~5ms) → Named Pipe IPC → Daemon (COM STA, ~20ms response)
 | `observe [--snapshot] [--screenshot] [--ground DESC]` | Combined observation |
 | `snapshot` | UIA accessibility tree |
 | `screenshot [-o PATH] [-s @eN] [--bbox X1,Y1,X2,Y2]` | Screen capture (optionally cropped to UIA element or region) |
-| `ground DESCRIPTION` | Visual coordinate grounding |
+| `ground DESCRIPTION [--single-pass]` | Visual coordinate grounding (`--single-pass`: 1 API call, ~2x faster, lower precision) |
 | `detect DESCRIPTION [-i IMAGE] [--max-targets N]` | Multi-target bounding box detection |
 | `ask-vision PROMPT [-i IMAGE] [-m MODEL]` | Free-form visual Q&A |
 | `highlight X1 Y1 X2 Y2 [-l LABEL] [-c COLOR]` | Highlight region on screenshot |
@@ -183,7 +203,9 @@ Some actions are buried in 2nd- or 3rd-level menus. Buttons may show only icons 
 
 - Windows 10/11
 - Python 3.13+
-- Dependencies: typer, comtypes, pywin32, Pillow, mss, openai
+- Dependencies: typer, comtypes, pywin32 (≥308), Pillow, mss, openai
+
+> **pywin32 note**: modern pywin32 wheels (≥308) self-configure their DLLs via a `.pth` bootstrap at install time, so `uv tool install` / `uvx` works out of the box. If you ever hit `pythoncom3xx.dll` / `pywintypes3xx.dll` not found on an older pywin32 or a manually-managed environment, run `python Scripts\pywin32_postinstall.py -install` from your install prefix.
 
 ## License
 

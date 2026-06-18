@@ -1,8 +1,4 @@
----
-name: configuration
-description: "Configuration reference for agent-windows: config file structure, all settings with defaults, environment variables, daemon management, and screenshot storage. Read when you need to customize behavior or troubleshoot config issues."
-allowed-tools: Bash(agent-windows:*)
----
+<!-- Reference doc — loaded on demand via the table in SKILL.md, not discovered as a standalone skill. -->
 
 # Configuration Reference
 

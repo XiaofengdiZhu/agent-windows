@@ -1,8 +1,4 @@
----
-name: commands
-description: "Complete command reference for agent-windows. Every command's syntax, parameters, defaults, output format, and examples. Consult when you need exact parameter names or output shapes."
-allowed-tools: Bash(agent-windows:*)
----
+<!-- Reference doc — loaded on demand via the table in SKILL.md, not discovered as a standalone skill. -->
 
 # Command Reference
 
@@ -69,11 +65,13 @@ Visual model grounding: locate element coordinates from a description.
 
 ```bash
 agent-windows ground "Submit button"
+agent-windows ground "Submit button" --single-pass   # 1 API call, ~2x faster, lower precision
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `description` | str | **required** | Element description to locate |
+| `--single-pass` | bool | `false` | Skip the fine-pass API call: one network round-trip instead of two (~2x faster, ~half the cost) at the cost of precision — coarse coordinate only, no sub-element refinement. Overrides config `grounding.single_pass` for this call. |
 
 **Output**: `{output, x, y, confidence, method, screenshot_path}`
 
@@ -530,9 +528,13 @@ echo '[{"method":"snapshot"}]' | agent-windows batch -
 |-----------|------|---------|-------------|
 | `commands_json` | str | `""` | JSON array of commands, or `-` for stdin |
 | `--file` / `-f` | str | `""` | Read commands from JSON file |
-| `--stop-on-error` | bool | `true` | Stop on first error |
-| `--continue-on-error` | bool | `false` | Continue after errors |
 | `--delay` / `-d` | float | `0.0` | Delay in seconds between commands |
+
+Error handling is a single boolean toggle: `--stop-on-error` (default) or `--continue-on-error`. These are a Typer boolean pair (`stop_on_error`), not two independent flags — pass one or the other:
+
+```bash
+agent-windows batch --file cmds.json --continue-on-error
+```
 
 Each command: `{"method": "<name>", "params": {<optional>}}`. Nested batch is forbidden.
 

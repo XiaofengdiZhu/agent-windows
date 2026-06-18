@@ -1,8 +1,4 @@
----
-name: troubleshooting
-description: "Troubleshooting guide for agent-windows: common failures, error codes, recovery steps, and debug mode. Read when a command returns an error or behaves unexpectedly."
-allowed-tools: Bash(agent-windows:*)
----
+<!-- Reference doc — loaded on demand via the table in SKILL.md, not discovered as a standalone skill. -->
 
 # Troubleshooting
 
@@ -40,6 +36,22 @@ agent-windows daemon start
 agent-windows daemon stop
 agent-windows daemon start
 ```
+
+### Daemon keeps restarting (uvx version drift)
+
+**Symptom**: you run commands via `uvx agent-windows ...` and the daemon restarts itself on (seemingly) every few invocations, dropping UIA state and forcing re-`observe`.
+
+**Cause**: `uvx` runs from an isolated, cached environment. When that cache gets refreshed (a new release was published, the cache expired, you ran `uvx -U`, etc.), the CLI version you just invoked no longer matches the version of the long-lived daemon that's still running. The version check (`check_version_mismatch`) sees the drift and restarts the daemon.
+
+**Recovery**: switch to a persistent install so CLI and daemon versions are pinned together:
+
+```bash
+uv tool install agent-windows
+agent-windows daemon stop       # let the new install's daemon take over
+agent-windows observe
+```
+
+Reserve `uvx agent-windows ...` for one-off trials, not regular use.
 
 ### Connection refused
 
@@ -99,7 +111,7 @@ agent-windows daemon start
 4. Network connectivity
 
 **Recovery**:
-1. Check API key: `agent-windows config show | grep api_key`
+1. Check API key: `agent-windows config show` and look for the `grounding.api_key` line (or `config get grounding.api_key`)
 2. Set the key: `export AGENT_WINDOWS_GROUNDING_API_KEY="sk-..."` or `agent-windows config set grounding.api_key "sk-..."`
 3. Test with a simple call: `agent-windows ground "desktop"`
 4. If timeout, increase: `agent-windows config set grounding.timeout 60`

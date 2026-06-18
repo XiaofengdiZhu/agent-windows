@@ -1,8 +1,4 @@
----
-name: vision
-description: "Visual tools reference for agent-windows: ground, detect, and ask-vision. Covers when to use each, how coordinates flow from model to physical pixels, vision model configuration, and the mixed UIA + vision strategy."
-allowed-tools: Bash(agent-windows:*)
----
+<!-- Reference doc — loaded on demand via the table in SKILL.md, not discovered as a standalone skill. -->
 
 # Visual Tools Reference
 

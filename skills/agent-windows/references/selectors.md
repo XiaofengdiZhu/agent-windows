@@ -1,8 +1,4 @@
----
-name: selectors
-description: "Deep dive on the @eN element selector system, snapshot output format, coordinate extraction, and ref lifecycle in agent-windows. Read when you need to understand how to go from snapshot output to action coordinates."
-allowed-tools: Bash(agent-windows:*)
----
+<!-- Reference doc — loaded on demand via the table in SKILL.md, not discovered as a standalone skill. -->
 
 # Selectors and Coordinates
 
@@ -19,32 +15,43 @@ The index is positional — `@e3` always means "the third interactive element in
 
 ## Snapshot Output Format
 
-A typical `observe` or `snapshot` output has four sections:
+A typical `observe` or `snapshot` output has four sections. Below is a real `observe --snapshot` run (File Explorer on Windows) — note the non-round coordinates, Chinese names, and multi-window layout you'll commonly see in practice:
 
 ```
 ## Desktop State
-Cursor: (960, 540)
-Resolution: 1920x1080
+Cursor: (2305, 1188)
+Resolution: 3072x1920
 Displays: 1
-Active Window: "Untitled - Notepad" (NOTEPAD)
+Active Window: "ZCode" (ZCode.exe)
 
 ## Windows
 | # | Title | App | Status | Position |
 |---|-------|-----|--------|----------|
-| 1 | Untitled - Notepad | NOTEPAD | active | (100,100,900,700) |
+| 1 | ZCode | ZCode.exe | active | (336,112,2736,1712) |
+| 2 | references - 文件资源管理器 | explorer.exe |  | (0,0,3072,1824) |
+| 3 | 设置 | SystemSettings.exe |  | (0,13,3072,1837) |
 
 ## Accessibility Tree
-Window "Untitled - Notepad" (NOTEPAD) [active]
-  ├─ Edit "" (100,150,900,680) [focused] [interactive]
-  ├─ MenuItem "File" (0,0,37,32) [interactive]
-  ├─ MenuItem "Edit" (37,0,74,32) [interactive]
+Desktop
+  └─ Window "ZCode" (ZCode.exe) [active]
+    ├─ Button "最小化" (2460,114,2550,208) [interactive]
+    ├─ Button "最大化" (2550,114,2642,208) [interactive]
+    ├─ Button "关闭" (2642,114,2734,208) [interactive]
+    └─ Document "ZCode" (336,112,2736,1712) [interactive]
+  └─ Window "references - 文件资源管理器" (explorer.exe)
+    ├─ Button "共享" (2503,848,2647,906) [interactive]
+    ├─ Button "属性" (2503,1228,2647,1286) [interactive]
+    └─ ListItem "selectors.md" (361,450,1711,498) [interactive]
 
 ## Interactive Elements
-| Ref | Type     | Name | Position          | State   |
-|-----|----------|------|-------------------|---------|
-| @e1 | Edit     |      | (100,150,900,680) | focused |
-| @e2 | MenuItem | File | (0,0,37,32)       |         |
-| @e3 | MenuItem | Edit | (37,0,74,32)      |         |
+| Ref | Type | Name | Position | State |
+|-----|------|------|----------|-------|
+| @e1 | Button | 最小化 | (2460,114,2550,208) |  |
+| @e2 | Button | 最大化 | (2550,114,2642,208) |  |
+| @e3 | Button | 关闭 | (2642,114,2734,208) |  |
+| @e4 | Document | ZCode | (336,112,2736,1712) |  |
+| @e5 | Button | 共享 | (2503,848,2647,906) |  |
+| @e6 | Button | 属性 | (2503,1228,2647,1286) |  |
 ```
 
 ### Section Breakdown
@@ -75,16 +82,16 @@ Most input commands (`click`, `type`, `scroll`, etc.) require **pixel coordinate
 3. Compute the center: `cx = (left + right) // 2`, `cy = (top + bottom) // 2`.
 4. Pass to the command: `agent-windows click cx cy`.
 
-**Example**:
+**Example** (using the real snapshot above):
 
 ```
-| @e5 | Button | Submit | (400,350,500,385) |         |
+| @e5 | Button | 共享 | (2503,848,2647,906) |  |
 ```
 
-Center: `cx = (400+500)//2 = 450`, `cy = (350+385)//2 = 367`.
+Center: `cx = (2503+2647)//2 = 2575`, `cy = (848+906)//2 = 877`.
 
 ```bash
-agent-windows click 450 367
+agent-windows click 2575 877
 ```
 
 ## Commands That Accept @eN Directly

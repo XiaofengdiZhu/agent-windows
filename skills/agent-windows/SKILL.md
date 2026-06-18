@@ -2,14 +2,19 @@
 name: agent-windows
 description: "Windows desktop automation CLI for AI agents. Use when the user needs to interact with the Windows desktop: open apps, read the screen via UIA accessibility tree or screenshots, click / type / press shortcut keys / scroll / drag, execute shell commands, manage files, processes, and clipboard, or automate any Windows GUI task. Triggers include requests to open an application, click a button, type text, take a screenshot, read screen content, manage windows, run PowerShell, or automate any desktop workflow on Windows."
 allowed-tools: Bash(agent-windows:*)
-hidden: true
 ---
 
 # agent-windows
 
 Windows Computer-Use CLI for AI Agents. Fast Client-Daemon architecture with UIA accessibility tree traversal, visual coordinate grounding, and mouse/keyboard automation.
 
-Install: `uv sync` (or `pip install agent-windows`)
+Install (recommended): `uv tool install agent-windows` — adds `agent-windows` to your PATH as a persistent command. This is required by the daemon architecture: the CLI↔daemon version check (see below) stays stable across calls.
+
+One-off trial: `uvx agent-windows observe` — runs without installing. Fine for trying it out, but the daemon may auto-restart if uvx's cached version drifts (e.g. after a new release); use `uv tool install` for regular use.
+
+From source (a checkout of this repo): `uv sync`, then `uv run agent-windows ...`. Until the package is on PyPI, this is the install path.
+
+> **Why install matters here:** the daemon is long-lived (30 min idle timeout) and auto-restarts when its version no longer matches the CLI's. With `uv tool install` both versions are pinned and never drift; with `uvx` a cache refresh can silently bump the CLI and trigger that restart, dropping any in-flight UIA state.
 
 ## Architecture
 
