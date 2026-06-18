@@ -42,7 +42,8 @@ pub fn print_text(text: &str) {
     write_stdout(text);
 }
 
-/// Print to stderr (errors).
+/// Print to stderr (errors). Text mode only — `--format json` callers use
+/// `print_error_json` so errors stay on stdout as parseable JSON.
 pub fn print_error(text: &str) {
     let mut out = text.to_string();
     if !out.ends_with('\n') {
@@ -50,6 +51,41 @@ pub fn print_error(text: &str) {
     }
     let bytes = out.as_bytes();
     write_handle(stderr_handle(), bytes);
+}
+
+/// Print an error as JSON to **stdout**, for `--format json` mode. Keeps the
+/// success/error contract uniform: every line on stdout is valid JSON, so an
+/// agent consumer never has to read stderr to detect a failure.
+///
+/// Produces `{"success":false,"error":"<msg>","type":"<error_type>"}`.
+///
+/// `error_type` is one of a closed set. See `report_error` in `main.rs` for
+/// the authoritative list and how callers choose it.
+pub fn print_error_json(msg: &str, error_type: &str) {
+    let escaped = json_escape(msg);
+    let line = format!(
+        "{{\"success\":false,\"error\":\"{}\",\"type\":\"{}\"}}",
+        escaped, error_type
+    );
+    write_stdout(&line);
+}
+
+/// Minimal JSON string escaper (avoids pulling in serde just to encode one
+/// message — the rest of this module writes pre-built JSON via serde_json).
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 8);
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// Render a JSON value as a flat string (mirrors Python's str() on the value).

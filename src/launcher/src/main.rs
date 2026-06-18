@@ -30,7 +30,11 @@ fn main() -> ExitCode {
     let action = match parse(&cmd_argv, &global) {
         Ok(a) => a,
         Err(e) => {
-            output::print_error(&e);
+            // Parse errors carry their own typed classification for the JSON
+            // `type` field (unknown_command / missing_argument / invalid_value
+            // / unknown_subcommand) so an agent consumer can pick a retry
+            // strategy without parsing free text.
+            report_error(e.message(), e.type_name(), &global);
             return ExitCode::from(1);
         }
     };
@@ -43,6 +47,33 @@ fn main() -> ExitCode {
         Action::Local(local) => run_local(local, &global),
         Action::Call { method, params } => run_call(&method, &params, &global),
         Action::Wait(spec) => run_wait(spec, &global),
+    }
+}
+
+/// Report an error honoring the output contract: in `--format json` mode every
+/// line on stdout must be JSON (including errors), so consumers read one
+/// stream; otherwise the human-readable text goes to stderr.
+///
+/// `error_type` is one of this **closed set** (the JSON `type` field an agent
+/// consumer switches on):
+///
+/// **Parse errors** (from `commands::ParseError::type_name`) — the caller
+/// passed bad arguments; retry by fixing the invocation, not the environment:
+///   - `unknown_command`    — top-level command not recognized
+///   - `unknown_subcommand` — a group's sub wasn't recognized (lists valid ones)
+///   - `missing_argument`   — a required positional/value was absent
+///   - `invalid_value`      — a value failed to parse (non-integer, bad format)
+///
+/// **Runtime errors** — something went wrong executing a valid command;
+///   - `daemon`  — daemon lifecycle/startup failure or a JSON-RPC error reply
+///   - `ipc`     — named-pipe transport failure (connect/send/recv)
+///   - `usage`   — `--no-daemon` unsupported by the launcher
+///   - `timeout` — a `wait` probe exceeded its timeout
+fn report_error(msg: &str, error_type: &str, global: &GlobalFlags) {
+    if global.format_json {
+        output::print_error_json(msg, error_type);
+    } else {
+        output::print_error(msg);
     }
 }
 
@@ -78,9 +109,11 @@ fn run_call(method: &str, params: &serde_json::Value, global: &GlobalFlags) -> E
     // --no-daemon isn't supported by the launcher (it needs the in-process
     // Python handlers). Route the user to the Python CLI.
     if global.no_daemon {
-        output::print_error(
+        report_error(
             "--no-daemon is not supported by the native launcher. \
              Use the Python CLI: agent-windows-python --no-daemon ...",
+            "usage",
+            global,
         );
         return ExitCode::from(1);
     }
@@ -88,7 +121,7 @@ fn run_call(method: &str, params: &serde_json::Value, global: &GlobalFlags) -> E
     let python = resolve_python_exe();
 
     if let Err(e) = daemon::ensure_daemon_running(&python, global.debug) {
-        output::print_error(&e);
+        report_error(&e, "daemon", global);
         return ExitCode::from(1);
     }
 
@@ -100,7 +133,7 @@ fn run_call(method: &str, params: &serde_json::Value, global: &GlobalFlags) -> E
             let parsed: serde_json::Value = match serde_json::from_str(&response) {
                 Ok(v) => v,
                 Err(e) => {
-                    output::print_error(&format!("invalid response from daemon: {}", e));
+                    report_error(&format!("invalid response from daemon: {}", e), "ipc", global);
                     return ExitCode::from(1);
                 }
             };
@@ -108,7 +141,7 @@ fn run_call(method: &str, params: &serde_json::Value, global: &GlobalFlags) -> E
             if let Some(err) = parsed.get("error") {
                 let code = err.get("code").and_then(|c| c.as_i64()).unwrap_or(0);
                 let msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("unknown error");
-                output::print_error(&format!("Daemon error [{}]: {}", code, msg));
+                report_error(&format!("Daemon error [{}]: {}", code, msg), "daemon", global);
                 return ExitCode::from(exit_code_for(code));
             }
             // Success → print result.
@@ -118,7 +151,7 @@ fn run_call(method: &str, params: &serde_json::Value, global: &GlobalFlags) -> E
             ExitCode::SUCCESS
         }
         Err(e) => {
-            output::print_error(&e);
+            report_error(&e, "ipc", global);
             ExitCode::from(1)
         }
     }
@@ -129,16 +162,18 @@ fn run_call(method: &str, params: &serde_json::Value, global: &GlobalFlags) -> E
 /// between, so the daemon's STA worker is never blocked for the wait duration.
 fn run_wait(spec: WaitSpec, global: &GlobalFlags) -> ExitCode {
     if global.no_daemon {
-        output::print_error(
+        report_error(
             "--no-daemon is not supported by the native launcher. \
              Use the Python CLI: agent-windows-python --no-daemon ...",
+            "usage",
+            global,
         );
         return ExitCode::from(1);
     }
 
     let python = resolve_python_exe();
     if let Err(e) = daemon::ensure_daemon_running(&python, global.debug) {
-        output::print_error(&e);
+        report_error(&e, "daemon", global);
         return ExitCode::from(1);
     }
 
@@ -192,22 +227,23 @@ fn run_wait(spec: WaitSpec, global: &GlobalFlags) -> ExitCode {
                         }
                     } else if let Some(err) = parsed.get("error") {
                         let msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("error");
-                        output::print_error(&format!("wait_check failed: {}", msg));
+                        report_error(&format!("wait_check failed: {}", msg), "daemon", global);
                         return ExitCode::from(1);
                     }
                 }
             }
             Err(e) => {
-                output::print_error(&format!("IPC error during wait: {}", e));
+                report_error(&format!("IPC error during wait: {}", e), "ipc", global);
                 return ExitCode::from(1);
             }
         }
 
         if start.elapsed().as_secs_f64() >= spec.timeout {
-            output::print_error(&format!(
-                "{} not found within {}s",
-                describe, spec.timeout
-            ));
+            report_error(
+                &format!("{} not found within {}s", describe, spec.timeout),
+                "timeout",
+                global,
+            );
             return ExitCode::from(1);
         }
         std::thread::sleep(std::time::Duration::from_secs_f64(poll));
@@ -217,7 +253,7 @@ fn run_wait(spec: WaitSpec, global: &GlobalFlags) -> ExitCode {
 /// Run a local action (daemon start/stop/status). These never hit the IPC pipe
 /// for start/status (they manage the process directly); stop sends a shutdown
 /// request.
-fn run_local(local: LocalAction, _global: &GlobalFlags) -> ExitCode {
+fn run_local(local: LocalAction, global: &GlobalFlags) -> ExitCode {
     match local {
         LocalAction::DaemonStart => {
             let python = resolve_python_exe();
@@ -227,7 +263,7 @@ fn run_local(local: LocalAction, _global: &GlobalFlags) -> ExitCode {
                     ExitCode::SUCCESS
                 }
                 Err(e) => {
-                    output::print_error(&e);
+                    report_error(&e, "daemon", global);
                     ExitCode::from(1)
                 }
             }
@@ -241,7 +277,7 @@ fn run_local(local: LocalAction, _global: &GlobalFlags) -> ExitCode {
                     ExitCode::SUCCESS
                 }
                 Err(e) => {
-                    output::print_error(&format!("Error stopping daemon: {}", e));
+                    report_error(&format!("Error stopping daemon: {}", e), "ipc", global);
                     ExitCode::from(1)
                 }
             }
@@ -268,7 +304,7 @@ fn run_local(local: LocalAction, _global: &GlobalFlags) -> ExitCode {
                 lines.push(format!("Tool version: {}", tool_version));
                 if version != tool_version {
                     lines.push(
-                        "⚠ Version mismatch (will auto-restart on next command)".into(),
+                        "⚠ Version mismatch — the next command will restart the daemon".into(),
                     );
                 }
             } else {

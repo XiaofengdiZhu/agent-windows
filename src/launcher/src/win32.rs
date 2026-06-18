@@ -11,7 +11,7 @@ use std::time::Duration;
 use windows_sys::Win32::{
     Foundation::{
         CloseHandle, GetLastError, ERROR_BROKEN_PIPE, ERROR_IO_PENDING, ERROR_NO_DATA,
-        FALSE, HANDLE, WAIT_TIMEOUT,
+        ERROR_PIPE_NOT_CONNECTED, FALSE, HANDLE, WAIT_TIMEOUT,
     },
     Storage::FileSystem::{ReadFile, WriteFile},
     System::{
@@ -152,13 +152,35 @@ fn complete_overlapped(
 }
 
 /// Map pipe-related Win32 errors to the same ConnectionError strings the
-/// Python client raises.
+/// Python client raises. Every message carries the winerror number so the IPC
+/// layer's `is_transient` classifier can match it deterministically.
 fn pipe_error(err: u32) -> String {
     match err {
-        ERROR_BROKEN_PIPE | ERROR_NO_DATA => {
-            "Daemon closed the connection without responding".into()
+        ERROR_BROKEN_PIPE | ERROR_NO_DATA | ERROR_PIPE_NOT_CONNECTED => {
+            format!("Daemon closed the connection without responding (winerror {})", err)
         }
         _ => format!("pipe I/O error (winerror {})", err),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pipe_error;
+
+    #[test]
+    fn broken_pipe_message_carries_winerror() {
+        // The IPC transient-retry classifier matches on "winerror <n>", so the
+        // human-readable text must embed it.
+        assert!(pipe_error(109).contains("winerror 109"));
+        assert!(pipe_error(232).contains("winerror 232"));
+        assert!(pipe_error(233).contains("winerror 233"));
+    }
+
+    #[test]
+    fn other_errors_use_generic_form() {
+        let m = pipe_error(6);
+        assert!(m.contains("winerror 6"));
+        assert!(!m.contains("closed the connection"));
     }
 }
 

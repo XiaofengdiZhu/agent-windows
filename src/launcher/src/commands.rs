@@ -8,7 +8,88 @@
 
 use serde_json::{json, Map, Value};
 
+/// A typed parse error. Carries both a machine-readable `type` (stable string
+/// for the JSON error contract, so an agent consumer can pick a retry strategy
+/// without parsing free text) and a human-readable message.
+///
+/// Mirrors agent-browser's `ParseError` enum. Variants:
+/// - `UnknownCommand`: the top-level command name wasn't recognized.
+/// - `UnknownSubcommand`: a group command's sub wasn't recognized; carries the
+///   list of valid subcommands so we can list them (#5).
+/// - `MissingArgument`: a required positional/value was absent.
+/// - `InvalidValue`: a value failed to parse (non-integer, bad format, …).
+#[derive(Debug)]
+pub struct ParseError {
+    kind: ErrorKind,
+    message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ErrorKind {
+    UnknownCommand,
+    UnknownSubcommand,
+    MissingArgument,
+    InvalidValue,
+}
+
+impl ParseError {
+    /// Stable machine-readable type tag for the JSON error contract.
+    pub fn type_name(&self) -> &'static str {
+        match self.kind {
+            ErrorKind::UnknownCommand => "unknown_command",
+            ErrorKind::UnknownSubcommand => "unknown_subcommand",
+            ErrorKind::MissingArgument => "missing_argument",
+            ErrorKind::InvalidValue => "invalid_value",
+        }
+    }
+
+    /// Human-readable message (text mode).
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+fn unknown_command(cmd: &str) -> ParseError {
+    ParseError {
+        kind: ErrorKind::UnknownCommand,
+        message: format!("Unknown command: {}. Run 'agent-windows --help'.", cmd),
+    }
+}
+
+fn unknown_subcommand(group: &str, sub: &str, valid: &[&str]) -> ParseError {
+    ParseError {
+        kind: ErrorKind::UnknownSubcommand,
+        message: format!(
+            "Unknown {} subcommand: {} (valid: {})",
+            group,
+            sub,
+            valid.join(", ")
+        ),
+    }
+}
+
+fn missing(message: impl Into<String>) -> ParseError {
+    ParseError {
+        kind: ErrorKind::MissingArgument,
+        message: message.into(),
+    }
+}
+
+fn invalid(message: impl Into<String>) -> ParseError {
+    ParseError {
+        kind: ErrorKind::InvalidValue,
+        message: message.into(),
+    }
+}
+
 /// Outcome of dispatching a parsed argv slice.
+#[derive(Debug)]
 pub enum Action {
     /// Send this JSON-RPC request to the daemon.
     Call { method: String, params: Value },
@@ -23,17 +104,20 @@ pub enum Action {
 }
 
 /// Parameters for the `wait` polling modes (selector or text).
+#[derive(Debug)]
 pub struct WaitSpec {
     pub probe: WaitProbe,
     pub timeout: f64,
     pub interval: f64,
 }
 
+#[derive(Debug)]
 pub enum WaitProbe {
     Selector(String),
     Text(String),
 }
 
+#[derive(Debug)]
 pub enum LocalAction {
     DaemonStart,
     DaemonStop,
@@ -45,7 +129,7 @@ pub enum LocalAction {
 /// This is the heart of the launcher — it turns raw argv into either a daemon
 /// call or a local action. Mirrors the Typer command structure in
 /// `cli/commands/*.py`.
-pub fn parse(argv: &[String], global: &GlobalFlags) -> Result<Action, String> {
+pub fn parse(argv: &[String], global: &GlobalFlags) -> Result<Action, ParseError> {
     if argv.is_empty() {
         return Ok(Action::Help);
     }
@@ -59,8 +143,10 @@ pub fn parse(argv: &[String], global: &GlobalFlags) -> Result<Action, String> {
     match cmd {
         // ── Local commands ────────────────────────────────────────────────
         "daemon" => parse_daemon(rest),
-        "config" => Err("config commands are not yet supported by the launcher — \
-                         use the Python CLI (agent-windows-python)".into()),
+        "config" => Err(unknown_command_full(
+            "config commands are not yet supported by the launcher — \
+             use the Python CLI (agent-windows-python)",
+        )),
 
         // ── Observation ───────────────────────────────────────────────────
         "observe" => parse_observe(rest),
@@ -126,7 +212,16 @@ pub fn parse(argv: &[String], global: &GlobalFlags) -> Result<Action, String> {
         // ── Diagnostic ────────────────────────────────────────────────────
         "ping" => Ok(Action::Call { method: "ping".into(), params: json!({}) }),
 
-        _ => Err(format!("Unknown command: {}. Run 'agent-windows --help'.", cmd)),
+        _ => Err(unknown_command(cmd)),
+    }
+}
+
+/// A "not supported by the launcher" message — still typed as unknown_command
+/// since from the agent's perspective the command isn't usable here.
+fn unknown_command_full(msg: &str) -> ParseError {
+    ParseError {
+        kind: ErrorKind::UnknownCommand,
+        message: msg.into(),
     }
 }
 
@@ -205,29 +300,29 @@ fn has_flag(rest: &[String], names: &[&str]) -> bool {
     rest.iter().any(|a| forms.contains(a))
 }
 
-fn require_positional(rest: &[String], idx: usize, name: &str) -> Result<String, String> {
+fn require_positional(rest: &[String], idx: usize, name: &str) -> Result<String, ParseError> {
     let (pos, _) = split_args(rest);
     pos.get(idx)
         .map(|s| s.to_string())
-        .ok_or_else(|| format!("Missing required positional argument: {}", name))
+        .ok_or_else(|| missing(format!("Missing required positional argument: {}", name)))
 }
 
-fn parse_xy(rest: &[String], method: &str) -> Result<Action, String> {
+fn parse_xy(rest: &[String], method: &str) -> Result<Action, ParseError> {
     let x: i64 = require_positional(rest, 0, "x")?.parse()
-        .map_err(|_| "x must be an integer".to_string())?;
+        .map_err(|_| invalid("x must be an integer"))?;
     let y: i64 = require_positional(rest, 1, "y")?.parse()
-        .map_err(|_| "y must be an integer".to_string())?;
+        .map_err(|_| invalid("y must be an integer"))?;
     Ok(Action::Call {
         method: method.into(),
         params: json!({ "x": x, "y": y }),
     })
 }
 
-fn parse_xy_opts(rest: &[String], method: &str, flags: &[&str]) -> Result<Action, String> {
+fn parse_xy_opts(rest: &[String], method: &str, flags: &[&str]) -> Result<Action, ParseError> {
     let x: i64 = require_positional(rest, 0, "x")?.parse()
-        .map_err(|_| "x must be an integer".to_string())?;
+        .map_err(|_| invalid("x must be an integer"))?;
     let y: i64 = require_positional(rest, 1, "y")?.parse()
-        .map_err(|_| "y must be an integer".to_string())?;
+        .map_err(|_| invalid("y must be an integer"))?;
     let mut params = Map::new();
     params.insert("x".into(), x.into());
     params.insert("y".into(), y.into());
@@ -238,11 +333,11 @@ fn parse_xy_opts(rest: &[String], method: &str, flags: &[&str]) -> Result<Action
     Ok(Action::Call { method: method.into(), params: Value::Object(params) })
 }
 
-fn parse_mouse_button(rest: &[String], method: &str) -> Result<Action, String> {
+fn parse_mouse_button(rest: &[String], method: &str) -> Result<Action, ParseError> {
     let x: i64 = require_positional(rest, 0, "x")?.parse()
-        .map_err(|_| "x must be an integer".to_string())?;
+        .map_err(|_| invalid("x must be an integer"))?;
     let y: i64 = require_positional(rest, 1, "y")?.parse()
-        .map_err(|_| "y must be an integer".to_string())?;
+        .map_err(|_| invalid("y must be an integer"))?;
     let button = opt_value(rest, &["button"]).unwrap_or("left");
     Ok(Action::Call {
         method: method.into(),
@@ -250,15 +345,15 @@ fn parse_mouse_button(rest: &[String], method: &str) -> Result<Action, String> {
     })
 }
 
-fn parse_drag(rest: &[String]) -> Result<Action, String> {
+fn parse_drag(rest: &[String]) -> Result<Action, ParseError> {
     let x1: i64 = require_positional(rest, 0, "x1")?.parse()
-        .map_err(|_| "x1 must be an integer".to_string())?;
+        .map_err(|_| invalid("x1 must be an integer"))?;
     let y1: i64 = require_positional(rest, 1, "y1")?.parse()
-        .map_err(|_| "y1 must be an integer".to_string())?;
+        .map_err(|_| invalid("y1 must be an integer"))?;
     let x2: i64 = require_positional(rest, 2, "x2")?.parse()
-        .map_err(|_| "x2 must be an integer".to_string())?;
+        .map_err(|_| invalid("x2 must be an integer"))?;
     let y2: i64 = require_positional(rest, 3, "y2")?.parse()
-        .map_err(|_| "y2 must be an integer".to_string())?;
+        .map_err(|_| invalid("y2 must be an integer"))?;
     let mut params = Map::new();
     params.insert("x1".into(), x1.into());
     params.insert("y1".into(), y1.into());
@@ -268,11 +363,11 @@ fn parse_drag(rest: &[String]) -> Result<Action, String> {
     Ok(Action::Call { method: "drag".into(), params: Value::Object(params) })
 }
 
-fn parse_scroll(rest: &[String]) -> Result<Action, String> {
+fn parse_scroll(rest: &[String]) -> Result<Action, ParseError> {
     let x: i64 = require_positional(rest, 0, "x")?.parse()
-        .map_err(|_| "x must be an integer".to_string())?;
+        .map_err(|_| invalid("x must be an integer"))?;
     let y: i64 = require_positional(rest, 1, "y")?.parse()
-        .map_err(|_| "y must be an integer".to_string())?;
+        .map_err(|_| invalid("y must be an integer"))?;
     let direction = opt_value(rest, &["direction"]).unwrap_or("down");
     let amount: i64 = opt_value(rest, &["amount"])
         .map(|v| v.parse().unwrap_or(3))
@@ -283,7 +378,7 @@ fn parse_scroll(rest: &[String]) -> Result<Action, String> {
     })
 }
 
-fn parse_observe(rest: &[String]) -> Result<Action, String> {
+fn parse_observe(rest: &[String]) -> Result<Action, ParseError> {
     let snapshot = has_flag(rest, &["snapshot"]);
     let screenshot = has_flag(rest, &["screenshot"]);
     let ground = opt_value(rest, &["ground"]).unwrap_or("");
@@ -300,7 +395,7 @@ fn parse_observe(rest: &[String]) -> Result<Action, String> {
     Ok(Action::Call { method: "observe".into(), params: Value::Object(params) })
 }
 
-fn parse_screenshot(rest: &[String]) -> Result<Action, String> {
+fn parse_screenshot(rest: &[String]) -> Result<Action, ParseError> {
     let output = opt_value(rest, &["output", "o"]).unwrap_or("");
     let monitor: i64 = opt_value(rest, &["monitor"])
         .map(|v| v.parse().unwrap_or(-1))
@@ -312,16 +407,16 @@ fn parse_screenshot(rest: &[String]) -> Result<Action, String> {
         params.insert("selector".into(), sel.into());
     }
     if let Some(bbox) = opt_value(rest, &["bbox"]) {
-        let nums: Result<Vec<i64>, _> = bbox
+        let nums: Result<Vec<i64>, ParseError> = bbox
             .split(',')
-            .map(|n| n.parse().map_err(|_| format!("invalid bbox value: {}", n)))
+            .map(|n| n.parse().map_err(|_| invalid(format!("invalid bbox value: {}", n))))
             .collect();
         params.insert("bbox".into(), Value::Array(nums?.into_iter().map(Value::from).collect()));
     }
     Ok(Action::Call { method: "screenshot".into(), params: Value::Object(params) })
 }
 
-fn parse_ground(rest: &[String]) -> Result<Action, String> {
+fn parse_ground(rest: &[String]) -> Result<Action, ParseError> {
     let description = require_positional(rest, 0, "description")?;
     let mut params = Map::new();
     params.insert("description".into(), description.into());
@@ -331,7 +426,7 @@ fn parse_ground(rest: &[String]) -> Result<Action, String> {
     Ok(Action::Call { method: "ground".into(), params: Value::Object(params) })
 }
 
-fn parse_ask_vision(rest: &[String]) -> Result<Action, String> {
+fn parse_ask_vision(rest: &[String]) -> Result<Action, ParseError> {
     let prompt = require_positional(rest, 0, "prompt")?;
     let mut params = Map::new();
     params.insert("prompt".into(), prompt.into());
@@ -347,7 +442,7 @@ fn parse_ask_vision(rest: &[String]) -> Result<Action, String> {
     Ok(Action::Call { method: "ask-vision".into(), params: Value::Object(params) })
 }
 
-fn parse_detect(rest: &[String]) -> Result<Action, String> {
+fn parse_detect(rest: &[String]) -> Result<Action, ParseError> {
     let description = require_positional(rest, 0, "description")?;
     let max_targets: i64 = opt_value(rest, &["max-targets"])
         .map(|v| v.parse().unwrap_or(20))
@@ -367,15 +462,15 @@ fn parse_detect(rest: &[String]) -> Result<Action, String> {
     Ok(Action::Call { method: "detect".into(), params: Value::Object(params) })
 }
 
-fn parse_highlight(rest: &[String]) -> Result<Action, String> {
+fn parse_highlight(rest: &[String]) -> Result<Action, ParseError> {
     let x1: i64 = require_positional(rest, 0, "x1")?.parse()
-        .map_err(|_| "x1 must be an integer".to_string())?;
+        .map_err(|_| invalid("x1 must be an integer"))?;
     let y1: i64 = require_positional(rest, 1, "y1")?.parse()
-        .map_err(|_| "y1 must be an integer".to_string())?;
+        .map_err(|_| invalid("y1 must be an integer"))?;
     let x2: i64 = require_positional(rest, 2, "x2")?.parse()
-        .map_err(|_| "x2 must be an integer".to_string())?;
+        .map_err(|_| invalid("x2 must be an integer"))?;
     let y2: i64 = require_positional(rest, 3, "y2")?.parse()
-        .map_err(|_| "y2 must be an integer".to_string())?;
+        .map_err(|_| invalid("y2 must be an integer"))?;
     let mut params = Map::new();
     params.insert("x1".into(), x1.into());
     params.insert("y1".into(), y1.into());
@@ -400,7 +495,7 @@ fn parse_highlight(rest: &[String]) -> Result<Action, String> {
     Ok(Action::Call { method: "highlight".into(), params: Value::Object(params) })
 }
 
-fn parse_diff(rest: &[String]) -> Result<Action, String> {
+fn parse_diff(rest: &[String]) -> Result<Action, ParseError> {
     let baseline = require_positional(rest, 0, "baseline")?;
     let threshold: i64 = opt_value(rest, &["threshold", "t"])
         .map(|v| v.parse().unwrap_or(30))
@@ -417,12 +512,12 @@ fn parse_diff(rest: &[String]) -> Result<Action, String> {
     Ok(Action::Call { method: "diff".into(), params: Value::Object(params) })
 }
 
-fn parse_is(rest: &[String]) -> Result<Action, String> {
-    let sub = rest.first().ok_or("Missing 'visible' or 'enabled'")?;
+fn parse_is(rest: &[String]) -> Result<Action, ParseError> {
+    let sub = rest.first().ok_or_else(|| missing("Missing 'visible' or 'enabled'"))?;
     let check = match sub.as_str() {
         "visible" => "visible",
         "enabled" => "enabled",
-        _ => return Err(format!("`is` expects visible/enabled, got: {}", sub)),
+        _ => return Err(unknown_subcommand("is", sub, &["visible", "enabled"])),
     };
     let selector = require_positional(&rest[1..], 0, "selector")?;
     Ok(Action::Call {
@@ -431,7 +526,7 @@ fn parse_is(rest: &[String]) -> Result<Action, String> {
     })
 }
 
-fn parse_type(rest: &[String]) -> Result<Action, String> {
+fn parse_type(rest: &[String]) -> Result<Action, ParseError> {
     let text = require_positional(rest, 0, "text")?;
     let mut params = Map::new();
     params.insert("text".into(), text.into());
@@ -439,10 +534,10 @@ fn parse_type(rest: &[String]) -> Result<Action, String> {
         // `--at X,Y` → at_x, at_y (mirrors input.py:32-36)
         let parts: Vec<&str> = at.split(',').collect();
         if parts.len() != 2 {
-            return Err(format!("--at expects X,Y, got: {}", at));
+            return Err(invalid(format!("--at expects X,Y, got: {}", at)));
         }
-        let x: i64 = parts[0].parse().map_err(|_| "--at x must be integer")?;
-        let y: i64 = parts[1].parse().map_err(|_| "--at y must be integer")?;
+        let x: i64 = parts[0].parse().map_err(|_| invalid("--at x must be integer"))?;
+        let y: i64 = parts[1].parse().map_err(|_| invalid("--at y must be integer"))?;
         params.insert("at_x".into(), x.into());
         params.insert("at_y".into(), y.into());
     }
@@ -451,8 +546,10 @@ fn parse_type(rest: &[String]) -> Result<Action, String> {
     Ok(Action::Call { method: "type".into(), params: Value::Object(params) })
 }
 
-fn parse_app(rest: &[String]) -> Result<Action, String> {
-    let sub = rest.first().ok_or("Missing app subcommand (launch/switch/list/resize)")?;
+fn parse_app(rest: &[String]) -> Result<Action, ParseError> {
+    const VALID: &[&str] = &["launch", "switch", "list", "resize"];
+    let sub = rest.first()
+        .ok_or_else(|| missing("Missing app subcommand (launch/switch/list/resize)"))?;
     let args = &rest[1..];
     match sub.as_str() {
         "launch" => {
@@ -476,11 +573,11 @@ fn parse_app(rest: &[String]) -> Result<Action, String> {
         "resize" => {
             let name = require_positional(args, 0, "name_or_title")?;
             let width: i64 = opt_value(args, &["width"])
-                .ok_or("--width required")?
-                .parse().map_err(|_| "--width must be integer")?;
+                .ok_or_else(|| missing("--width required"))?
+                .parse().map_err(|_| invalid("--width must be integer"))?;
             let height: i64 = opt_value(args, &["height"])
-                .ok_or("--height required")?
-                .parse().map_err(|_| "--height must be integer")?;
+                .ok_or_else(|| missing("--height required"))?
+                .parse().map_err(|_| invalid("--height must be integer"))?;
             let x: i64 = opt_value(args, &["x"]).map(|v| v.parse().unwrap_or(-1)).unwrap_or(-1);
             let y: i64 = opt_value(args, &["y"]).map(|v| v.parse().unwrap_or(-1)).unwrap_or(-1);
             Ok(Action::Call {
@@ -488,12 +585,14 @@ fn parse_app(rest: &[String]) -> Result<Action, String> {
                 params: json!({ "name_or_title": name, "width": width, "height": height, "x": x, "y": y }),
             })
         }
-        _ => Err(format!("Unknown app subcommand: {}", sub)),
+        _ => Err(unknown_subcommand("app", sub, VALID)),
     }
 }
 
-fn parse_fs(rest: &[String]) -> Result<Action, String> {
-    let sub = rest.first().ok_or("Missing fs subcommand (read/write/list)")?;
+fn parse_fs(rest: &[String]) -> Result<Action, ParseError> {
+    const VALID: &[&str] = &["read", "write", "list"];
+    let sub = rest.first()
+        .ok_or_else(|| missing("Missing fs subcommand (read/write/list)"))?;
     let args = &rest[1..];
     match sub.as_str() {
         "read" => {
@@ -512,12 +611,14 @@ fn parse_fs(rest: &[String]) -> Result<Action, String> {
             let path = require_positional(args, 0, "path")?;
             Ok(Action::Call { method: "fs_list".into(), params: json!({ "path": path }) })
         }
-        _ => Err(format!("Unknown fs subcommand: {}", sub)),
+        _ => Err(unknown_subcommand("fs", sub, VALID)),
     }
 }
 
-fn parse_clipboard(rest: &[String]) -> Result<Action, String> {
-    let sub = rest.first().ok_or("Missing clipboard subcommand (get/set)")?;
+fn parse_clipboard(rest: &[String]) -> Result<Action, ParseError> {
+    const VALID: &[&str] = &["get", "set"];
+    let sub = rest.first()
+        .ok_or_else(|| missing("Missing clipboard subcommand (get/set)"))?;
     let args = &rest[1..];
     match sub.as_str() {
         "get" => {
@@ -536,12 +637,14 @@ fn parse_clipboard(rest: &[String]) -> Result<Action, String> {
             }
             Ok(Action::Call { method: "clipboard_set".into(), params: Value::Object(params) })
         }
-        _ => Err(format!("Unknown clipboard subcommand: {}", sub)),
+        _ => Err(unknown_subcommand("clipboard", sub, VALID)),
     }
 }
 
-fn parse_process(rest: &[String]) -> Result<Action, String> {
-    let sub = rest.first().ok_or("Missing process subcommand (list/kill)")?;
+fn parse_process(rest: &[String]) -> Result<Action, ParseError> {
+    const VALID: &[&str] = &["list", "kill"];
+    let sub = rest.first()
+        .ok_or_else(|| missing("Missing process subcommand (list/kill)"))?;
     let args = &rest[1..];
     match sub.as_str() {
         "list" => Ok(Action::Call { method: "process_list".into(), params: json!({}) }),
@@ -552,11 +655,11 @@ fn parse_process(rest: &[String]) -> Result<Action, String> {
                 params: json!({ "pid_or_name": pid_or_name }),
             })
         }
-        _ => Err(format!("Unknown process subcommand: {}", sub)),
+        _ => Err(unknown_subcommand("process", sub, VALID)),
     }
 }
 
-fn parse_wait(rest: &[String]) -> Result<Action, String> {
+fn parse_wait(rest: &[String]) -> Result<Action, ParseError> {
     // Three modes (mirrors cli/commands/wait.py):
     //   wait <seconds>     → if seconds <= 0, error; else LOCAL sleep (no IPC)
     //   wait @eN [...]     → client-side polling via wait_check
@@ -586,7 +689,7 @@ fn parse_wait(rest: &[String]) -> Result<Action, String> {
     // Text mode: wait --text "..."
     if let Some(text) = text_mode {
         if !t0.is_empty() {
-            return Err("cannot specify both a target and --text".into());
+            return Err(invalid("cannot specify both a target and --text"));
         }
         return Ok(Action::Wait(WaitSpec {
             probe: text,
@@ -597,10 +700,10 @@ fn parse_wait(rest: &[String]) -> Result<Action, String> {
 
     // Numeric sleep — do it locally, no IPC.
     let secs: f64 = t0.parse().map_err(|_| {
-        format!("invalid target {:?} (expected seconds, @eN selector, or --text)", t0)
+        invalid(format!("invalid target {:?} (expected seconds, @eN selector, or --text)", t0))
     })?;
     if secs <= 0.0 {
-        return Err("provide a positive number of seconds, a selector, or --text".into());
+        return Err(invalid("provide a positive number of seconds, a selector, or --text"));
     }
     std::thread::sleep(Duration::from_secs_f64(secs));
     // Emit the same output the Python CLI would.
@@ -608,28 +711,30 @@ fn parse_wait(rest: &[String]) -> Result<Action, String> {
     std::process::exit(0);
 }
 
-fn parse_batch(rest: &[String], _global: &GlobalFlags) -> Result<Action, String> {
+fn parse_batch(rest: &[String], _global: &GlobalFlags) -> Result<Action, ParseError> {
     // --file / stdin / positional JSON
     let raw = if let Some(path) = opt_value(rest, &["file", "f"]) {
-        std::fs::read_to_string(path).map_err(|e| format!("cannot read --file: {}", e))?
+        std::fs::read_to_string(path).map_err(|e| invalid(format!("cannot read --file: {}", e)))?
     } else {
         let (pos, _) = split_args(rest);
         match pos.first().copied() {
             Some("-") => {
                 use std::io::Read;
                 let mut s = String::new();
-                std::io::stdin().read_to_string(&mut s).map_err(|e| e.to_string())?;
+                std::io::stdin().read_to_string(&mut s)
+                    .map_err(|e| invalid(format!("cannot read stdin: {}", e)))?;
                 s
             }
             Some(json) => json.to_string(),
             None => {
-                return Err("provide commands as argument, --file, or stdin (-)".into());
+                return Err(missing("provide commands as argument, --file, or stdin (-)"));
             }
         }
     };
-    let commands: Value = serde_json::from_str(&raw).map_err(|e| format!("invalid JSON: {}", e))?;
+    let commands: Value = serde_json::from_str(&raw)
+        .map_err(|e| invalid(format!("invalid JSON: {}", e)))?;
     if !commands.is_array() || commands.as_array().unwrap().is_empty() {
-        return Err("commands must be a non-empty JSON array".into());
+        return Err(invalid("commands must be a non-empty JSON array"));
     }
     let stop_on_error = !has_flag(rest, &["continue-on-error"]);
     let delay: f64 = opt_value(rest, &["delay", "d"])
@@ -641,15 +746,79 @@ fn parse_batch(rest: &[String], _global: &GlobalFlags) -> Result<Action, String>
     })
 }
 
-fn parse_daemon(rest: &[String]) -> Result<Action, String> {
+fn parse_daemon(rest: &[String]) -> Result<Action, ParseError> {
+    const VALID: &[&str] = &["start", "stop", "status"];
     let sub = rest.first().map(|s| s.as_str()).unwrap_or("");
     match sub {
         "start" => Ok(Action::Local(LocalAction::DaemonStart)),
         "stop" => Ok(Action::Local(LocalAction::DaemonStop)),
         "status" => Ok(Action::Local(LocalAction::DaemonStatus)),
-        _ => Err(format!("`daemon` expects start/stop/status, got: {}", sub)),
+        _ => Err(unknown_subcommand("daemon", sub, VALID)),
     }
 }
 
 use std::time::Duration;
 use crate::output::print_text;
+
+#[cfg(test)]
+mod tests {
+    use super::{parse, GlobalFlags};
+
+    fn argv(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Parse must classify each failure with a stable JSON `type` so an agent
+    /// consumer can pick a retry strategy. These lock the contract.
+    #[test]
+    fn unknown_command_typed() {
+        let g = GlobalFlags::default();
+        let e = parse(&argv(&["boguscmd"]), &g).unwrap_err();
+        assert_eq!(e.type_name(), "unknown_command");
+        assert!(e.message().contains("boguscmd"));
+    }
+
+    #[test]
+    fn missing_argument_typed() {
+        let g = GlobalFlags::default();
+        // `click` needs x/y positionals.
+        let e = parse(&argv(&["click"]), &g).unwrap_err();
+        assert_eq!(e.type_name(), "missing_argument");
+        assert!(e.message().contains("x"));
+    }
+
+    #[test]
+    fn invalid_value_typed() {
+        let g = GlobalFlags::default();
+        let e = parse(&argv(&["click", "abc", "def"]), &g).unwrap_err();
+        assert_eq!(e.type_name(), "invalid_value");
+    }
+
+    #[test]
+    fn unknown_subcommand_lists_valid_options() {
+        let g = GlobalFlags::default();
+        let e = parse(&argv(&["app", "frobnicate"]), &g).unwrap_err();
+        assert_eq!(e.type_name(), "unknown_subcommand");
+        // #5: the message must name the valid choices so the caller can recover.
+        assert!(e.message().contains("launch"));
+        assert!(e.message().contains("resize"));
+    }
+
+    #[test]
+    fn daemon_subcommand_valid_options() {
+        let g = GlobalFlags::default();
+        let e = parse(&argv(&["daemon", "reboot"]), &g).unwrap_err();
+        assert_eq!(e.type_name(), "unknown_subcommand");
+        assert!(e.message().contains("start"));
+        assert!(e.message().contains("stop"));
+        assert!(e.message().contains("status"));
+    }
+
+    #[test]
+    fn valid_commands_parse_to_call() {
+        // Sanity: a known-good command isn't misclassified as an error.
+        let g = GlobalFlags::default();
+        assert!(parse(&argv(&["ping"]), &g).is_ok());
+        assert!(parse(&argv(&["app", "list"]), &g).is_ok());
+    }
+}
