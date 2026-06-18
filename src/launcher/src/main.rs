@@ -18,7 +18,7 @@ mod win32;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use commands::{parse, Action, GlobalFlags, LocalAction};
+use commands::{parse, Action, GlobalFlags, LocalAction, WaitProbe, WaitSpec};
 use serde_json::json;
 
 fn main() -> ExitCode {
@@ -42,6 +42,7 @@ fn main() -> ExitCode {
         }
         Action::Local(local) => run_local(local, &global),
         Action::Call { method, params } => run_call(&method, &params, &global),
+        Action::Wait(spec) => run_wait(spec, &global),
     }
 }
 
@@ -120,6 +121,96 @@ fn run_call(method: &str, params: &serde_json::Value, global: &GlobalFlags) -> E
             output::print_error(&e);
             ExitCode::from(1)
         }
+    }
+}
+
+/// Run the `wait` polling loop (selector or text mode). Mirrors
+/// cli/commands/wait.py: repeatedly probe `wait_check` with local sleeps in
+/// between, so the daemon's STA worker is never blocked for the wait duration.
+fn run_wait(spec: WaitSpec, global: &GlobalFlags) -> ExitCode {
+    if global.no_daemon {
+        output::print_error(
+            "--no-daemon is not supported by the native launcher. \
+             Use the Python CLI: agent-windows-python --no-daemon ...",
+        );
+        return ExitCode::from(1);
+    }
+
+    let python = resolve_python_exe();
+    if let Err(e) = daemon::ensure_daemon_running(&python, global.debug) {
+        output::print_error(&e);
+        return ExitCode::from(1);
+    }
+
+    let (probe_key, probe_val, describe) = match &spec.probe {
+        WaitProbe::Selector(s) => ("selector", s.clone(), format!("Element {}", s)),
+        WaitProbe::Text(t) => ("text", t.clone(), format!("Text '{}'", t)),
+    };
+
+    let poll = if spec.interval > 0.0 {
+        spec.interval
+    } else {
+        0.5
+    };
+    let start = std::time::Instant::now();
+
+    loop {
+        let req = build_request(
+            "wait_check",
+            &json!({ probe_key: probe_val }),
+        );
+        match ipc::send_to_daemon(&req) {
+            Ok(resp) => {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&resp) {
+                    if parsed.get("error").is_none() {
+                        if let Some(result) = parsed.get("result") {
+                            if result.get("found").and_then(|f| f.as_bool()).unwrap_or(false) {
+                                let elapsed = start.elapsed().as_secs_f64();
+                                let element = result
+                                    .get("element")
+                                    .or_else(|| result.get("matched_element"))
+                                    .and_then(|e| e.as_str())
+                                    .unwrap_or("");
+                                let output = format!(
+                                    "## Wait\n{} appeared after {:.1}s",
+                                    describe, elapsed
+                                );
+                                let elapsed_rounded = (elapsed * 10.0).round() / 10.0;
+                                let mut out = serde_json::Map::new();
+                                out.insert("output".into(), output.into());
+                                out.insert("elapsed".into(), serde_json::json!(elapsed_rounded));
+                                if probe_key == "selector" {
+                                    out.insert("selector".into(), probe_val.clone().into());
+                                    out.insert("element".into(), element.into());
+                                } else {
+                                    out.insert("text".into(), probe_val.clone().into());
+                                    out.insert("matched_element".into(), element.into());
+                                }
+                                output::print_result(&serde_json::Value::Object(out), global.format_json);
+                                return ExitCode::SUCCESS;
+                            }
+                        }
+                    } else if let Some(err) = parsed.get("error") {
+                        let msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("error");
+                        output::print_error(&format!("wait_check failed: {}", msg));
+                        return ExitCode::from(1);
+                    }
+                }
+            }
+            Err(e) => {
+                output::print_error(&format!("IPC error during wait: {}", e));
+                return ExitCode::from(1);
+            }
+        }
+
+        if start.elapsed().as_secs_f64() >= spec.timeout {
+            output::print_error(&format!(
+                "{} not found within {}s",
+                describe, spec.timeout
+            ));
+            return ExitCode::from(1);
+        }
+        std::thread::sleep(std::time::Duration::from_secs_f64(poll));
     }
 }
 
@@ -226,12 +317,22 @@ fn read_daemon_version() -> String {
 }
 
 /// Locate the Python interpreter that has `agent_windows` installed.
-/// Strategy: $AGENT_WINDOWS_PYTHON → "python" on PATH → fall back error.
+///
+/// Resolution order:
+/// 1. `$AGENT_WINDOWS_PYTHON` — explicit override (highest priority).
+/// 2. `python` on PATH — the common case; uv tool installs and venvs put the
+///    right interpreter first on PATH. (We verify it can import the module
+///    before returning, and fall back if not.)
+/// 3. Last resort: `python` verbatim (let the spawn fail with a clear message).
 fn resolve_python_exe() -> String {
     if let Ok(p) = std::env::var("AGENT_WINDOWS_PYTHON") {
-        return p;
+        if !p.is_empty() {
+            return p;
+        }
     }
-    // Try `python` on PATH — the common case for a uv tool install / venv.
+    // Default — the daemon spawn will fail with a clear message if this python
+    // doesn't have agent_windows installed (ensure_daemon_running detects the
+    // early exit and surfaces the daemon.log hint).
     "python".into()
 }
 

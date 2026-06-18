@@ -14,8 +14,24 @@ pub enum Action {
     Call { method: String, params: Value },
     /// Handle entirely locally (no IPC).
     Local(LocalAction),
+    /// Client-side polling loop: repeatedly call `wait_check` until found or
+    /// timeout. Can't be a single Call because it needs multiple IPC round-
+    /// trips with local sleeps between them (mirrors cli/commands/wait.py).
+    Wait(WaitSpec),
     /// Print usage and exit.
     Help,
+}
+
+/// Parameters for the `wait` polling modes (selector or text).
+pub struct WaitSpec {
+    pub probe: WaitProbe,
+    pub timeout: f64,
+    pub interval: f64,
+}
+
+pub enum WaitProbe {
+    Selector(String),
+    Text(String),
 }
 
 pub enum LocalAction {
@@ -67,8 +83,8 @@ pub fn parse(argv: &[String], global: &GlobalFlags) -> Result<Action, String> {
         "is" => parse_is(rest),
 
         // ── Input (mouse) ─────────────────────────────────────────────────
-        "click" => parse_xy_opts(rest, "click", &["--right", "--double"]),
-        "dblclick" => parse_xy_opts(rest, "dblclick", &["--right"]),
+        "click" => parse_xy_opts(rest, "click", &["right", "double"]),
+        "dblclick" => parse_xy_opts(rest, "dblclick", &["right"]),
         "hover" => parse_xy(rest, "hover"),
         "move" => parse_xy(rest, "move"),
         "mouse-down" => parse_mouse_button(rest, "mouse_down"),
@@ -88,6 +104,13 @@ pub fn parse(argv: &[String], global: &GlobalFlags) -> Result<Action, String> {
 
         // ── System groups ─────────────────────────────────────────────────
         "app" => parse_app(rest),
+        "shell" => {
+            let command = require_positional(rest, 0, "command")?;
+            Ok(Action::Call {
+                method: "shell".into(),
+                params: json!({ "command": command }),
+            })
+        }
         "fs" => parse_fs(rest),
         "clipboard" => parse_clipboard(rest),
         "process" => parse_process(rest),
@@ -129,24 +152,53 @@ fn split_args(rest: &[String]) -> (Vec<&str>, Vec<&str>) {
     (pos, opts)
 }
 
-/// Get a `--opt value` from the slice, or None.
-fn opt_value<'a>(rest: &'a [String], name: &str) -> Option<&'a str> {
-    let flag = format!("--{}", name);
+/// Get a `--opt value` or `-o value` from the slice, or None.
+///
+/// `names` lists every accepted form, e.g. `&["output", "o"]` matches both
+/// `--output value`/`--output=value` and `-o value`/`-o=value`. This mirrors
+/// Typer's `Option("--long", "-s")` short-option support.
+fn opt_value<'a>(rest: &'a [String], names: &[&str]) -> Option<&'a str> {
+    let long_forms: Vec<String> = names.iter().map(|n| format!("--{}", n)).collect();
+    let short_forms: Vec<String> = names
+        .iter()
+        .filter(|n| n.len() == 1)
+        .map(|n| format!("-{}", n))
+        .collect();
+    let all_forms: Vec<&str> = long_forms
+        .iter()
+        .chain(short_forms.iter())
+        .map(|s| s.as_str())
+        .collect();
+
     let mut iter = rest.iter();
     while let Some(a) = iter.next() {
-        if a == &flag {
+        // Exact flag match → next arg is the value.
+        if all_forms.contains(&a.as_str()) {
             return iter.next().map(|s| s.as_str());
         }
-        // Handle `--opt=value` form too.
-        if let Some(v) = a.strip_prefix(&format!("{}=", flag)) {
-            return Some(v);
+        // `--flag=value` / `-f=value` form.
+        for form in &all_forms {
+            if let Some(v) = a.strip_prefix(&format!("{}=", form)) {
+                return Some(v);
+            }
         }
     }
     None
 }
 
-fn has_flag(rest: &[String], name: &str) -> bool {
-    rest.iter().any(|a| a == name || a == &format!("--{}", name))
+/// True if any of the given flag forms (e.g. `--right`, `-k`) is present.
+fn has_flag(rest: &[String], names: &[&str]) -> bool {
+    let forms: Vec<String> = names
+        .iter()
+        .flat_map(|n| {
+            let mut v = vec![format!("--{}", n)];
+            if n.len() == 1 {
+                v.push(format!("-{}", n));
+            }
+            v
+        })
+        .collect();
+    rest.iter().any(|a| forms.contains(a))
 }
 
 fn require_positional(rest: &[String], idx: usize, name: &str) -> Result<String, String> {
@@ -176,8 +228,8 @@ fn parse_xy_opts(rest: &[String], method: &str, flags: &[&str]) -> Result<Action
     params.insert("x".into(), x.into());
     params.insert("y".into(), y.into());
     for f in flags {
-        let key = f.trim_start_matches("--");
-        params.insert(key.into(), has_flag(rest, f).into());
+        // flags arrive as "right"/"double" (no dashes); has_flag adds them.
+        params.insert((*f).into(), has_flag(rest, &[f]).into());
     }
     Ok(Action::Call { method: method.into(), params: Value::Object(params) })
 }
@@ -187,7 +239,7 @@ fn parse_mouse_button(rest: &[String], method: &str) -> Result<Action, String> {
         .map_err(|_| "x must be an integer".to_string())?;
     let y: i64 = require_positional(rest, 1, "y")?.parse()
         .map_err(|_| "y must be an integer".to_string())?;
-    let button = opt_value(rest, "button").unwrap_or("left");
+    let button = opt_value(rest, &["button"]).unwrap_or("left");
     Ok(Action::Call {
         method: method.into(),
         params: json!({ "x": x, "y": y, "button": button }),
@@ -208,7 +260,7 @@ fn parse_drag(rest: &[String]) -> Result<Action, String> {
     params.insert("y1".into(), y1.into());
     params.insert("x2".into(), x2.into());
     params.insert("y2".into(), y2.into());
-    params.insert("right".into(), has_flag(rest, "--right").into());
+    params.insert("right".into(), has_flag(rest, &["right"]).into());
     Ok(Action::Call { method: "drag".into(), params: Value::Object(params) })
 }
 
@@ -217,8 +269,8 @@ fn parse_scroll(rest: &[String]) -> Result<Action, String> {
         .map_err(|_| "x must be an integer".to_string())?;
     let y: i64 = require_positional(rest, 1, "y")?.parse()
         .map_err(|_| "y must be an integer".to_string())?;
-    let direction = opt_value(rest, "direction").unwrap_or("down");
-    let amount: i64 = opt_value(rest, "amount")
+    let direction = opt_value(rest, &["direction"]).unwrap_or("down");
+    let amount: i64 = opt_value(rest, &["amount"])
         .map(|v| v.parse().unwrap_or(3))
         .unwrap_or(3);
     Ok(Action::Call {
@@ -228,9 +280,9 @@ fn parse_scroll(rest: &[String]) -> Result<Action, String> {
 }
 
 fn parse_observe(rest: &[String]) -> Result<Action, String> {
-    let snapshot = has_flag(rest, "--snapshot");
-    let screenshot = has_flag(rest, "--screenshot");
-    let ground = opt_value(rest, "ground").unwrap_or("");
+    let snapshot = has_flag(rest, &["snapshot"]);
+    let screenshot = has_flag(rest, &["screenshot"]);
+    let ground = opt_value(rest, &["ground"]).unwrap_or("");
     // Default: snapshot + screenshot when no flags.
     let (snap, shot) = if !snapshot && !screenshot && ground.is_empty() {
         (true, true)
@@ -245,17 +297,17 @@ fn parse_observe(rest: &[String]) -> Result<Action, String> {
 }
 
 fn parse_screenshot(rest: &[String]) -> Result<Action, String> {
-    let output = opt_value(rest, "output").or_else(|| opt_value(rest, "o")).unwrap_or("");
-    let monitor: i64 = opt_value(rest, "monitor")
+    let output = opt_value(rest, &["output", "o"]).unwrap_or("");
+    let monitor: i64 = opt_value(rest, &["monitor"])
         .map(|v| v.parse().unwrap_or(-1))
         .unwrap_or(-1);
     let mut params = Map::new();
     params.insert("output".into(), output.into());
     params.insert("monitor".into(), monitor.into());
-    if let Some(sel) = opt_value(rest, "selector").or_else(|| opt_value(rest, "s")) {
+    if let Some(sel) = opt_value(rest, &["selector", "s"]) {
         params.insert("selector".into(), sel.into());
     }
-    if let Some(bbox) = opt_value(rest, "bbox") {
+    if let Some(bbox) = opt_value(rest, &["bbox"]) {
         let nums: Result<Vec<i64>, _> = bbox
             .split(',')
             .map(|n| n.parse().map_err(|_| format!("invalid bbox value: {}", n)))
@@ -269,7 +321,7 @@ fn parse_ground(rest: &[String]) -> Result<Action, String> {
     let description = require_positional(rest, 0, "description")?;
     let mut params = Map::new();
     params.insert("description".into(), description.into());
-    if has_flag(rest, "--single-pass") {
+    if has_flag(rest, &["single-pass"]) {
         params.insert("single_pass".into(), true.into());
     }
     Ok(Action::Call { method: "ground".into(), params: Value::Object(params) })
@@ -279,13 +331,13 @@ fn parse_ask_vision(rest: &[String]) -> Result<Action, String> {
     let prompt = require_positional(rest, 0, "prompt")?;
     let mut params = Map::new();
     params.insert("prompt".into(), prompt.into());
-    if let Some(v) = opt_value(rest, "image").or_else(|| opt_value(rest, "i")) {
+    if let Some(v) = opt_value(rest, &["image", "i"]) {
         params.insert("image".into(), v.into());
     }
-    if let Some(v) = opt_value(rest, "model").or_else(|| opt_value(rest, "m")) {
+    if let Some(v) = opt_value(rest, &["model", "m"]) {
         params.insert("model".into(), v.into());
     }
-    if let Some(v) = opt_value(rest, "output").or_else(|| opt_value(rest, "o")) {
+    if let Some(v) = opt_value(rest, &["output", "o"]) {
         params.insert("output".into(), v.into());
     }
     Ok(Action::Call { method: "ask-vision".into(), params: Value::Object(params) })
@@ -293,19 +345,19 @@ fn parse_ask_vision(rest: &[String]) -> Result<Action, String> {
 
 fn parse_detect(rest: &[String]) -> Result<Action, String> {
     let description = require_positional(rest, 0, "description")?;
-    let max_targets: i64 = opt_value(rest, "max-targets")
+    let max_targets: i64 = opt_value(rest, &["max-targets"])
         .map(|v| v.parse().unwrap_or(20))
         .unwrap_or(20);
     let mut params = Map::new();
     params.insert("description".into(), description.into());
     params.insert("max_targets".into(), max_targets.into());
-    if let Some(v) = opt_value(rest, "image").or_else(|| opt_value(rest, "i")) {
+    if let Some(v) = opt_value(rest, &["image", "i"]) {
         params.insert("image".into(), v.into());
     }
-    if let Some(v) = opt_value(rest, "model").or_else(|| opt_value(rest, "m")) {
+    if let Some(v) = opt_value(rest, &["model", "m"]) {
         params.insert("model".into(), v.into());
     }
-    if let Some(v) = opt_value(rest, "output").or_else(|| opt_value(rest, "o")) {
+    if let Some(v) = opt_value(rest, &["output", "o"]) {
         params.insert("output".into(), v.into());
     }
     Ok(Action::Call { method: "detect".into(), params: Value::Object(params) })
@@ -325,15 +377,20 @@ fn parse_highlight(rest: &[String]) -> Result<Action, String> {
     params.insert("y1".into(), y1.into());
     params.insert("x2".into(), x2.into());
     params.insert("y2".into(), y2.into());
-    if let Some(v) = opt_value(rest, "label").or_else(|| opt_value(rest, "l")) {
+    if let Some(v) = opt_value(rest, &["label", "l"]) {
         params.insert("label".into(), v.into());
     }
-    let color = opt_value(rest, "color").or_else(|| opt_value(rest, "c")).unwrap_or("red");
-    params.insert("color".into(), color.into());
-    if let Some(v) = opt_value(rest, "image").or_else(|| opt_value(rest, "i")) {
+    // Python only sends color when it differs from the default ("red"); mirror
+    // that so the daemon's own default applies when the user omits --color.
+    if let Some(color) = opt_value(rest, &["color", "c"]) {
+        if color != "red" {
+            params.insert("color".into(), color.into());
+        }
+    }
+    if let Some(v) = opt_value(rest, &["image", "i"]) {
         params.insert("image".into(), v.into());
     }
-    if let Some(v) = opt_value(rest, "output").or_else(|| opt_value(rest, "o")) {
+    if let Some(v) = opt_value(rest, &["output", "o"]) {
         params.insert("output".into(), v.into());
     }
     Ok(Action::Call { method: "highlight".into(), params: Value::Object(params) })
@@ -341,17 +398,16 @@ fn parse_highlight(rest: &[String]) -> Result<Action, String> {
 
 fn parse_diff(rest: &[String]) -> Result<Action, String> {
     let baseline = require_positional(rest, 0, "baseline")?;
-    let threshold: i64 = opt_value(rest, "threshold")
-        .or_else(|| opt_value(rest, "t"))
+    let threshold: i64 = opt_value(rest, &["threshold", "t"])
         .map(|v| v.parse().unwrap_or(30))
         .unwrap_or(30);
     let mut params = Map::new();
     params.insert("baseline".into(), baseline.into());
     params.insert("threshold".into(), threshold.into());
-    if let Some(v) = opt_value(rest, "compare").or_else(|| opt_value(rest, "c")) {
+    if let Some(v) = opt_value(rest, &["compare", "c"]) {
         params.insert("compare".into(), v.into());
     }
-    if let Some(v) = opt_value(rest, "output").or_else(|| opt_value(rest, "o")) {
+    if let Some(v) = opt_value(rest, &["output", "o"]) {
         params.insert("output".into(), v.into());
     }
     Ok(Action::Call { method: "diff".into(), params: Value::Object(params) })
@@ -375,7 +431,7 @@ fn parse_type(rest: &[String]) -> Result<Action, String> {
     let text = require_positional(rest, 0, "text")?;
     let mut params = Map::new();
     params.insert("text".into(), text.into());
-    if let Some(at) = opt_value(rest, "at") {
+    if let Some(at) = opt_value(rest, &["at"]) {
         // `--at X,Y` → at_x, at_y (mirrors input.py:32-36)
         let parts: Vec<&str> = at.split(',').collect();
         if parts.len() != 2 {
@@ -386,8 +442,8 @@ fn parse_type(rest: &[String]) -> Result<Action, String> {
         params.insert("at_x".into(), x.into());
         params.insert("at_y".into(), y.into());
     }
-    params.insert("enter".into(), has_flag(rest, "--enter").into());
-    params.insert("clear".into(), has_flag(rest, "--clear").into());
+    params.insert("enter".into(), has_flag(rest, &["enter"]).into());
+    params.insert("clear".into(), has_flag(rest, &["clear"]).into());
     Ok(Action::Call { method: "type".into(), params: Value::Object(params) })
 }
 
@@ -415,14 +471,14 @@ fn parse_app(rest: &[String]) -> Result<Action, String> {
         "list" => Ok(Action::Call { method: "app_list".into(), params: json!({}) }),
         "resize" => {
             let name = require_positional(args, 0, "name_or_title")?;
-            let width: i64 = opt_value(args, "width")
+            let width: i64 = opt_value(args, &["width"])
                 .ok_or("--width required")?
                 .parse().map_err(|_| "--width must be integer")?;
-            let height: i64 = opt_value(args, "height")
+            let height: i64 = opt_value(args, &["height"])
                 .ok_or("--height required")?
                 .parse().map_err(|_| "--height must be integer")?;
-            let x: i64 = opt_value(args, "x").map(|v| v.parse().unwrap_or(-1)).unwrap_or(-1);
-            let y: i64 = opt_value(args, "y").map(|v| v.parse().unwrap_or(-1)).unwrap_or(-1);
+            let x: i64 = opt_value(args, &["x"]).map(|v| v.parse().unwrap_or(-1)).unwrap_or(-1);
+            let y: i64 = opt_value(args, &["y"]).map(|v| v.parse().unwrap_or(-1)).unwrap_or(-1);
             Ok(Action::Call {
                 method: "app_resize".into(),
                 params: json!({ "name_or_title": name, "width": width, "height": height, "x": x, "y": y }),
@@ -462,7 +518,7 @@ fn parse_clipboard(rest: &[String]) -> Result<Action, String> {
     match sub.as_str() {
         "get" => {
             let mut params = Map::new();
-            if has_flag(args, "--keyboard") || has_flag(args, "-k") {
+            if has_flag(args, &["keyboard", "k"]) {
                 params.insert("keyboard".into(), true.into());
             }
             Ok(Action::Call { method: "clipboard_get".into(), params: Value::Object(params) })
@@ -471,7 +527,7 @@ fn parse_clipboard(rest: &[String]) -> Result<Action, String> {
             let text = require_positional(args, 0, "text")?;
             let mut params = Map::new();
             params.insert("text".into(), text.into());
-            if has_flag(args, "--keyboard") || has_flag(args, "-k") {
+            if has_flag(args, &["keyboard", "k"]) {
                 params.insert("keyboard".into(), true.into());
             }
             Ok(Action::Call { method: "clipboard_set".into(), params: Value::Object(params) })
@@ -499,24 +555,40 @@ fn parse_process(rest: &[String]) -> Result<Action, String> {
 fn parse_wait(rest: &[String]) -> Result<Action, String> {
     // Three modes (mirrors cli/commands/wait.py):
     //   wait <seconds>     → if seconds <= 0, error; else LOCAL sleep (no IPC)
-    //   wait @eN [...]     → client-side polling via wait_check (not yet impl)
-    //   wait --text "..."  → client-side polling via wait_check (not yet impl)
-    //
-    // The local-sleep mode is implemented here (no reason to round-trip to the
-    // daemon just to block its STA worker). The polling modes need a config
-    // read for poll_interval; defer those to the Python CLI for now.
-    let text_mode = opt_value(rest, "text").is_some();
+    //   wait @eN [...]     → client-side polling via wait_check
+    //   wait --text "..."  → client-side polling via wait_check
+    let text_mode = opt_value(rest, &["text"]).map(|t| WaitProbe::Text(t.into()));
+    let timeout: f64 = opt_value(rest, &["timeout", "t"])
+        .map(|v| v.parse().unwrap_or(30.0))
+        .unwrap_or(30.0);
+    let interval: f64 = opt_value(rest, &["interval"])
+        .map(|v| v.parse().unwrap_or(0.5))
+        .unwrap_or(0.5);
 
     let (pos, _) = split_args(rest);
     let t0 = pos.first().copied().unwrap_or("");
 
-    // Selector or text mode → needs client-side polling (not yet in launcher).
-    if text_mode || t0.starts_with("@e") {
-        return Err(
-            "wait with @eN selector or --text requires client-side polling, which the \
-             native launcher doesn't implement yet. Use the Python CLI: \
-             agent-windows-python wait ...".into(),
-        );
+    // Selector mode: wait @eN
+    if let Some(sel) = t0.strip_prefix("@e") {
+        if !sel.is_empty() {
+            return Ok(Action::Wait(WaitSpec {
+                probe: WaitProbe::Selector(t0.into()),
+                timeout,
+                interval,
+            }));
+        }
+    }
+
+    // Text mode: wait --text "..."
+    if let Some(text) = text_mode {
+        if !t0.is_empty() {
+            return Err("cannot specify both a target and --text".into());
+        }
+        return Ok(Action::Wait(WaitSpec {
+            probe: text,
+            timeout,
+            interval,
+        }));
     }
 
     // Numeric sleep — do it locally, no IPC.
@@ -534,7 +606,7 @@ fn parse_wait(rest: &[String]) -> Result<Action, String> {
 
 fn parse_batch(rest: &[String], _global: &GlobalFlags) -> Result<Action, String> {
     // --file / stdin / positional JSON
-    let raw = if let Some(path) = opt_value(rest, "file").or_else(|| opt_value(rest, "f")) {
+    let raw = if let Some(path) = opt_value(rest, &["file", "f"]) {
         std::fs::read_to_string(path).map_err(|e| format!("cannot read --file: {}", e))?
     } else {
         let (pos, _) = split_args(rest);
@@ -555,9 +627,8 @@ fn parse_batch(rest: &[String], _global: &GlobalFlags) -> Result<Action, String>
     if !commands.is_array() || commands.as_array().unwrap().is_empty() {
         return Err("commands must be a non-empty JSON array".into());
     }
-    let stop_on_error = !has_flag(rest, "--continue-on-error");
-    let delay: f64 = opt_value(rest, "delay")
-        .or_else(|| opt_value(rest, "d"))
+    let stop_on_error = !has_flag(rest, &["continue-on-error"]);
+    let delay: f64 = opt_value(rest, &["delay", "d"])
         .map(|v| v.parse().unwrap_or(0.0))
         .unwrap_or(0.0);
     Ok(Action::Call {
