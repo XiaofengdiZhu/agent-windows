@@ -279,6 +279,75 @@ class TestSendToDaemonRoundtrip:
         assert big in result  # explicit: the large field survived intact
 
 
+class TestSendToDaemonConnectRetry:
+    """Regression: send_to_daemon must retry CreateFile when the pipe is briefly
+    absent (ERROR_FILE_NOT_FOUND). The daemon tears down and recreates its
+    single-instance pipe between connections; the client used to fail
+    immediately on that transient gap, which upstream caused spurious daemon
+    spawns. Now it retries with a short backoff until the pipe appears."""
+
+    def test_retries_until_pipe_appears(self):
+        """Server creates the pipe after a short delay. The client's CreateFile
+        must retry through the gap and succeed once the pipe exists."""
+        import os
+        import win32file
+        import win32pipe
+
+        pipe_name = rf"\\.\pipe\agent-windows-test-retry-{os.getpid()}"
+        response = '{"jsonrpc":"2.0","id":1,"result":{"status":"ok"}}\n'
+        response_bytes = response.encode("utf-8")
+        started = threading.Event()
+
+        def server():
+            started.set()
+            time.sleep(0.15)  # hold off creating the pipe → client must retry
+            sp = win32pipe.CreateNamedPipe(
+                pipe_name,
+                win32pipe.PIPE_ACCESS_DUPLEX,
+                win32pipe.PIPE_TYPE_BYTE | win32pipe.PIPE_READMODE_BYTE | win32pipe.PIPE_WAIT,
+                1,
+                65536,
+                65536,
+                0,
+                None,
+            )
+            try:
+                win32pipe.ConnectNamedPipe(sp, None)
+                win32file.ReadFile(sp, 4096)  # consume request
+                win32file.WriteFile(sp, response_bytes)
+                time.sleep(1.0)
+            finally:
+                try:
+                    win32file.CloseHandle(sp)
+                except Exception:
+                    pass
+
+        t = threading.Thread(target=server, daemon=True)
+        t.start()
+        assert started.wait(2.0)
+
+        result = send_to_daemon(
+            '{"jsonrpc":"2.0","id":1,"method":"ping"}',
+            pipe_name=pipe_name,
+            timeout=3.0,
+        )
+        assert '"ok"' in result  # got the response despite the delayed pipe
+
+    def test_raises_after_retries_exhausted(self):
+        """When the pipe never appears, send_to_daemon must still surface a
+        ConnectionError — the retry is bounded, not infinite."""
+        import os
+
+        # A pipe name nothing will ever create
+        pipe_name = rf"\\.\pipe\agent-windows-test-none-{os.getpid()}"
+        start = time.monotonic()
+        with pytest.raises(ConnectionError):
+            send_to_daemon("ping", pipe_name=pipe_name, timeout=0.5)
+        elapsed = time.monotonic() - start
+        # Retried up to ~0.5s (50 × 10ms), then raised — not instant, not infinite
+        assert 0.1 < elapsed < 2.0
+
+
 class TestPipeServerSecurity:
     def test_refuses_when_dacl_unavailable(self):
         """M-02: if the owner-only DACL cannot be built, the daemon must refuse

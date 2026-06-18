@@ -98,6 +98,43 @@ class TestEnsureDaemonRunning:
         with pytest.raises(ConnectionError, match="did not become ready"):
             client.ensure_daemon_running()
 
+    def test_pipe_gap_with_live_daemon_does_not_spawn(self, monkeypatch):
+        """Regression: pipe_exists() is False during the daemon's inter-connection
+        pipe-recreate gap, but the daemon process is still alive. Must NOT spawn a
+        rival daemon (which would fail to bind the single-instance pipe and leak
+        as an orphaned process). Instead return and let send_to_daemon's
+        connect-retry handle the transient gap."""
+        import agent_windows.ipc.client as client
+
+        spawned = []
+        monkeypatch.setattr(client, "pipe_exists", lambda: False)
+        monkeypatch.setattr(
+            client,
+            "_start_daemon_process",
+            lambda debug=False: spawned.append(1),
+        )
+        monkeypatch.setattr(client, "_daemon_process_alive", lambda: True)
+        client.ensure_daemon_running()
+        assert spawned == [], "spawned a rival daemon while the real one was alive"
+
+    def test_pipe_gap_with_no_daemon_still_spawns(self, monkeypatch):
+        """Regression counterpart: when the pipe is absent AND no daemon process
+        is alive, ensure_daemon_running must still spawn (the gap check must not
+        mask a genuinely dead daemon)."""
+        import agent_windows.ipc.client as client
+
+        spawned = []
+        monkeypatch.setattr(client, "pipe_exists", lambda: False)
+        monkeypatch.setattr(
+            client,
+            "_start_daemon_process",
+            lambda debug=False: SimpleNamespace(poll=lambda: 0),  # exits immediately
+        )
+        monkeypatch.setattr(client, "_daemon_process_alive", lambda: False)
+        monkeypatch.setattr(client.time, "sleep", lambda _: None)
+        with pytest.raises(ConnectionError, match="code 0"):
+            client.ensure_daemon_running()
+
 
 class TestCallDaemon:
     """call_daemon orchestrates: build request → ensure_daemon_running →
