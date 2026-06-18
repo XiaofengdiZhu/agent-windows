@@ -263,9 +263,11 @@ def _init_daemon_state():
     config = load_config()
     idle_timeout = config.get("daemon", {}).get("idle_timeout_minutes", 30)
 
-    # Write PID and version files
-    write_pid_file(pid_path)
+    # Write version before PID: launchers (native + Python) treat a live PID
+    # whose version file is absent as a stale/mismatched daemon and will kill
+    # it. Writing version first closes that startup window.
     write_version_file(version_path, __version__)
+    write_pid_file(pid_path)
 
     # Clean old screenshots
     try:
@@ -317,9 +319,10 @@ def _start_workers(state):
     state["idle_monitor"] = idle_monitor
     state["request_shutdown"] = request_shutdown
 
-    # Re-write PID/version (after threads confirmed healthy)
-    write_pid_file(state["pid_path"])
+    # Re-write version/PID (after threads confirmed healthy). Version first,
+    # same ordering as the initial write above.
     write_version_file(state["version_path"], __version__)
+    write_pid_file(state["pid_path"])
 
     logger.info("Daemon ready, listening on %s", PIPE_NAME)
 
