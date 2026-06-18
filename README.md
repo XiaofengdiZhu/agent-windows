@@ -10,6 +10,8 @@ Recommended — adds `agent-windows` to your PATH as a persistent command:
 uv tool install agent-windows
 ```
 
+This installs the **native Rust launcher** (`agent-windows.exe`, ~12ms cold start) plus the Python CLI as `agent-windows-python` (fallback for `--no-daemon` and unported commands).
+
 One-off trial (runs without installing):
 
 ```bash
@@ -23,6 +25,13 @@ From source (a checkout of this repo):
 ```bash
 uv sync
 uv run agent-windows ...
+```
+
+To rebuild the native launcher from source (requires Rust + MSVC + Windows SDK):
+
+```bash
+cd src/launcher && build.cmd build --release
+# the prebuilt exe at src/launcher/prebuilt/ is what ships in the wheel
 ```
 
 
@@ -69,11 +78,15 @@ agent-windows batch --file commands.json
 ## Architecture
 
 ```
-CLI (Typer) → Named Pipe IPC → Daemon (COM STA)
+agent-windows.exe (native Rust launcher, ~12ms)
+    │
+    ▼ Named Pipe IPC (JSON-RPC 2.0)
+    │
+Python daemon (persistent, COM STA worker)
 ```
 
-- **CLI**: Lightweight Typer entry point. Parses args, sends JSON-RPC to daemon.
-- **Daemon**: Persistent process holding heavy imports (comtypes, uia, Pillow). Three-thread model: I/O thread (overlapped I/O), COM STA worker thread, idle monitor. Handlers are organized by domain in `daemon/handlers/`.
+- **Native launcher** (`agent-windows.exe`, 254 KB): a Rust binary that parses argv and forwards JSON-RPC requests to the daemon. Cold start ~12ms — vs ~350ms for the Python Typer CLI it replaces. Source: `src/launcher/`. The Python CLI remains available as `agent-windows-python` for `--no-daemon` mode and unported commands.
+- **Daemon**: Persistent Python process holding heavy imports (comtypes, uia, Pillow). Three-thread model: I/O thread (overlapped I/O), COM STA worker thread, idle monitor. Handlers are organized by domain in `daemon/handlers/`.
 - **IPC**: Named Pipe with per-user DACL security. JSON-RPC 2.0 protocol.
 - **Auto-start**: First CLI call starts daemon automatically. Idle timeout (30min) stops it. Graceful shutdown via overlapped I/O.
 - **Caching**: UIA tree traversal (2s TTL), config loading (mtime-based), API clients, and screenshot backends are all cached for performance.

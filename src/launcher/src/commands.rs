@@ -50,6 +50,10 @@ pub fn parse(argv: &[String], global: &GlobalFlags) -> Result<Action, String> {
         return Ok(Action::Help);
     }
     let cmd = argv[0].as_str();
+    // `--help` / `-h` anywhere as the first token → print help.
+    if cmd == "--help" || cmd == "-h" {
+        return Ok(Action::Help);
+    }
     let rest = &argv[1..];
 
     match cmd {

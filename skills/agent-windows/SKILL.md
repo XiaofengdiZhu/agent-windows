@@ -19,14 +19,18 @@ From source (a checkout of this repo): `uv sync`, then `uv run agent-windows ...
 ## Architecture
 
 ```
-CLI (Typer) → Named Pipe IPC → Daemon (COM STA)
+agent-windows.exe (native Rust launcher, ~12ms)
+    │
+    ▼ Named Pipe IPC (JSON-RPC 2.0)
+    │
+Python daemon (persistent, COM STA worker)
 ```
 
-- **CLI**: Lightweight Typer entry point. Parses args, sends JSON-RPC to daemon.
-- **Daemon**: Persistent process holding heavy imports (comtypes, UIA, Pillow). Auto-starts on first CLI call, auto-stops after 30 min idle.
+- **Native launcher**: a 254 KB Rust binary (`agent-windows.exe`) parses argv and forwards JSON-RPC to the daemon. Cold start ~12ms. The Python CLI remains available as `agent-windows-python` for `--no-daemon` mode.
+- **Daemon**: Persistent Python process holding heavy imports (comtypes, UIA, Pillow). Auto-starts on first CLI call, auto-stops after 30 min idle.
 - **Auto-start**: First CLI call starts daemon automatically. No manual setup needed.
 
-> **Latency**: a warm IPC round-trip is ~1 ms; an end-to-end CLI call is ~230 ms (Python startup + Typer/Click import dominate — the daemon stays resident so heavy COM/UIA imports only happen once).
+> **Latency**: a warm IPC round-trip is ~1 ms; an end-to-end native-launcher call is ~12 ms. The Python CLI (`agent-windows-python`) is ~230 ms by comparison — the native launcher replaces it for everyday use.
 
 ## The Core Loop
 
