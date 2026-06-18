@@ -69,7 +69,7 @@ agent-windows batch --file commands.json
 ## Architecture
 
 ```
-CLI (Typer, ~5ms) → Named Pipe IPC → Daemon (COM STA, ~20ms response)
+CLI (Typer) → Named Pipe IPC → Daemon (COM STA)
 ```
 
 - **CLI**: Lightweight Typer entry point. Parses args, sends JSON-RPC to daemon.

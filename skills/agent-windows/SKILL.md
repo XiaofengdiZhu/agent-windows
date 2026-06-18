@@ -19,12 +19,14 @@ From source (a checkout of this repo): `uv sync`, then `uv run agent-windows ...
 ## Architecture
 
 ```
-CLI (Typer, ~5ms) → Named Pipe IPC → Daemon (COM STA, ~20ms response)
+CLI (Typer) → Named Pipe IPC → Daemon (COM STA)
 ```
 
 - **CLI**: Lightweight Typer entry point. Parses args, sends JSON-RPC to daemon.
 - **Daemon**: Persistent process holding heavy imports (comtypes, UIA, Pillow). Auto-starts on first CLI call, auto-stops after 30 min idle.
 - **Auto-start**: First CLI call starts daemon automatically. No manual setup needed.
+
+> **Latency**: a warm IPC round-trip is ~1 ms; an end-to-end CLI call is ~230 ms (Python startup + Typer/Click import dominate — the daemon stays resident so heavy COM/UIA imports only happen once).
 
 ## The Core Loop
 
@@ -359,7 +361,7 @@ For detailed information beyond this guide:
 
 ## Why agent-windows
 
-- Fast CLI→daemon architecture (~20ms response for most operations)
+- Fast CLI→daemon architecture (warm IPC ~1 ms; the daemon stays resident so COM/UIA imports happen once, not per command)
 - UIA accessibility tree gives pixel-exact element positions
 - `@eN` element refs for reliable, repeatable element targeting
 - Dual observation: UIA tree (precise) + vision model (for custom-drawn UI)

@@ -5,6 +5,7 @@ Uses win32pipe / win32file from pywin32.
 """
 
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -260,18 +261,40 @@ def send_to_daemon(
         timeout = _get_read_timeout()
     timeout_ms = int(timeout * 1000)
 
+    # The daemon briefly tears down and recreates the named pipe between
+    # connections (disconnect → create → ConnectNamedPipe). During that gap
+    # CreateFile fails with ERROR_FILE_NOT_FOUND (winerror 2). Rather than
+    # surfacing an error (or, upstream, spawning a rival daemon), retry the
+    # connect a few times with a short backoff — the gap is sub-millisecond
+    # under normal load. Bound it so a genuinely dead daemon still fails fast.
+    CONNECT_RETRIES = 50
+    CONNECT_BACKOFF_S = 0.01  # 10ms → up to ~0.5s total worst case
+
+    import pywintypes  # noqa: F811 — already imported at module scope, kept for clarity
+
     try:
         # Open existing pipe (daemon must be listening) in overlapped mode
         # so reads can be bounded by a timeout.
-        pipe = win32file.CreateFile(
-            pipe_name,
-            win32file.GENERIC_READ | win32file.GENERIC_WRITE,
-            0,
-            None,
-            win32file.OPEN_EXISTING,
-            win32file.FILE_FLAG_OVERLAPPED,
-            None,
-        )
+        for attempt in range(CONNECT_RETRIES):
+            try:
+                pipe = win32file.CreateFile(
+                    pipe_name,
+                    win32file.GENERIC_READ | win32file.GENERIC_WRITE,
+                    0,
+                    None,
+                    win32file.OPEN_EXISTING,
+                    win32file.FILE_FLAG_OVERLAPPED,
+                    None,
+                )
+                break
+            except pywintypes.error as e:
+                # winerror 2 = ERROR_FILE_NOT_FOUND: pipe doesn't exist right now.
+                # This is the expected transient state while a live daemon cycles
+                # its pipe instance. Retry. Other errors (access denied, etc.)
+                # propagate immediately.
+                if e.winerror != 2 or attempt == CONNECT_RETRIES - 1:
+                    raise
+                time.sleep(CONNECT_BACKOFF_S)
     except Exception as e:
         raise ConnectionError(f"Cannot connect to daemon pipe: {e}") from e
 

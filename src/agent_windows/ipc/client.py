@@ -78,6 +78,29 @@ def call_daemon(
     return unwrap_response(response)
 
 
+def _daemon_process_alive() -> bool:
+    """Check if a daemon process is alive via its PID file.
+
+    Used as a second opinion when ``pipe_exists()`` reports the pipe missing:
+    the daemon briefly tears down and recreates the named pipe between
+    connections (disconnect → create → ConnectNamedPipe), and during that gap
+    ``WaitNamedPipeW`` returns False even though the daemon is perfectly
+    healthy. Spawning a new daemon in that gap leaks processes (each new
+    daemon fails to bind the single-instance pipe but, launched detached, is
+    never reaped) — observed as dozens of orphaned ``python.exe --daemon``
+    processes under rapid-fire IPC. Checking the PID file avoids that: if a
+    daemon process is still alive, we wait for it rather than spawning a rival.
+    """
+    from agent_windows.daemon.lifecycle import is_process_alive, read_pid_file
+    from agent_windows.utils.config import get_pid_path
+
+    info = read_pid_file(get_pid_path())
+    if info is None:
+        return False
+    pid, _ = info
+    return is_process_alive(pid)
+
+
 def ensure_daemon_running(debug: bool = False) -> None:
     """Check if daemon is running, start it if not.
 
@@ -89,7 +112,14 @@ def ensure_daemon_running(debug: bool = False) -> None:
     opaque "did not become ready". (M-31)
     """
     if pipe_exists():
-        # Fast path: daemon already running
+        # Fast path: daemon already running and pipe is connectable
+        return
+
+    # The pipe may be momentarily absent while a live daemon tears down and
+    # recreates it between connections. If the daemon process is still alive,
+    # don't spawn a rival — send_to_daemon retries the pipe connect through
+    # that transient gap. Only spawn when the daemon is genuinely gone.
+    if _daemon_process_alive():
         return
 
     logger.info("Daemon not running, starting...")
