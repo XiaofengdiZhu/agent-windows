@@ -18,14 +18,14 @@ agent-windows-python config doctor            # Check whether the vision model i
 ### Example
 
 ```bash
-agent-windows-python config set grounding.model gpt-4o
+agent-windows-python config set vlm.model gpt-4o
 agent-windows-python config set tree.max_depth 50
 agent-windows-python config set wait.poll_interval 0.3
 ```
 
 ## Configuration Sections
 
-### [grounding]
+### [vlm]
 
 Vision model settings for `ground`, `detect`, and `ask-vision`.
 
@@ -35,7 +35,7 @@ Vision model settings for `ground`, `detect`, and `ask-vision`.
 | `engine` | str | `"openai"` | Vision engine: `openai`, `anthropic`, or `gemini` |
 | `model` | str | `"gpt-4o-mini"` | Default model for vision calls |
 | `api_base` | str | `"https://api.openai.com/v1"` | API endpoint URL |
-| `api_key` | str | `""` | API key. **Encrypted at rest** with Windows DPAPI (current-user scope); set via `config set grounding.api_key sk-...` and it is transparently decrypted on load. Legacy plaintext values still work and are re-encrypted on next write. (Or use the `AGENT_WINDOWS_GROUNDING_API_KEY` env var) |
+| `api_key` | str | `""` | API key. **Encrypted at rest** with Windows DPAPI (current-user scope); set via `config set vlm.api_key sk-...` and it is transparently decrypted on load. Legacy plaintext values still work and are re-encrypted on next write. (Or use the `AGENT_WINDOWS_VLM_API_KEY` env var) |
 | `timeout` | int | `30` | Request timeout in seconds |
 | `width` | int | `1000` | Screenshot resize width for model input |
 | `height` | int | `1000` | Screenshot resize height for model input |
@@ -132,7 +132,7 @@ Client-side read timeout — prevents the CLI from hanging if the daemon is unre
 
 | Variable | Overrides | Description |
 |----------|-----------|-------------|
-| `AGENT_WINDOWS_GROUNDING_API_KEY` | `grounding.api_key` | Vision model API key |
+| `AGENT_WINDOWS_VLM_API_KEY` | `vlm.api_key` | Vision model API key |
 | `AGENT_WINDOWS_SCREENSHOT_DIR` | Screenshot directory | Override screenshot storage location |
 
 Priority order: **CLI args > env vars > config file > defaults**
@@ -188,7 +188,7 @@ Contents:
 A typical config for development:
 
 ```toml
-[grounding]
+[vlm]
 enabled = true
 engine = "openai"
 model = "gpt-4o-mini"

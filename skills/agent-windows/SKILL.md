@@ -115,9 +115,9 @@ agent-windows-python config doctor      # shows whether the vision model is conf
 If it reports **NOT READY**, help the user configure it before using vision commands:
 
 ```bash
-agent-windows-python config set grounding.api_key sk-...      # their API key
-agent-windows-python config set grounding.engine openai       # openai / anthropic / gemini
-agent-windows-python config set grounding.model gpt-4o-mini   # a cheap multimodal model
+agent-windows-python config set vlm.api_key sk-...      # their API key
+agent-windows-python config set vlm.engine openai       # openai / anthropic / gemini
+agent-windows-python config set vlm.model gpt-4o-mini   # a cheap multimodal model
 agent-windows-python config doctor                            # verify
 ```
 

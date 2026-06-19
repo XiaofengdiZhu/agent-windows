@@ -109,10 +109,10 @@ agent-windows observe
 4. Network connectivity
 
 **Recovery**:
-1. Check API key: `agent-windows-python config doctor` (or `config show` and look for the `grounding.api_key` line)
-2. Set the key: `export AGENT_WINDOWS_GROUNDING_API_KEY="sk-..."` or `agent-windows-python config set grounding.api_key "sk-..."`
+1. Check API key: `agent-windows-python config doctor` (or `config show` and look for the `vlm.api_key` line)
+2. Set the key: `export AGENT_WINDOWS_VLM_API_KEY="sk-..."` or `agent-windows-python config set vlm.api_key "sk-..."`
 3. Test with a simple call: `agent-windows ground "desktop"`
-4. If timeout, increase: `agent-windows-python config set grounding.timeout 60`
+4. If timeout, increase: `agent-windows-python config set vlm.timeout 60`
 
 ## Wait Timeout
 

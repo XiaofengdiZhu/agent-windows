@@ -64,7 +64,7 @@ agent-windows observe
 
 # Visual grounding (locate element by description)
 agent-windows ground "the taskbar"
-# Single-pass: one API call, ~2x faster, lower precision (overrides config grounding.single_pass)
+# Single-pass: one API call, ~2x faster, lower precision (overrides config vlm.single_pass)
 agent-windows ground "the taskbar" --single-pass
 
 # Detect multiple targets (returns bounding boxes)
@@ -164,17 +164,17 @@ Python daemon (persistent, COM STA worker)
 `ground`, `detect`, and `ask-vision` need a multimodal model to read the screen. Configure one with `config set`:
 
 ```bash
-# 1. API key (or export AGENT_WINDOWS_GROUNDING_API_KEY instead)
-agent-windows-python config set grounding.api_key sk-xxxxxxxx
+# 1. API key (or export AGENT_WINDOWS_VLM_API_KEY instead)
+agent-windows-python config set vlm.api_key sk-xxxxxxxx
 
 # 2. Engine: openai (default) / anthropic / gemini
-agent-windows-python config set grounding.engine openai
+agent-windows-python config set vlm.engine openai
 
 # 3. Model (a cheap multimodal model is enough)
-agent-windows-python config set grounding.model gpt-4o-mini
+agent-windows-python config set vlm.model gpt-4o-mini
 
 # 4. (Non-OpenAI endpoints only) API base
-# agent-windows-python config set grounding.api_base https://api.openai.com/v1
+# agent-windows-python config set vlm.api_base https://api.openai.com/v1
 
 # 5. Verify
 agent-windows-python config doctor
@@ -186,15 +186,15 @@ agent-windows-python config doctor
 
 Config file: `~/.agent-windows/config.toml` (auto-created with owner-only permissions)
 
-> **Security**: The `grounding.api_key` is **encrypted at rest** with Windows DPAPI (current-user scope) and the file is restricted to your Windows account via an owner-only ACL. Decryption happens transparently on load — you only ever set the plaintext key. Legacy plaintext keys in an existing file still work and are encrypted on the next `config set`. API keys in `config show` output are automatically masked. For CI/CD or shared environments, use the `AGENT_WINDOWS_GROUNDING_API_KEY` environment variable — it takes priority over the config file and is never written to disk.
+> **Security**: The `vlm.api_key` is **encrypted at rest** with Windows DPAPI (current-user scope) and the file is restricted to your Windows account via an owner-only ACL. Decryption happens transparently on load — you only ever set the plaintext key. Legacy plaintext keys in an existing file still work and are encrypted on the next `config set`. API keys in `config show` output are automatically masked. For CI/CD or shared environments, use the `AGENT_WINDOWS_VLM_API_KEY` environment variable — it takes priority over the config file and is never written to disk.
 
 ```toml
-[grounding]
+[vlm]
 enabled = true
 engine = "openai"       # openai / anthropic / gemini
 model = "gpt-4o-mini"
 api_base = "https://api.openai.com/v1"
-api_key = ""             # or AGENT_WINDOWS_GROUNDING_API_KEY env var
+api_key = ""             # or AGENT_WINDOWS_VLM_API_KEY env var
 timeout = 30
 image_format = "JPEG"   # JPEG or PNG
 jpeg_quality = 85        # JPEG quality (1-95), ignored when image_format = PNG

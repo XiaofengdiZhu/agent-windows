@@ -71,7 +71,7 @@ agent-windows ground "Submit button" --single-pass   # 1 API call, ~2x faster, l
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `description` | str | **required** | Element description to locate |
-| `--single-pass` | bool | `false` | Skip the fine-pass API call: one round-trip instead of two (faster, lower cost) at the cost of precision — coarse coordinate only. Overrides config `grounding.single_pass` for this call. |
+| `--single-pass` | bool | `false` | Skip the fine-pass API call: one round-trip instead of two (faster, lower cost) at the cost of precision — coarse coordinate only. Overrides config `vlm.single_pass` for this call. |
 
 **Output**: `{output, x, y, confidence, method, screenshot_path}`
 

@@ -113,15 +113,15 @@ agent-windows ask-vision "What text is shown in the status bar?" -i screenshot.p
 
 ## Vision Model Configuration
 
-Vision tools are powered by the `[grounding]` config section.
+Vision tools are powered by the `[vlm]` config section.
 
 ```toml
-[grounding]
+[vlm]
 enabled = true
 engine = "openai"           # openai / anthropic / gemini
 model = "gpt-4o-mini"
 api_base = "https://api.openai.com/v1"
-api_key = ""                # or AGENT_WINDOWS_GROUNDING_API_KEY env var
+api_key = ""                # or AGENT_WINDOWS_VLM_API_KEY env var
 timeout = 30
 image_format = "JPEG"       # JPEG or PNG
 jpeg_quality = 85           # JPEG quality (1-95), ignored when PNG
@@ -141,10 +141,10 @@ Three ways (priority order: env var > config > interactive):
 
 ```bash
 # Environment variable (recommended for security)
-export AGENT_WINDOWS_GROUNDING_API_KEY="sk-..."
+export AGENT_WINDOWS_VLM_API_KEY="sk-..."
 
 # Config file
-agent-windows-python config set grounding.api_key "sk-..."
+agent-windows-python config set vlm.api_key "sk-..."
 
 # Or leave empty and set at runtime
 ```
