@@ -1,36 +1,30 @@
 ---
 name: agent-windows
-description: "Windows desktop automation CLI for AI agents. Use when the user needs to interact with the Windows desktop: open apps, read the screen via UIA accessibility tree or screenshots, click / type / press shortcut keys / scroll / drag, execute shell commands, manage files, processes, and clipboard, or automate any Windows GUI task. Triggers include requests to open an application, click a button, type text, take a screenshot, read screen content, manage windows, run PowerShell, or automate any desktop workflow on Windows."
+description: "Windows desktop automation CLI for AI agents. Use when the user needs to interact with the Windows desktop: open apps, read the screen, click / type / press shortcut keys / scroll / drag, execute shell commands, manage files, processes, and clipboard, or automate any Windows GUI task. Triggers include requests to open an application, click a button, type text, take a screenshot, read screen content, manage windows, run PowerShell, or automate any desktop workflow on Windows."
 allowed-tools: Bash(agent-windows:*)
 ---
 
 # agent-windows
 
-Windows Computer-Use CLI for AI Agents. Fast Client-Daemon architecture with UIA accessibility tree traversal, visual coordinate grounding, and mouse/keyboard automation.
+Windows desktop automation CLI. Open apps, read the screen, click, type, press shortcuts, scroll, drag, run shell, manage files/processes/clipboard — automate any Windows GUI task.
 
-Install (recommended): `uv tool install agent-windows` — adds `agent-windows` to your PATH as a persistent command. This is required by the daemon architecture: the CLI↔daemon version check (see below) stays stable across calls.
+## Install
 
-One-off trial: `uvx agent-windows observe` — runs without installing. Fine for trying it out, but the daemon may auto-restart if uvx's cached version drifts (e.g. after a new release); use `uv tool install` for regular use.
+Check whether it's already installed:
 
-From source (a checkout of this repo): `uv sync`, then `uv run agent-windows ...`. Until the package is on PyPI, this is the install path.
-
-> **Why install matters here:** the daemon is long-lived (30 min idle timeout) and auto-restarts when its version no longer matches the CLI's. With `uv tool install` both versions are pinned and never drift; with `uvx` a cache refresh can silently bump the CLI and trigger that restart, dropping any in-flight UIA state.
-
-## Architecture
-
-```
-agent-windows.exe (native Rust launcher, ~12ms)
-    │
-    ▼ Named Pipe IPC (JSON-RPC 2.0)
-    │
-Python daemon (persistent, COM STA worker)
+```bash
+agent-windows --version          # prints version if installed
 ```
 
-- **Native launcher**: a 254 KB Rust binary (`agent-windows.exe`) parses argv and forwards JSON-RPC to the daemon. Cold start ~12ms. The Python CLI remains available as `agent-windows-python` for `--no-daemon` mode.
-- **Daemon**: Persistent Python process holding heavy imports (comtypes, UIA, Pillow). Auto-starts on first CLI call, auto-stops after 30 min idle.
-- **Auto-start**: First CLI call starts daemon automatically. No manual setup needed.
+If not, install (recommended — pins `agent-windows` to your PATH):
 
-> **Latency**: a warm IPC round-trip is ~1 ms; an end-to-end native-launcher call is ~12 ms. The Python CLI (`agent-windows-python`) is ~230 ms by comparison — the native launcher replaces it for everyday use.
+```bash
+uv tool install agent-windows
+```
+
+One-off trial (runs without installing): `uvx agent-windows observe`.
+
+> Prefer `uv tool install` over `uvx` for regular use — it pins the version, while `uvx` can silently bump it and trigger daemon restarts.
 
 ## The Core Loop
 
@@ -112,7 +106,7 @@ agent-windows screenshot -o shot.png     # Save to file
 
 ### How It Works
 
-`@eN` is a **1-based index** into the `interactive_elements` array from the most recent `snapshot` or `observe` call. The Interactive Elements table looks like:
+`@eN` references an element in the Interactive Elements table from the most recent `snapshot` or `observe` call. The table looks like:
 
 ```
 ## Interactive Elements
@@ -286,7 +280,7 @@ agent-windows diff baseline.png                             # Diff vs fresh scre
 
 ## Batch Execution
 
-Execute multiple commands in a single IPC round-trip:
+Execute multiple commands in one call:
 
 ```bash
 # Inline JSON
@@ -362,12 +356,3 @@ For detailed information beyond this guide:
 | `references/vision.md` | ground/detect/ask-vision details, vision model configuration |
 | `references/configuration.md` | Config file reference, env vars, daemon management |
 | `references/troubleshooting.md` | Common failures, error codes, debug mode |
-
-## Why agent-windows
-
-- Fast CLI→daemon architecture (warm IPC ~1 ms; the daemon stays resident so COM/UIA imports happen once, not per command)
-- UIA accessibility tree gives pixel-exact element positions
-- `@eN` element refs for reliable, repeatable element targeting
-- Dual observation: UIA tree (precise) + vision model (for custom-drawn UI)
-- Windows-native via COM/Win32 — no browser dependency, works with any desktop app
-- Batch execution for multi-step operations in a single IPC round-trip

@@ -123,13 +123,9 @@ model = "gpt-4o-mini"
 api_base = "https://api.openai.com/v1"
 api_key = ""                # or AGENT_WINDOWS_GROUNDING_API_KEY env var
 timeout = 30
-image_format = "JPEG"       # JPEG (default) or PNG for images sent to the API
+image_format = "JPEG"       # JPEG or PNG
 jpeg_quality = 85           # JPEG quality (1-95), ignored when PNG
 ```
-
-### Image Encoding
-
-Images are resized with **BILINEAR** and sent as **JPEG** by default — smaller and faster with no loss the model perceives. Set `grounding.image_format = "PNG"` for lossless input (`gemini` uses the SDK's native encoding, so this option doesn't apply to it).
 
 ### Supported Engines
 

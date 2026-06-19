@@ -41,7 +41,7 @@ agent-windows daemon start
 
 **Symptom**: you run commands via `uvx agent-windows ...` and the daemon restarts itself on (seemingly) every few invocations, dropping UIA state and forcing re-`observe`.
 
-**Cause**: `uvx` runs from an isolated, cached environment. When that cache gets refreshed (a new release was published, the cache expired, you ran `uvx -U`, etc.), the CLI version you just invoked no longer matches the version of the long-lived daemon that's still running. The version check (`check_version_mismatch`) sees the drift and restarts the daemon.
+**Cause**: `uvx` runs from an isolated, cached environment. When that cache gets refreshed (new release, cache expiry, `uvx -U`), the CLI version no longer matches the running daemon, and the version check restarts it.
 
 **Recovery**: switch to a persistent install so CLI and daemon versions are pinned together:
 
@@ -50,8 +50,6 @@ uv tool install agent-windows
 agent-windows daemon stop       # let the new install's daemon take over
 agent-windows observe
 ```
-
-Reserve `uvx agent-windows ...` for one-off trials, not regular use.
 
 ### Connection refused
 
@@ -80,7 +78,7 @@ Reserve `uvx agent-windows ...` for one-off trials, not regular use.
 
 **Causes**:
 1. **Wrong window has focus**: The click went to the currently active window, not the intended one.
-2. **DPI scaling**: Rare — the daemon handles DPI V2 awareness automatically.
+2. **DPI scaling**: Rare — DPI is handled automatically.
 3. **Stale coordinates**: The element moved between snapshot and click.
 
 **Recovery**:
@@ -91,7 +89,7 @@ Reserve `uvx agent-windows ...` for one-off trials, not regular use.
 ## Type Doesn't Work
 
 **Causes**:
-1. **IME interference**: `agent-windows type` uses Unicode direct input (`SendInput` with `KEYEVENTF_UNICODE`), which bypasses IME. If IME was active, the typed text may not appear correctly.
+1. **IME interference**: `agent-windows type` uses Unicode direct input, which bypasses IME. If IME was active, the typed text may not appear correctly.
 2. **Wrong field focused**: The text went to whatever control currently has keyboard focus, which may not be the intended target.
 3. **Read-only field**: The target control doesn't accept text input.
 
@@ -196,7 +194,7 @@ agent-windows click 500 300 --debug --format json --no-daemon
 
 - `--debug`: Verbose logging
 - `--format json`: Structured output
-- `--no-daemon`: Run in-process (no IPC), shows full stack traces
+- `--no-daemon`: Run in-process, shows full stack traces
 
 ### Log Files
 

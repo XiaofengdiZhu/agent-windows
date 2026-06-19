@@ -18,7 +18,7 @@ One-off trial (runs without installing):
 uvx agent-windows observe
 ```
 
-> **Why `uv tool install` over `uvx` for regular use:** the daemon is long-lived (30 min idle timeout) and auto-restarts when its version no longer matches the CLI's. `uv tool install` pins both versions together; `uvx` runs from a cache that can be refreshed (new release, cache expiry, `uvx -U`) and silently bump the CLI, which triggers a daemon restart that drops any in-flight UIA state. If you see the daemon restarting on every few calls under `uvx`, that's the cause — install it with `uv tool install` instead.
+> **`uv tool install` is recommended over `uvx` for regular use.** The daemon is long-lived and auto-restarts when its version no longer matches the CLI's; `uv tool install` pins both versions together, while `uvx` runs from a cache that can be silently refreshed (new release, cache expiry, `uvx -U`), triggering unwanted daemon restarts. See [Troubleshooting](#) for details.
 
 From source (a checkout of this repo):
 
@@ -85,12 +85,11 @@ agent-windows.exe (native Rust launcher, ~12ms)
 Python daemon (persistent, COM STA worker)
 ```
 
-- **Native launcher** (`agent-windows.exe`, 254 KB): a Rust binary that parses argv and forwards JSON-RPC requests to the daemon. Cold start ~12ms — vs ~350ms for the Python Typer CLI it replaces. Source: `src/launcher/`. The Python CLI remains available as `agent-windows-python` for `--no-daemon` mode and unported commands.
-- **Daemon**: Persistent Python process holding heavy imports (comtypes, uia, Pillow). Three-thread model: I/O thread (overlapped I/O), COM STA worker thread, idle monitor. Handlers are organized by domain in `daemon/handlers/`.
+- **Native launcher** (`agent-windows.exe`): a Rust binary that parses argv and forwards JSON-RPC requests to the daemon. Source: `src/launcher/`. The Python CLI remains available as `agent-windows-python` for `--no-daemon` mode and unported commands.
+- **Daemon**: Persistent Python process holding heavy imports (comtypes, uia, Pillow). Handlers are organized by domain in `daemon/handlers/`.
 - **IPC**: Named Pipe with per-user DACL security. JSON-RPC 2.0 protocol.
-- **Auto-start**: First CLI call starts daemon automatically. Idle timeout (30min) stops it. Graceful shutdown via overlapped I/O.
-- **Caching**: UIA tree traversal (2s TTL), config loading (mtime-based), API clients, and screenshot backends are all cached for performance.
-- **Concurrency (serial by design)**: The daemon handles **one command at a time** — the named pipe is single-instance and the I/O thread blocks until each command finishes. This is intentional, not a limitation to fix: UIA/COM is STA-bound and `SendInput` mutates global GUI state, so concurrent commands would race and corrupt automation. A single client is naturally serial anyway (request → wait for response → reconnect), so it costs nothing in normal use. The one caveat: **multiple agents sharing one daemon serialize against each other** — a slow `shell` (~30s) or vision API call (2-10s) blocks the rest. Concurrent multi-client use is not supported; for isolation between agents, run separate daemon instances. Because the named-pipe path is per-user (`~/.agent-windows/`), the simplest isolation is **one Windows user account per agent** — each gets its own daemon, config, and screenshot directory with no contention. On a single account, stagger agent activity or accept the serialization.
+- **Auto-start**: First CLI call starts daemon automatically. Idle timeout (30min) stops it.
+- **Serial execution**: The daemon runs one command at a time. This is required because UIA/COM is apartment-bound and `SendInput` mutates global GUI state — concurrent commands would race. A single client is naturally serial; the only case it matters is multiple agents sharing one daemon (they serialize against each other). For isolation, run separate daemons (one user account per agent — the pipe path is per-user).
 
 ## Commands
 
@@ -162,14 +161,14 @@ model = "gpt-4o-mini"
 api_base = "https://api.openai.com/v1"
 api_key = ""             # or AGENT_WINDOWS_GROUNDING_API_KEY env var
 timeout = 30
-image_format = "JPEG"   # JPEG (smaller/faster, default) or PNG for vision API
+image_format = "JPEG"   # JPEG or PNG
 jpeg_quality = 85        # JPEG quality (1-95), ignored when image_format = PNG
 
 [screenshot]
 backend = "auto"         # auto / dxcam / mss / pillow
 max_width = 1920
 max_height = 1080
-resampling = "BILINEAR"  # downscale filter: BILINEAR (default) / LANCZOS / NEAREST
+resampling = "BILINEAR"  # BILINEAR / LANCZOS / NEAREST
 
 [tree]
 max_depth = 15         # max traversal depth
@@ -179,8 +178,6 @@ timeout = 10           # global traversal budget, seconds (0 disables)
 [clipboard]
 method = "system"      # "system" (PowerShell API) or "keyboard" (simulate Ctrl+C/V)
 ```
-
-> **Performance**: Vision model input is resized with BILINEAR (not LANCZOS) and encoded as JPEG by default — together this cuts each grounding call's image-prepare + upload cost substantially with no loss the model can perceive. Saved screenshots likewise default to BILINEAR; set `screenshot.resampling = "LANCZOS"` if you need maximum fidelity.
 
 ## Desktop Automation Tips
 

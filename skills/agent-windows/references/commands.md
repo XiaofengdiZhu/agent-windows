@@ -71,7 +71,7 @@ agent-windows ground "Submit button" --single-pass   # 1 API call, ~2x faster, l
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `description` | str | **required** | Element description to locate |
-| `--single-pass` | bool | `false` | Skip the fine-pass API call: one network round-trip instead of two (~2x faster, ~half the cost) at the cost of precision — coarse coordinate only, no sub-element refinement. Overrides config `grounding.single_pass` for this call. |
+| `--single-pass` | bool | `false` | Skip the fine-pass API call: one round-trip instead of two (faster, lower cost) at the cost of precision — coarse coordinate only. Overrides config `grounding.single_pass` for this call. |
 
 **Output**: `{output, x, y, confidence, method, screenshot_path}`
 
@@ -141,8 +141,8 @@ agent-windows is enabled @e3
 
 **Output**: `{output, selector, check, result}`. `result` is `true` or `false`.
 
-- `visible` = element is not offscreen (`CurrentIsOffscreen == false`)
-- `enabled` = element is enabled (`CurrentIsEnabled == true`)
+- `visible` = element is on-screen
+- `enabled` = element is enabled
 
 ### highlight
 
@@ -370,7 +370,7 @@ agent-windows app launch "C:\Program Files\app\test.exe" --args --flag
 | `name_or_path` | str | **required** | App name or executable path |
 | `args` | list[str] | `None` | Application arguments |
 
-**Output**: Delegates to `launch_app()`.
+**Output**: PID of the launched process.
 
 ### app switch
 
@@ -385,7 +385,7 @@ agent-windows app switch chrome
 |-----------|------|---------|-------------|
 | `name_or_title` | str | **required** | Window title or process name |
 
-**Output**: Delegates to `switch_window()`.
+**Output**: Window handle of the switched-to window.
 
 ### app list
 
@@ -416,7 +416,7 @@ agent-windows app resize "Notepad" --width 800 --height 600 --x 100 --y 100
 | `--x` | int | `-1` | X position (-1 = keep current) |
 | `--y` | int | `-1` | Y position (-1 = keep current) |
 
-**Output**: Delegates to `resize_window()`.
+**Output**: New window position and size.
 
 ---
 
@@ -516,7 +516,7 @@ Raises error code `-1003` (WAIT_TIMEOUT) on timeout.
 
 ### batch
 
-Execute multiple commands in one IPC round-trip.
+Execute multiple commands in one call.
 
 ```bash
 agent-windows batch '[{"method":"click","params":{"x":500,"y":300}}]'
@@ -546,11 +546,11 @@ Each command: `{"method": "<name>", "params": {<optional>}}`. Nested batch is fo
 
 ### daemon start / stop / status
 
-Manage the daemon process. These run locally (no IPC dispatch).
+Manage the daemon process.
 
 ```bash
-agent-windows daemon start     # Launch daemon subprocess
-agent-windows daemon stop      # Send shutdown IPC call
+agent-windows daemon start     # Start the daemon
+agent-windows daemon stop      # Stop the daemon
 agent-windows daemon status    # Check if running, PID, version
 ```
 

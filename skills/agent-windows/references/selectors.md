@@ -4,12 +4,7 @@
 
 ## How @eN Refs Work
 
-`@eN` is a **1-based index** into the `interactive_elements` array returned by `snapshot` or `observe`. When you call `agent-windows snapshot`, the daemon:
-
-1. Traverses the UIA accessibility tree via COM.
-2. Collects all interactive elements (controls that are both `is_interactive` and `is_enabled`).
-3. Renders them into a text snapshot with an **Interactive Elements table**.
-4. Assigns `@e1`, `@e2`, `@e3`, ... in order of discovery.
+`@eN` references an element in the Interactive Elements table returned by `snapshot` or `observe`. Refs are assigned in discovery order: `@e1`, `@e2`, `@e3`, ...
 
 The index is positional — `@e3` always means "the third interactive element in the most recent snapshot". If the UI changes between snapshots, the same `@e3` may refer to a completely different element.
 
@@ -100,9 +95,9 @@ Some commands resolve the selector to coordinates internally:
 
 | Command | Selector Usage |
 |---------|---------------|
-| `get-text @e3` | Returns the element's `name` property |
-| `is visible @e3` | Checks `CurrentIsOffscreen` |
-| `is enabled @e3` | Checks `CurrentIsEnabled` |
+| `get-text @e3` | Returns the element's name/text |
+| `is visible @e3` | Checks if the element is on-screen |
+| `is enabled @e3` | Checks if the element is enabled |
 | `wait @e3` | Polls until the element is found in the tree |
 | `screenshot -s @e3` | Crops screenshot to element's bounding box |
 
@@ -111,8 +106,7 @@ For all other commands (`click`, `type`, `scroll`, `drag`, `hover`, etc.), extra
 ## Coordinate Space
 
 - All coordinates are **physical screen pixels**.
-- DPI awareness is handled by the daemon (per-monitor DPI V2).
-- No conversion is needed by the caller — coordinates from the snapshot map 1:1 to physical pixels.
+- No DPI conversion is needed — coordinates from the snapshot map 1:1 to physical pixels (per-monitor DPI is handled automatically).
 - Multi-monitor: coordinates span the virtual screen. Use `--monitor` on `screenshot` to target a specific display.
 
 ## Ref Lifecycle Rules
