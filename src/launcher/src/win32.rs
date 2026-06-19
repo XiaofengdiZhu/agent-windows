@@ -144,10 +144,21 @@ fn complete_overlapped(
         if err == ERROR_IO_PENDING {
             let rc = unsafe { WaitForSingleObject(event, timeout_ms) };
             if rc == WAIT_TIMEOUT {
-                // Cancel the in-flight async op before returning — otherwise it
-                // keeps referencing the handle/overlapped after we close them.
-                // (Mirrors pipe.py's CancelIo on timeout.)
+                // CancelIo only *queues* a cancellation — the kernel still
+                // writes the completion status into `overlapped` (and signals
+                // `event`) when the cancel takes effect. We must NOT let the
+                // caller close `event` / drop the stack `OVERLAPPED` until
+                // GetOverlappedResult returns, or the kernel writes into freed
+                // memory (UAF). This is the documented overlapped-cancel
+                // contract; the Python client gets away with skipping it only
+                // because GC defers its OVERLAPPED/event release.
                 unsafe { CancelIo(handle) };
+                let mut transferred: u32 = 0;
+                // bWait=TRUE: block until the cancel completes. Safe because the
+                // handle is overlapped (CreateFileW FILE_FLAG_OVERLAPPED /
+                // inheritable anonymous pipe) and CancelIo has already been
+                // issued, so this returns promptly with ERROR_OPERATION_ABORTED.
+                let _ = unsafe { GetOverlappedResult(handle, overlapped_ptr, &mut transferred, 1) };
                 return Err(format!("Timed out waiting {}ms for daemon", timeout_ms));
             }
             // WAIT_OBJECT_0 = signalled (done). Anything else (WAIT_FAILED, an
@@ -647,7 +658,14 @@ fn overlapped_read_chunk_timed(handle: HANDLE, timeout_ms: u32) -> Result<Vec<u8
         // Pending — wait for completion.
         let rc = WaitForSingleObject(event, timeout_ms);
         if rc == WAIT_TIMEOUT {
+            // Drain the cancel before closing `event`: CancelIo only queues the
+            // cancel; the kernel still writes the completion into `overlapped`
+            // and signals `event` when it takes effect. Closing the event first
+            // would be a UAF. bWait=TRUE blocks until the cancel completes
+            // (prompt, ERROR_OPERATION_ABORTED).
             CancelIo(handle);
+            let mut transferred: u32 = 0;
+            let _ = GetOverlappedResult(handle, ovl_ptr, &mut transferred, 1);
             CloseHandle(event);
             return Err(format!("Timed out waiting {}ms for stderr", timeout_ms));
         }
