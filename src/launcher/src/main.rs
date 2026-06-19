@@ -76,30 +76,77 @@ fn report_error(msg: &str, error_type: &str, global: &GlobalFlags) {
     }
 }
 
-/// Strip leading `--no-daemon` / `--format` / `--debug` and any `--help`/`-h`,
-/// returning the remaining argv (command + its args).
+/// Strip the global flags that may appear *before* the command name
+/// (`--no-daemon` / `--format [json]` / `--debug`), returning the remaining
+/// argv (command + its args). Mirrors the Python Typer CLI: a `@app.callback`
+/// registers these as top-level options that Click parses only in the prefix,
+/// before the subcommand. So `agent-windows --format json click 10 20` sets
+/// json mode, but `agent-windows click 10 20 --format json` passes `--format
+/// json` through to `click` (which then rejects it — same as the Python CLI).
+///
+/// Scanning stops at the first token that isn't a global flag — that token is
+/// the command name, and everything from there on belongs to the command.
+/// `--help`/`-h` is the one exception: Typer treats it as reachable from any
+/// position, so we collect it wherever it appears (rewriting it to the front of
+/// `rest`, where `parse` recognizes it).
 fn strip_global_flags(argv: &[String]) -> (GlobalFlags, Vec<String>) {
     let mut g = GlobalFlags::default();
     let mut rest = Vec::new();
-    let mut iter = argv.iter();
-    while let Some(a) = iter.next() {
+    let mut help_seen = false;
+
+    // Phase 1: consume the global-flag prefix. The first non-global token ends
+    // prefix scanning — it's the command name, and it (plus everything after)
+    // is passed through verbatim as the command's argv.
+    let mut i = 0;
+    while i < argv.len() {
+        let a = &argv[i];
         match a.as_str() {
             "--no-daemon" => g.no_daemon = true,
             "--debug" => g.debug = true,
             "--format" => {
-                if let Some(v) = iter.next() {
-                    g.format_json = v == "json";
+                // Value is the next token, but only while we're still in the
+                // prefix. If `--format` is the very last prefix token with no
+                // value, leave format_json at its default (matches Typer, which
+                // would error — we silently default rather than invent a parse
+                // error here; the command proceeds in text mode).
+                if i + 1 < argv.len() {
+                    g.format_json = argv[i + 1] == "json";
+                    i += 1; // consume the value
                 }
             }
             s if s.starts_with("--format=") => {
                 g.format_json = &s["--format=".len()..] == "json";
             }
             "--help" | "-h" => {
-                rest.insert(0, "--help".into());
+                help_seen = true;
             }
-            _ => rest.push(a.clone()),
+            // First non-global token: end of prefix. Stop scanning and treat
+            // the rest (including this token) as the command's argv.
+            _ => break,
+        }
+        i += 1;
+    }
+
+    // Phase 2: everything from the command name onward is the command's argv.
+    // We do NOT keep stripping global flags here (--no-daemon/--format/--debug
+    // past the command belong to the command, per the Typer contract). The one
+    // exception is `--help`/`-h`, which Typer makes reachable from any slot —
+    // so we scan the tail for it, drop it from its position, and hoist it to
+    // the front (below) where `parse` recognizes it.
+    for a in &argv[i..] {
+        match a.as_str() {
+            "--help" | "-h" => help_seen = true,
+            other => rest.push(other.into()),
         }
     }
+
+    // `--help`/`-h` is reachable from any position (Typer special-cases it).
+    // If it appeared anywhere, surface it at the front of `rest` so `parse`
+    // prints help regardless of where the user put it.
+    if help_seen {
+        rest.insert(0, "--help".into());
+    }
+
     (g, rest)
 }
 
@@ -482,5 +529,127 @@ mod tests {
         assert_eq!(exit_code_for(-3500), 1);
         assert_eq!(exit_code_for(-3999), 1);
         assert_eq!(exit_code_for(0), 1);
+    }
+
+    // ── strip_global_flags: prefix-only scanning (L-07) ───────────────────
+    //
+    // The launcher must mirror the Python Typer CLI: global flags
+    // (--no-daemon/--format/--debug) are top-level callback options parsed
+    // only BEFORE the subcommand. The old code scanned the whole argv, so
+    // `click 10 20 --format json` swallowed `--format json` (eating `json`
+    // and leaving `click` mis-parsed) — diverging from Python, which passes
+    // `--format json` to `click` and rejects it. These lock the prefix-only
+    // contract. `--help`/`-h` stays reachable anywhere (Typer special-cases it).
+
+    use super::strip_global_flags;
+
+    fn argv(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn global_flags_in_prefix_are_consumed() {
+        // Standard placement: globals before the command. All three consumed;
+        // command + its args pass through untouched.
+        let (g, rest) = strip_global_flags(&argv(&["--no-daemon", "--debug", "--format", "json", "click", "10", "20"]));
+        assert!(g.no_daemon);
+        assert!(g.debug);
+        assert!(g.format_json);
+        assert_eq!(rest, argv(&["click", "10", "20"]));
+    }
+
+    #[test]
+    fn format_equals_form_in_prefix() {
+        let (g, rest) = strip_global_flags(&argv(&["--format=json", "snapshot"]));
+        assert!(g.format_json);
+        assert_eq!(rest, argv(&["snapshot"]));
+        // Non-json value → format_json stays false, value not leaked into rest.
+        let (g, rest) = strip_global_flags(&argv(&["--format=text", "snapshot"]));
+        assert!(!g.format_json);
+        assert_eq!(rest, argv(&["snapshot"]));
+    }
+
+    #[test]
+    fn global_flag_after_command_is_passed_through() {
+        // The regression case: `--format` after the command must NOT be
+        // swallowed. It (and its would-be value) belong to the command now.
+        let (g, rest) = strip_global_flags(&argv(&["click", "10", "20", "--format", "json"]));
+        assert!(!g.format_json, "--format after the command must not set json mode");
+        assert_eq!(rest, argv(&["click", "10", "20", "--format", "json"]));
+
+        // Same for --debug / --no-daemon after the command.
+        let (g, rest) = strip_global_flags(&argv(&["type", "--debug", "--no-daemon"]));
+        assert!(!g.debug);
+        assert!(!g.no_daemon);
+        assert_eq!(rest, argv(&["type", "--debug", "--no-daemon"]));
+    }
+
+    #[test]
+    fn format_value_not_eaten_when_after_command() {
+        // `fs read --format report.txt`: the old code ate `report.txt` as the
+        // --format value, dropping the path → confusing missing_argument. Now
+        // --format is past the command, so it and `report.txt` both pass through
+        // (the daemon-side `fs_read` will get --format as an unknown option,
+        // matching Python).
+        let (g, rest) = strip_global_flags(&argv(&["fs", "read", "--format", "report.txt"]));
+        assert!(!g.format_json);
+        assert_eq!(rest, argv(&["fs", "read", "--format", "report.txt"]));
+    }
+
+    #[test]
+    fn first_command_token_ends_prefix_even_if_it_looks_like_a_flag_value() {
+        // A bare token that isn't a known global flag ends the prefix. So
+        // `--format` immediately followed by the command name consumes the
+        // command name as its value — same foot-gun as Typer, locked here so
+        // the behavior is explicit rather than accidental. (Users should use
+        // --format=json or put the command first.)
+        let (g, rest) = strip_global_flags(&argv(&["--format", "click", "10"]));
+        // "click" was eaten as --format's value (not "json" → format_json false),
+        // and the prefix ended, so "10" is the only remaining token.
+        assert!(!g.format_json);
+        assert_eq!(rest, argv(&["10"]));
+    }
+
+    #[test]
+    fn help_anywhere_surfaces_at_front() {
+        // --help/-h is the Typer special case: reachable from any position.
+        // It's collected during prefix scan (if before the command) or left in
+        // place (if after), then always hoisted to the front of `rest` so
+        // `parse` prints help regardless of where the user put it. The command
+        // tokens are preserved (Typer ignores them once --help is seen, and
+        // `parse` short-circuits on the leading --help before reading them).
+
+        // --help before the command: help hoisted to front, command preserved.
+        let (_g, rest) = strip_global_flags(&argv(&["--help", "click"]));
+        assert_eq!(rest, argv(&["--help", "click"]));
+
+        // --help after the command: the command isn't a global flag so the
+        // whole tail passes through, then --help is hoisted to the front.
+        let (_g, rest) = strip_global_flags(&argv(&["click", "10", "--help"]));
+        assert_eq!(rest, argv(&["--help", "click", "10"]));
+
+        // -h short form, sandwiched between command args:
+        let (_g, rest) = strip_global_flags(&argv(&["click", "-h", "20"]));
+        assert_eq!(rest, argv(&["--help", "click", "20"]));
+
+        // --help alone:
+        let (_g, rest) = strip_global_flags(&argv(&["--help"]));
+        assert_eq!(rest, argv(&["--help"]));
+    }
+
+    #[test]
+    fn no_global_flags_passes_everything_through() {
+        let (g, rest) = strip_global_flags(&argv(&["click", "10", "20"]));
+        assert!(!g.no_daemon && !g.debug && !g.format_json);
+        assert_eq!(rest, argv(&["click", "10", "20"]));
+    }
+
+    #[test]
+    fn trailing_format_with_no_value_does_not_panic() {
+        // `--format` as the very last token (no value, no command): don't read
+        // past the end; format stays text (default), rest is empty.
+        let (g, rest) = strip_global_flags(&argv(&["--format"]));
+        assert!(!g.format_json);
+        assert!(rest.is_empty());
     }
 }
