@@ -254,4 +254,4 @@ Some actions are buried in 2nd- or 3rd-level menus. Buttons may show only icons 
 
 ## License
 
-MIT (the `uia` module is vendored from [yinkaisheng/Python-UIAutomation-for-Windows](https://github.com/yinkaisheng/Python-UIAutomation-for-Windows) and [Windows-MCP](https://github.com/_ptrs/windows-mcp), Apache 2.0).
+MIT (the vendored `uia` module is from [yinkaisheng/Python-UIAutomation-for-Windows](https://github.com/yinkaisheng/Python-UIAutomation-for-Windows), Apache 2.0; some patterns adapted from [Windows-MCP](https://github.com/CursorTouch/Windows-MCP), MIT).
