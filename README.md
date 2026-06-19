@@ -246,7 +246,7 @@ Some actions are buried in 2nd- or 3rd-level menus. Buttons may show only icons 
 
 ## Requirements
 
-- Windows 10/11
+- Windows 8.1 / 10 / 11
 - Python 3.13+
 - Dependencies: typer, comtypes, pywin32 (≥308), Pillow, mss, openai
 
@@ -254,4 +254,4 @@ Some actions are buried in 2nd- or 3rd-level menus. Buttons may show only icons 
 
 ## License
 
-Apache 2.0 (uia module vendored from [yinkaisheng/Python-UIAutomation-for-Windows](https://github.com/yinkaisheng/Python-UIAutomation-for-Windows) and [Windows-MCP](https://github.com/_ptrs/windows-mcp))
+MIT (the `uia` module is vendored from [yinkaisheng/Python-UIAutomation-for-Windows](https://github.com/yinkaisheng/Python-UIAutomation-for-Windows) and [Windows-MCP](https://github.com/_ptrs/windows-mcp), Apache 2.0).

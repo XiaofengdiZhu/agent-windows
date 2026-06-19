@@ -3,6 +3,7 @@ name = "agent-windows"
 version = "0.1.0"
 description = "Windows Computer-Use CLI for AI Agents"
 readme = "README.md"
+license = "MIT"
 authors = [
     { name = "销锋镝铸", email = "523084467@qq.com" }
 ]
