@@ -344,10 +344,13 @@ fn run_local(local: LocalAction, global: &GlobalFlags) -> ExitCode {
         }
         LocalAction::DaemonStatus => {
             let pipe_up = ipc::daemon_pipe_exists();
-            let pid = daemon::read_pid_from_file();
+            let pid_info = daemon::read_pid_from_file();
             // A daemon is "running" if its PID is alive AND the pipe responds.
-            let alive = match pid {
-                Some(p) if win32::is_process_alive(p) => true,
+            // (We don't apply the strong creation-time identity check here —
+            // status is read-only display, not a kill decision; liveness is
+            // enough. The recorded start time is ignored.)
+            let alive = match pid_info {
+                Some((p, _)) if win32::is_process_alive(p) => true,
                 _ => false,
             };
             let running = alive && pipe_up;
@@ -359,7 +362,8 @@ fn run_local(local: LocalAction, global: &GlobalFlags) -> ExitCode {
                 if running { "running" } else { "stopped" }
             )];
             if running {
-                lines.push(format!("PID: {}", pid.unwrap()));
+                // Safe: running ⟹ alive ⟹ pid_info is Some((p, _)).
+                lines.push(format!("PID: {}", pid_info.unwrap().0));
                 lines.push(format!("Daemon version: {}", version));
                 lines.push(format!("Tool version: {}", tool_version));
                 if version != tool_version {

@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use windows_sys::Win32::{
     Foundation::{
-        CloseHandle, GetLastError, ERROR_BROKEN_PIPE, ERROR_HANDLE_EOF, ERROR_IO_PENDING,
+        CloseHandle, FILETIME, GetLastError, ERROR_BROKEN_PIPE, ERROR_HANDLE_EOF, ERROR_IO_PENDING,
         ERROR_NO_DATA, ERROR_PIPE_NOT_CONNECTED, FALSE, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT,
     },
     Security::SECURITY_ATTRIBUTES,
@@ -201,7 +201,10 @@ fn pipe_error(err: u32) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{create_inheritable_pipe, pipe_error, read_stderr_to_string, truncate_for_error_msg};
+    use super::{
+        create_inheritable_pipe, filetime_to_u64, pipe_error, read_stderr_to_string,
+        truncate_for_error_msg,
+    };
     use windows_sys::Win32::Foundation::CloseHandle;
 
     #[test]
@@ -261,6 +264,31 @@ mod tests {
         assert_eq!(truncate_for_error_msg(s2, 5), "a😀"); // exactly past 😀
     }
 
+    /// `filetime_to_u64` combines the two u32 halves of a FILETIME the way the
+    /// Win32 docs specify (dwHighDateTime in the high 32 bits). Locked because
+    /// `process_create_time_secs` (and thus the PID-recycle guard in
+    /// `is_our_daemon`) depends on this being exactly right — a wrong combine
+    /// would silently make every identity check fail-closed.
+    #[test]
+    fn filetime_to_u64_combines_halves() {
+        use windows_sys::Win32::Foundation::FILETIME;
+        let ft = FILETIME { dwLowDateTime: 0x1234_5678, dwHighDateTime: 0x0000_9ABC };
+        assert_eq!(filetime_to_u64(&ft), 0x0000_9ABC_1234_5678);
+
+        // Zero stays zero.
+        let zero = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+        assert_eq!(filetime_to_u64(&zero), 0);
+
+        // A realistic value: FILETIME epoch for 2020-01-01 ~132233352000000000
+        // (100ns intervals since 1601). Low/high split sanity.
+        let intervals: u64 = 132_233_352_000_000_000;
+        let ft = FILETIME {
+            dwLowDateTime: (intervals & 0xFFFF_FFFF) as u32,
+            dwHighDateTime: (intervals >> 32) as u32,
+        };
+        assert_eq!(filetime_to_u64(&ft), intervals);
+    }
+
     /// Round-trip a stderr snippet through a real anonymous pipe: write on the
     // write end, close it, read it back. This is the core of #9 — proves the
     // pipe + read path actually captures what a dying daemon would emit.
@@ -308,10 +336,10 @@ pub fn pipe_exists(pipe_name: &str) -> bool {
 
 use windows_sys::Win32::{
     System::Threading::{
-        CreateProcessW, DeleteProcThreadAttributeList, GetExitCodeProcess, InitializeProcThreadAttributeList,
-        OpenProcess, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROCESS_INFORMATION,
-        PROCESS_QUERY_LIMITED_INFORMATION, STARTUPINFOEXW, STARTUPINFOW, UpdateProcThreadAttribute,
-        EXTENDED_STARTUPINFO_PRESENT, LPPROC_THREAD_ATTRIBUTE_LIST,
+        CreateProcessW, DeleteProcThreadAttributeList, GetExitCodeProcess, GetProcessTimes,
+        InitializeProcThreadAttributeList, OpenProcess, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+        PROCESS_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION, STARTUPINFOEXW, STARTUPINFOW,
+        UpdateProcThreadAttribute, EXTENDED_STARTUPINFO_PRESENT, LPPROC_THREAD_ATTRIBUTE_LIST,
     },
 };
 
@@ -331,6 +359,46 @@ pub fn is_process_alive(pid: u32) -> bool {
         CloseHandle(h);
         ok != 0 && code == STILL_ACTIVE
     }
+}
+
+/// The process's creation time as a Unix-epoch second (float), for comparison
+/// against the start time the daemon writes to its PID file (Python's
+/// `time.time()`). Used to defeat PID recycling: a recycled PID would be alive
+/// but its creation time wouldn't match the value recorded when the daemon
+/// started. Returns None if the process can't be queried (gone, access denied).
+///
+/// `GetProcessTimes` reports FILETIME (100ns intervals since 1601-01-01 UTC);
+/// we convert to Unix epoch seconds by subtracting the 1601→1970 offset
+/// (11644473600 s) and dividing by 10_000_000. f64 keeps microsecond
+/// resolution, which is finer than the daemon's recorded `time.time()` and
+/// the comparison tolerance.
+pub fn process_create_time_secs(pid: u32) -> Option<f64> {
+    // EPOCH_DIFF_SECS = seconds between 1601-01-01 (FILETIME epoch) and
+    // 1970-01-01 (Unix epoch).
+    const EPOCH_DIFF_SECS: f64 = 11_644_473_600.0;
+    unsafe {
+        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if h.is_null() {
+            return None;
+        }
+        let mut creation: FILETIME = std::mem::zeroed();
+        let mut exit: FILETIME = std::mem::zeroed();
+        let mut kernel: FILETIME = std::mem::zeroed();
+        let mut user: FILETIME = std::mem::zeroed();
+        let ok = GetProcessTimes(h, &mut creation, &mut exit, &mut kernel, &mut user);
+        CloseHandle(h);
+        if ok == 0 {
+            return None;
+        }
+        let intervals = filetime_to_u64(&creation);
+        Some(intervals as f64 / 10_000_000.0 - EPOCH_DIFF_SECS)
+    }
+}
+
+/// FILETIME is two u32 halves (dwLowDateTime, dwHighDateTime) forming a 64-bit
+/// count of 100ns intervals. Combine them little-endian as the Win32 docs specify.
+fn filetime_to_u64(ft: &FILETIME) -> u64 {
+    ((ft.dwHighDateTime as u64) << 32) | (ft.dwLowDateTime as u64)
 }
 
 /// Spawn the daemon as a detached subprocess: `<python> -m agent_windows --daemon`.

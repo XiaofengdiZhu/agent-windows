@@ -265,12 +265,14 @@ fn kill_daemon() -> Result<(), String> {
         std::thread::sleep(SHUTDOWN_POLL);
     }
 
-    // Force-kill fallback — but only if the *current* PID file still names a
-    // live process. Re-reading avoids a PID-recycle hazard: if the daemon
-    // exited and cleaned up its PID file, or the OS recycled the PID to an
-    // unrelated process, we must not taskkill the wrong process.
-    if let Some(pid) = read_pid_from_file() {
-        if pid_matches_live_daemon(pid) {
+    // Force-kill fallback — but only if the PID file still names a process that
+    // is genuinely OUR daemon. Identity is confirmed by creation time, not just
+    // liveness: a recycled PID would be alive but its `GetProcessTimes` creation
+    // time wouldn't match the start time the daemon recorded when it launched.
+    // Re-reading the PID file at kill time also covers the clean-shutdown case
+    // (the daemon deleted its own PID file → read returns None → no kill).
+    if let Some((pid, recorded_start)) = read_pid_from_file() {
+        if is_our_daemon(pid, recorded_start) {
             force_kill(pid);
         }
     }
@@ -279,14 +281,30 @@ fn kill_daemon() -> Result<(), String> {
     Ok(())
 }
 
-/// True if `pid` is still the running daemon (the PID file still names it AND
-/// it's alive). Guards the force-kill path against PID recycling: a recycled
-/// PID would pass `is_process_alive` but wouldn't be named by the PID file we
-/// just (re-)read, or the file would be gone (clean shutdown).
-fn pid_matches_live_daemon(pid: u32) -> bool {
-    match read_pid_from_file() {
-        Some(current) if current == pid => is_process_alive(pid),
-        _ => false,
+/// True if `pid` is still the daemon we started: alive AND its creation time
+/// matches the start time recorded in the PID file (within a tolerance — the
+/// daemon writes `time.time()` slightly after the kernel's creation timestamp,
+/// and cross-process clock reads aren't bit-identical).
+///
+/// This closes the PID-recycle race that `pid_matches_live_daemon` only
+/// probabilistically guarded: a recycled PID passes `is_process_alive` but its
+/// `GetProcessTimes` creation time is the *new* process's birth, not the
+/// recorded start. A missing recorded start (old/hand-written PID file) fails
+/// closed — we can't prove identity, so we don't force-kill.
+fn is_our_daemon(pid: u32, recorded_start: Option<f64>) -> bool {
+    let Some(recorded) = recorded_start else {
+        // No start time on record → can't confirm identity. Fail closed.
+        return false;
+    };
+    if !is_process_alive(pid) {
+        return false;
+    }
+    // Compare creation time. The daemon's recorded `time.time()` is taken after
+    // the process is already running (in write_pid_file), so it can lag the
+    // kernel's creation time by up to a few hundred ms; allow a 5s tolerance.
+    match crate::win32::process_create_time_secs(pid) {
+        Some(created) => (created - recorded).abs() <= 5.0,
+        None => false, // Couldn't query (access denied / race) → don't kill.
     }
 }
 
@@ -314,17 +332,29 @@ fn cleanup_stale_files() {
 
 /// Read the PID file and check liveness. Mirrors `_daemon_process_alive`.
 fn daemon_process_alive() -> bool {
-    let Some(pid) = read_pid_from_file() else {
+    let Some((pid, _)) = read_pid_from_file() else {
         return false;
     };
     is_process_alive(pid)
 }
 
-/// Parse line 1 of the PID file as the daemon PID.
-pub(crate) fn read_pid_from_file() -> Option<u32> {
+/// Parse the PID file: line 1 = daemon PID, line 2 (optional) = the start
+/// time the daemon recorded via Python's `time.time()` (Unix epoch seconds).
+/// The start time is None if the file predates this field or fails to parse —
+/// callers that need a strong identity check (`is_our_daemon`) treat a missing
+/// start time as "can't confirm identity" rather than "matches".
+pub(crate) fn read_pid_from_file() -> Option<(u32, Option<f64>)> {
     let content = std::fs::read_to_string(pid_file_path()).ok()?;
-    let first_line = content.lines().next()?;
-    first_line.trim().parse::<u32>().ok()
+    let mut lines = content.lines();
+    let pid = lines.next()?.trim().parse::<u32>().ok()?;
+    // Line 2 (if present and numeric) is the recorded start time. Malformed or
+    // absent → None; the caller decides what that means.
+    let start_time = lines
+        .next()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .and_then(|s| s.parse::<f64>().ok());
+    Some((pid, start_time))
 }
 
 /// Resolve `~`. On Windows that's `%USERPROFILE%`.
