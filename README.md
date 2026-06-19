@@ -4,7 +4,13 @@ Windows Computer-Use CLI for AI Agents. Provides desktop screenshot, UIA accessi
 
 ## Install
 
-Recommended — adds `agent-windows` to your PATH as a persistent command:
+Requires [uv](https://docs.astral.sh/uv/) (the Python package runner used below). Install it first if you don't have it:
+
+```bash
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+Then install agent-windows (recommended — adds it to your PATH as a persistent command):
 
 ```bash
 uv tool install agent-windows

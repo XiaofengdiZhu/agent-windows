@@ -22,6 +22,8 @@ If not, install (recommended — pins `agent-windows` to your PATH):
 uv tool install agent-windows
 ```
 
+(`uv` not installed? Run: `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"`)
+
 One-off trial (runs without installing): `uvx agent-windows observe`.
 
 > Prefer `uv tool install` over `uvx` for regular use — it pins the version, while `uvx` can silently bump it and trigger daemon restarts.
