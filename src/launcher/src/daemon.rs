@@ -187,6 +187,63 @@ fn daemon_version_matches() -> bool {
     false
 }
 
+/// Stop the daemon for the `daemon stop` subcommand. Sends the `shutdown`
+/// RPC fire-and-forget (the daemon acts on it when its main loop is idle, so
+/// waiting for the reply would block up to 150s on a busy/wedged daemon), then
+/// polls the PID for up to `GRACEFUL_SHUTDOWN_WAIT` to confirm it exited.
+///
+/// Unlike `kill_daemon` (the version-mismatch auto-restart path), this does NOT
+/// force-kill: a user-facing `stop` should report honestly if the daemon didn't
+/// exit gracefully within the window rather than silently `taskkill /F`-ing it.
+///
+/// Stale-file cleanup is gated on the process being genuinely dead: deleting a
+/// *live* daemon's PID file would make the next `daemon status` lie "stopped"
+/// and the next command spawn a rival that fights for the single-instance pipe.
+/// Returns a status string for the caller to print.
+pub(crate) fn stop_daemon() -> Result<String, String> {
+    // Fire-and-forget: write shutdown, don't block on the response. Bounded to
+    // a 2s write (send_no_wait) so a wedged daemon can't pin the caller.
+    let req = crate::ipc::build_request("shutdown", &serde_json::Value::Object(Default::default()));
+    if send_no_wait(&req).is_err() {
+        // Couldn't reach the pipe. The daemon MIGHT be gone — but it might also
+        // be mid-pipe-recreate (a transient gap send_no_wait tolerates less than
+        // the normal path). Decide on process liveness, not on the pipe state,
+        // before claiming anything or touching the PID file.
+        if !daemon_process_alive() {
+            cleanup_stale_files();
+            return Ok("Daemon was not running (cleaned up stale state)".into());
+        }
+        // Alive but pipe unreachable right now — fall through to the poll loop;
+        // the shutdown may already be in flight from a prior attempt, or the
+        // daemon will become reachable again. Either way, don't lie.
+    }
+
+    // Poll the PID until it exits, bounded by the graceful window.
+    let deadline = Instant::now() + GRACEFUL_SHUTDOWN_WAIT;
+    let exited = loop {
+        if !daemon_process_alive() {
+            break true;
+        }
+        if Instant::now() >= deadline {
+            break false;
+        }
+        std::thread::sleep(SHUTDOWN_POLL);
+    };
+    if exited {
+        // Genuinely dead — safe to remove its state files (a no-op if it
+        // self-cleaned on exit). Never clean up while it's still alive.
+        cleanup_stale_files();
+        Ok("Daemon stopped".into())
+    } else {
+        // Still alive after the graceful window — don't force-kill (that's the
+        // auto-restart path's job) and DON'T delete its PID file (the daemon is
+        // still running and holding the pipe; `status` and the next command
+        // must still see it). Tell the user it didn't respond.
+        Err("Daemon did not exit within the graceful shutdown window; \
+             it may be busy. Use `daemon status` to check, or retry.".into())
+    }
+}
+
 /// Stop the running daemon and remove its PID/version files.
 ///
 /// Strategy: fire-and-forget the `shutdown` JSON-RPC method (we don't read the

@@ -281,15 +281,16 @@ fn run_local(local: LocalAction, global: &GlobalFlags) -> ExitCode {
             }
         }
         LocalAction::DaemonStop => {
-            // Send a shutdown request via IPC (best-effort).
-            let req = ipc::build_request("shutdown", &json!({}));
-            match ipc::send_to_daemon(&req) {
-                Ok(_) => {
-                    output::print_text("Daemon shutdown requested");
+            // Delegate to the shared non-blocking stop path: fire-and-forget
+            // shutdown + bounded PID-gone poll (no 150s reply wait, no silent
+            // force-kill). Mirrors kill_daemon's transport but reports honestly.
+            match daemon::stop_daemon() {
+                Ok(msg) => {
+                    output::print_text(&msg);
                     ExitCode::SUCCESS
                 }
                 Err(e) => {
-                    report_error(&format!("Error stopping daemon: {}", e), "ipc", global);
+                    report_error(&e, "daemon", global);
                     ExitCode::from(1)
                 }
             }
