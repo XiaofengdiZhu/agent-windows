@@ -6,6 +6,8 @@
 //! Special-cased commands (local, or with non-trivial param shaping) get their
 //! own arms; everything else routes through the generic table.
 
+use std::collections::HashMap;
+
 use serde_json::{json, Map, Value};
 
 /// A typed parse error. Carries both a machine-readable `type` (stable string
@@ -255,10 +257,15 @@ pub struct GlobalFlags {
 /// `-o x` work, as do `--output=x` / `-o=x`. Options not in `value_opts` are
 /// treated as boolean flags (presence only). Anything not recognized as an
 /// option is a positional.
+///
+/// Known limitations vs. Typer (intentional — none of our commands need them):
+/// - No `--` end-of-options terminator (Typer supports it). Our positionals
+///   never start with `-`-plus-letter in a way that would need escaping.
+/// - A repeated value-option takes the last occurrence (last-writer-wins).
 struct ParsedArgs {
     positionals: Vec<String>,
     /// Canonical (first-listed) name → value, for value-taking options.
-    values: std::collections::HashMap<String, String>,
+    values: HashMap<String, String>,
     /// Canonical names of present boolean flags.
     flags: Vec<String>,
 }
@@ -267,7 +274,7 @@ impl ParsedArgs {
     fn parse(rest: &[String], value_opts: &[&str]) -> ParsedArgs {
         // Map every accepted spelling → canonical name (first in the group).
         // A group like ["output", "o"] means both --output and -o map to "output".
-        let mut spelling_to_canon: std::collections::HashMap<String, String> = Default::default();
+        let mut spelling_to_canon: HashMap<String, String> = Default::default();
         for canon in value_opts {
             spelling_to_canon.insert(format!("--{}", canon), (*canon).into());
             if canon.len() == 1 {
@@ -276,7 +283,7 @@ impl ParsedArgs {
         }
 
         let mut positionals = Vec::new();
-        let mut values: std::collections::HashMap<String, String> = Default::default();
+        let mut values: HashMap<String, String> = Default::default();
         let mut flags = Vec::new();
 
         let mut i = 0;
@@ -313,7 +320,15 @@ impl ParsedArgs {
                 i += 1;
                 continue;
             }
-            if a.starts_with('-') && a.len() == 2 && a != "-" {
+            // Short `-n` form. Exclude a leading digit so negative numbers
+            // like `-1` (a valid positional, e.g. `click -1 -1` on a multi-
+            // monitor desktop) aren't swallowed as a flag. No legal short
+            // option here is a digit (they're all letters: o/s/i/m/…).
+            if a.starts_with('-')
+                && a.len() == 2
+                && a != "-"
+                && !a.as_bytes()[1].is_ascii_digit()
+            {
                 flags.push(a[1..].into());
                 i += 1;
                 continue;
@@ -927,20 +942,67 @@ mod tests {
         }
     }
 
+    /// Regression: negative integer positionals must stay positionals, not be
+    /// mistaken for a short `-<digit>` flag. Multi-monitor coordinates go
+    /// negative (e.g. a window at x=-1920), so `click -1 -1` must give
+    /// x=-1, y=-1. The old `split_args` handled this (it only split on `--`);
+    /// a naive single-pass parser that treats any `-c` as a flag regresses it.
+    #[test]
+    fn negative_positional_not_treated_as_flag() {
+        let g = GlobalFlags::default();
+        match parse(&argv(&["click", "-1", "-1"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert_eq!(params["x"], -1);
+                assert_eq!(params["y"], -1);
+            }
+            other => panic!("expected Call with x=-1,y=-1, got {:?}", other),
+        }
+        // drag with negative start coords on a multi-monitor setup.
+        match parse(&argv(&["drag", "-1920", "0", "-100", "100"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert_eq!(params["x1"], -1920);
+                assert_eq!(params["y1"], 0);
+                assert_eq!(params["x2"], -100);
+                assert_eq!(params["y2"], 100);
+            }
+            other => panic!("expected Call, got {:?}", other),
+        }
+    }
+
     /// A trailing value-taking option with no following token is recorded as
-    /// present-but-empty, NOT fabricated into a positional, and never panics.
-    /// The old `opt_value` did `iter.next()` blindly; in some arg shapes that
-    /// grabbed the wrong token. This locks the no-panic, empty-string contract.
+    /// present-but-empty, never panics, and leaves the real positionals
+    /// untouched. We use `scroll` (x/y are positionals, amount is a value-opt)
+    /// so a leaked "value" would corrupt x or y — this is the case the old
+    /// split_args/require_positional trio actually got wrong (it counted an
+    /// option's value as a positional). `scroll 5 5 --amount` must keep
+    /// x=5, y=5 and fall back amount to its default.
     #[test]
     fn trailing_value_opt_records_empty_not_positional() {
         let g = GlobalFlags::default();
-        // screenshot --monitor (no value): monitor=Some("") → "".parse()
-        // fails → unwrap_or(-1). No panic, no phantom positional, output file
-        // stays empty (proving nothing was mis-grabbed).
-        match parse(&argv(&["screenshot", "--monitor"]), &g) {
+        match parse(&argv(&["scroll", "5", "5", "--amount"]), &g) {
             Ok(Action::Call { params, .. }) => {
-                assert_eq!(params["monitor"], -1);
-                assert_eq!(params["output"], "");
+                // x/y survive intact — the missing --amount value did not
+                // leak into the positional list.
+                assert_eq!(params["x"], 5);
+                assert_eq!(params["y"], 5);
+                // amount=Some("") → "".parse() fails → unwrap_or(3).
+                assert_eq!(params["amount"], 3);
+            }
+            other => panic!("expected Call, got {:?}", other),
+        }
+    }
+
+    /// A repeated value-option takes the last occurrence (last-writer-wins),
+    /// matching Typer. Locks the `values.insert` overwrite contract so a future
+    /// change to e.g. first-wins or error-on-duplicate is caught.
+    #[test]
+    fn repeated_value_option_last_wins() {
+        let g = GlobalFlags::default();
+        match parse(&argv(&["app", "resize", "n", "--height", "9", "--width", "1", "--width", "2"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert_eq!(params["width"], 2);
+                assert_eq!(params["height"], 9);
+                assert_eq!(params["name_or_title"], "n");
             }
             other => panic!("expected Call, got {:?}", other),
         }
