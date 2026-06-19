@@ -144,7 +144,7 @@ Three ways (priority order: env var > config > interactive):
 export AGENT_WINDOWS_GROUNDING_API_KEY="sk-..."
 
 # Config file
-agent-windows config set grounding.api_key "sk-..."
+agent-windows-python config set grounding.api_key "sk-..."
 
 # Or leave empty and set at runtime
 ```

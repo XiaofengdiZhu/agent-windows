@@ -47,7 +47,7 @@ Every desktop interaction follows this cycle:
 
 ```bash
 # Initialize config (first time only)
-agent-windows config init
+agent-windows-python config init
 
 # See the screen
 agent-windows observe
@@ -103,6 +103,25 @@ agent-windows screenshot -o shot.png     # Save to file
 | `ask-vision` | Descriptive only | Understanding icons, reading screen state |
 
 **Rule**: Prefer `snapshot` for element location. Use vision tools only when UIA can't see an element.
+
+## Vision Model Setup
+
+`ground`, `detect`, and `ask-vision` need a configured multimodal model to read the screen. Check if one is ready:
+
+```bash
+agent-windows-python config doctor      # shows whether the vision model is configured
+```
+
+If it reports **NOT READY**, help the user configure it before using vision commands:
+
+```bash
+agent-windows-python config set grounding.api_key sk-...      # their API key
+agent-windows-python config set grounding.engine openai       # openai / anthropic / gemini
+agent-windows-python config set grounding.model gpt-4o-mini   # a cheap multimodal model
+agent-windows-python config doctor                            # verify
+```
+
+> Even when your own model is multimodal, prefer routing image work through these commands: a screenshot in context costs many tokens, while `ground`/`detect` return ready-to-click coordinates in one short call.
 
 ## The @eN Selector System
 

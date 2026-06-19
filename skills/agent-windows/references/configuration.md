@@ -9,17 +9,18 @@ Path: `~/.agent-windows/config.toml`
 ### Management Commands
 
 ```bash
-agent-windows config init              # Create default config file
-agent-windows config show              # Print full config with file path
-agent-windows config set key value     # Set a config value (dotted key notation)
+agent-windows-python config init              # Create default config file
+agent-windows-python config show              # Print full config with file path
+agent-windows-python config set key value     # Set a config value (dotted key notation)
+agent-windows-python config doctor            # Check whether the vision model is configured
 ```
 
 ### Example
 
 ```bash
-agent-windows config set grounding.model gpt-4o
-agent-windows config set tree.max_depth 50
-agent-windows config set wait.poll_interval 0.3
+agent-windows-python config set grounding.model gpt-4o
+agent-windows-python config set tree.max_depth 50
+agent-windows-python config set wait.poll_interval 0.3
 ```
 
 ## Configuration Sections
@@ -104,7 +105,7 @@ Setting the blacklist:
 
 ```bash
 # Single pattern — works with `config set` (which only handles scalars):
-agent-windows config set shell.blacklist "Remove-Item"
+agent-windows-python config set shell.blacklist "Remove-Item"
 
 # Multiple patterns — edit config.toml directly into a TOML array:
 #   [shell]

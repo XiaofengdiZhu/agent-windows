@@ -2,6 +2,12 @@
 
 Windows Computer-Use CLI for AI Agents. Provides desktop screenshot, UIA accessibility tree traversal, visual coordinate grounding, and mouse/keyboard automation through a fast Client-Daemon architecture.
 
+## Highlights
+
+- **Bring-your-own vision model.** Configure any cheap multimodal model (GPT-4o-mini, Claude, Gemini, etc.) and the tool uses it to locate elements that aren't in the accessibility tree — icon-only buttons, canvas, custom-drawn UI.
+- **Works without a multimodal agent.** Even if your driving LLM has no vision capability, `ground`/`detect` return ready-to-click coordinates by offloading the image work to a dedicated small model — saving context tokens and cost.
+- **Pixel-precise by default.** The UIA accessibility tree gives exact coordinates for standard controls; vision is the fallback for the rest.
+
 ## Install
 
 Requires [uv](https://docs.astral.sh/uv/) (the Python package runner used below). Install it first if you don't have it:
@@ -45,7 +51,7 @@ cd src/launcher && build.cmd build --release
 
 ```bash
 # Initialize config
-agent-windows config init
+agent-windows-python config init
 
 # Capture screenshot
 agent-windows screenshot
@@ -152,6 +158,29 @@ Python daemon (persistent, COM STA worker)
 | `--no-daemon` | Direct execution (bypass daemon, for debugging) |
 | `--format text\|json` | Output format |
 | `--debug` | Verbose logging |
+
+## Configure a Vision Model (optional, recommended)
+
+`ground`, `detect`, and `ask-vision` need a multimodal model to read the screen. Configure one with `config set`:
+
+```bash
+# 1. API key (or export AGENT_WINDOWS_GROUNDING_API_KEY instead)
+agent-windows-python config set grounding.api_key sk-xxxxxxxx
+
+# 2. Engine: openai (default) / anthropic / gemini
+agent-windows-python config set grounding.engine openai
+
+# 3. Model (a cheap multimodal model is enough)
+agent-windows-python config set grounding.model gpt-4o-mini
+
+# 4. (Non-OpenAI endpoints only) API base
+# agent-windows-python config set grounding.api_base https://api.openai.com/v1
+
+# 5. Verify
+agent-windows-python config doctor
+```
+
+> **Why configure one even if your agent model is multimodal?** Screenshots consume a lot of context tokens. Routing the image work to a dedicated cheap model via `ground`/`detect` returns ready-to-click coordinates in one short call, cutting both context usage and cost. `ground`'s two-pass coarse-to-fine strategy also lands clicks more precisely than a single whole-screenshot guess, and `detect` returns structured bounding boxes for every match.
 
 ## Configuration
 

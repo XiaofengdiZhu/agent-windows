@@ -554,14 +554,15 @@ agent-windows daemon stop      # Stop the daemon
 agent-windows daemon status    # Check if running, PID, version
 ```
 
-### config init / show / set
+### config init / show / set / doctor
 
 Configuration management. These run locally.
 
 ```bash
-agent-windows config init              # Create default config file
-agent-windows config show              # Print full config
-agent-windows config set tree.max_depth 50   # Set a config value
+agent-windows-python config init              # Create default config file
+agent-windows-python config show              # Print full config
+agent-windows-python config set tree.max_depth 50   # Set a config value
+agent-windows-python config doctor            # Check whether the vision model is configured
 ```
 
 Config file: `~/.agent-windows/config.toml`
