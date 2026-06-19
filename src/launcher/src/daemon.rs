@@ -9,7 +9,8 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crate::ipc::{daemon_pipe_exists, send_no_wait, wait_for_pipe};
-use crate::win32::{is_process_alive, poll_process, spawn_daemon};
+use crate::win32::{is_process_alive, poll_process, read_stderr_to_string, spawn_daemon, truncate_for_error_msg};
+use windows_sys::Win32::Foundation::HANDLE;
 
 /// Max retries × interval while waiting for a freshly-spawned daemon to create
 /// its pipe (matches Python's MAX_CONNECT_RETRIES × RETRY_INTERVAL_S).
@@ -72,8 +73,11 @@ pub fn ensure_daemon_running(python_exe: &str, debug: bool) -> Result<(), String
         cleanup_stale_files();
     }
 
-    // Genuinely gone — spawn a fresh one.
-    let (handle, _pid) = spawn_daemon(python_exe, debug)
+    // Genuinely gone — spawn a fresh one. `stderr_read` is the read end of an
+    // anonymous pipe wired to the daemon's stderr, so if it exits early we can
+    // surface the real traceback (import failure, etc.) instead of a generic
+    // "check the logs" message (#9).
+    let (handle, _pid, stderr_read) = spawn_daemon(python_exe, debug)
         .map_err(|e| format!("Daemon not running, failed to start: {}", e))?;
 
     // Retry until the pipe appears, or the spawned process exits (fail fast —
@@ -82,25 +86,62 @@ pub fn ensure_daemon_running(python_exe: &str, debug: bool) -> Result<(), String
     for _ in 0..MAX_CONNECT_RETRIES {
         std::thread::sleep(RETRY_INTERVAL);
         if daemon_pipe_exists() {
-            unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) };
+            close_handle(handle);
+            close_stderr(stderr_read);
             return Ok(());
         }
         if let Some(code) = poll_process(handle) {
-            unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) };
-            return Err(format!(
-                "Daemon process exited during startup (code {}) — likely a configuration or \
-                 environment error. Check ~/.agent-windows/logs/daemon.log, or run \
-                 `{} -m agent_windows --daemon --debug` for console output.",
-                code, python_exe
-            ));
+            let stderr = stderr_read
+                .map(read_stderr_to_string)
+                .unwrap_or_default();
+            close_handle(handle);
+            close_stderr(stderr_read);
+            return Err(format_daemon_startup_error(code, &stderr, python_exe));
         }
     }
 
-    unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) };
+    close_handle(handle);
+    close_stderr(stderr_read);
     Err(format!(
         "Daemon did not become ready after {:.1}s",
         MAX_CONNECT_RETRIES as f64 * RETRY_INTERVAL.as_secs_f64()
     ))
+}
+
+/// Build the early-exit error message. If the daemon wrote anything to stderr
+/// (e.g. a Python traceback from a failed import), embed a trimmed, char-safe
+/// excerpt; otherwise fall back to pointing at the log file / --debug.
+/// Mirrors agent-browser's `connection.rs:705-744` surfacing of stderr.
+fn format_daemon_startup_error(code: u32, stderr: &str, python_exe: &str) -> String {
+    let stderr_trimmed = stderr.trim();
+    if stderr_trimmed.is_empty() {
+        format!(
+            "Daemon process exited during startup (code {}) — likely a configuration or \
+             environment error. Check ~/.agent-windows/logs/daemon.log, or run \
+             `{} -m agent_windows --daemon --debug` for console output.",
+            code, python_exe
+        )
+    } else {
+        let snippet = truncate_for_error_msg(stderr_trimmed, 500);
+        format!(
+            "Daemon process exited during startup (code {}):\n{}",
+            code, snippet
+        )
+    }
+}
+
+/// Close a process handle (best-effort; non-null only).
+fn close_handle(handle: HANDLE) {
+    if !handle.is_null() {
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) };
+    }
+}
+
+/// Close an optional stderr-read handle (best-effort).
+fn close_stderr(stderr: Option<HANDLE>) {
+    if let Some(h) = stderr {
+        close_handle(h);
+    }
 }
 
 /// True if the running daemon's self-reported version matches this binary.
@@ -224,4 +265,48 @@ pub fn home_dir() -> PathBuf {
 /// `daemon start` subcommand.
 pub fn wait_daemon_ready(timeout: Duration) -> bool {
     wait_for_pipe(timeout)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_daemon_startup_error;
+
+    #[test]
+    fn startup_error_with_stderr_embeds_snippet() {
+        // A Python traceback on stderr should be surfaced verbatim (trimmed),
+        // so the user sees the real failure instead of "check the logs".
+        let stderr = "Traceback (most recent call last):\n  ModuleNotFoundError: No module named 'pywintypes'\n\n";
+        let msg = format_daemon_startup_error(1, stderr, "python");
+        assert!(msg.starts_with("Daemon process exited during startup (code 1):\n"));
+        // Trimmed: trailing blank line dropped.
+        assert!(msg.contains("ModuleNotFoundError: No module named 'pywintypes'"));
+        assert!(!msg.ends_with("\n\n"));
+        // Must not show the generic fallback when stderr is present.
+        assert!(!msg.contains("Check ~/.agent-windows/logs/daemon.log"));
+    }
+
+    #[test]
+    fn startup_error_without_stderr_falls_back_to_log_hint() {
+        let msg = format_daemon_startup_error(1, "", "python");
+        assert!(msg.contains("code 1"));
+        assert!(msg.contains("daemon.log"));
+        assert!(msg.contains("--debug"));
+    }
+
+    #[test]
+    fn startup_error_whitespace_only_stderr_falls_back() {
+        // Whitespace-only stderr is effectively empty.
+        let msg = format_daemon_startup_error(2, "   \n  \n", "python");
+        assert!(msg.contains("daemon.log"));
+        assert!(!msg.contains(":\n"));
+    }
+
+    #[test]
+    fn startup_error_truncates_long_stderr() {
+        let stderr = "E".repeat(2000);
+        let msg = format_daemon_startup_error(1, &stderr, "python");
+        // Body is "code 1):\n" + ≤500 chars.
+        let body = msg.strip_prefix("Daemon process exited during startup (code 1):\n").unwrap();
+        assert!(body.len() <= 500);
+    }
 }

@@ -321,9 +321,15 @@ fn daemon_spawn_and_wait(python: &str) -> Result<String, String> {
     if ipc::daemon_pipe_exists() {
         return Ok("Daemon already running".into());
     }
-    let (handle, pid) = win32::spawn_daemon(python, false)?;
+    let (handle, pid, stderr_read) = win32::spawn_daemon(python, false)?;
     let ready = daemon::wait_daemon_ready(Duration::from_secs(5));
     unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) };
+    // `daemon start` doesn't poll for early exit (it waits on the pipe), so we
+    // have no use for the captured stderr here — just close it to avoid a
+    // handle leak. The early-exit diagnostic lives in ensure_daemon_running.
+    if let Some(h) = stderr_read {
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(h) };
+    }
     if ready {
         Ok(format!("Daemon started (PID {})", pid))
     } else {

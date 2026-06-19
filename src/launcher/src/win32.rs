@@ -10,12 +10,14 @@ use std::time::Duration;
 
 use windows_sys::Win32::{
     Foundation::{
-        CloseHandle, GetLastError, ERROR_BROKEN_PIPE, ERROR_IO_PENDING, ERROR_NO_DATA,
-        ERROR_PIPE_NOT_CONNECTED, FALSE, HANDLE, WAIT_TIMEOUT,
+        CloseHandle, GetLastError, ERROR_BROKEN_PIPE, ERROR_HANDLE_EOF, ERROR_IO_PENDING,
+        ERROR_NO_DATA, ERROR_PIPE_NOT_CONNECTED, FALSE, HANDLE, WAIT_TIMEOUT,
     },
+    Security::SECURITY_ATTRIBUTES,
     Storage::FileSystem::{ReadFile, WriteFile},
     System::{
         IO::{CancelIo, GetOverlappedResult, OVERLAPPED},
+        Pipes::CreatePipe,
         Threading::{CreateEventW, WaitForSingleObject},
     },
 };
@@ -165,7 +167,8 @@ fn pipe_error(err: u32) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::pipe_error;
+    use super::{create_inheritable_pipe, pipe_error, read_stderr_to_string, truncate_for_error_msg};
+    use windows_sys::Win32::Foundation::CloseHandle;
 
     #[test]
     fn broken_pipe_message_carries_winerror() {
@@ -181,6 +184,75 @@ mod tests {
         let m = pipe_error(6);
         assert!(m.contains("winerror 6"));
         assert!(!m.contains("closed the connection"));
+    }
+
+    #[test]
+    fn truncate_short_input_unchanged() {
+        assert_eq!(truncate_for_error_msg("hello", 500), "hello");
+        // Exactly at the cap is fine.
+        let s = "a".repeat(500);
+        assert_eq!(truncate_for_error_msg(&s, 500).len(), 500);
+    }
+
+    #[test]
+    fn truncate_empty_and_zero_max() {
+        // Edge cases the multibyte test doesn't cover: empty input, and a
+        // max of 0 (must return "" without underflowing the boundary loop).
+        assert_eq!(truncate_for_error_msg("", 500), "");
+        assert_eq!(truncate_for_error_msg("hello", 0), "");
+        assert_eq!(truncate_for_error_msg("中文", 0), "");
+    }
+
+    #[test]
+    fn truncate_ascii_caps_at_max() {
+        let s = "a".repeat(800);
+        assert_eq!(truncate_for_error_msg(&s, 500), &"a".repeat(500));
+    }
+
+    #[test]
+    fn truncate_respects_multibyte_char_boundary() {
+        // 中文 = 6 bytes (3 per char). A cap landing mid-character must back up
+        // to the previous boundary so we never emit a half-codepoint (which
+        // would be invalid UTF-8 and break the error message).
+        // Bytes: 中(0-2) 文(3-5) 测(6-8) 试(9-11) ...
+        let s = "中文测试中文测试"; // 18 bytes, boundaries at 0,3,6,9,12,15,18
+        // Cap at 7 bytes lands inside 测 (bytes 6,7,8) — not a boundary → back to 6.
+        assert_eq!(truncate_for_error_msg(s, 7), "中文");
+        // Cap at 9 is exactly the end of 测 → boundary, keeps three chars.
+        assert_eq!(truncate_for_error_msg(s, 9), "中文测");
+        // Cap inside a 4-byte emoji: "a😀b" → 😀 is 4 bytes at offset 1-4.
+        // Boundaries: 0(a) 1(😀) 5(b) 6.
+        let s2 = "a😀b";
+        assert_eq!(truncate_for_error_msg(s2, 2), "a"); // would split 😀, backs to 1
+        assert_eq!(truncate_for_error_msg(s2, 5), "a😀"); // exactly past 😀
+    }
+
+    /// Round-trip a stderr snippet through a real anonymous pipe: write on the
+    // write end, close it, read it back. This is the core of #9 — proves the
+    // pipe + read path actually captures what a dying daemon would emit.
+    #[test]
+    fn stderr_pipe_round_trip_captures_written_bytes() {
+        let (read, write) = create_inheritable_pipe();
+        assert!(!read.is_null() && !write.is_null(), "pipe creation failed");
+
+        let payload = b"Traceback (most recent call last):\n  ModuleNotFoundError: No module named 'pywintypes'\n";
+        let n = unsafe {
+            windows_sys::Win32::Storage::FileSystem::WriteFile(
+                write,
+                payload.as_ptr(),
+                payload.len() as u32,
+                &mut 0u32,
+                std::ptr::null_mut(),
+            )
+        };
+        assert_ne!(n, 0, "WriteFile to pipe failed");
+        // Close the write end so the read sees EOF — mirrors spawn_daemon
+        // closing the parent's write copy right after CreateProcessW.
+        unsafe { CloseHandle(write) };
+
+        let got = read_stderr_to_string(read);
+        unsafe { CloseHandle(read) };
+        assert!(got.contains("ModuleNotFoundError: No module named 'pywintypes'"));
     }
 }
 
@@ -202,8 +274,10 @@ pub fn pipe_exists(pipe_name: &str) -> bool {
 
 use windows_sys::Win32::{
     System::Threading::{
-        CreateProcessW, GetExitCodeProcess, OpenProcess, PROCESS_INFORMATION,
-        PROCESS_QUERY_LIMITED_INFORMATION, STARTUPINFOW,
+        CreateProcessW, DeleteProcThreadAttributeList, GetExitCodeProcess, InitializeProcThreadAttributeList,
+        OpenProcess, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROCESS_INFORMATION,
+        PROCESS_QUERY_LIMITED_INFORMATION, STARTUPINFOEXW, STARTUPINFOW, UpdateProcThreadAttribute,
+        EXTENDED_STARTUPINFO_PRESENT, LPPROC_THREAD_ATTRIBUTE_LIST,
     },
 };
 
@@ -226,12 +300,25 @@ pub fn is_process_alive(pid: u32) -> bool {
 }
 
 /// Spawn the daemon as a detached subprocess: `<python> -m agent_windows --daemon`.
-/// Returns the process handle + pid (caller owns the handle).
+/// Returns (process handle, pid, stderr-read handle). The caller owns all three
+/// handles and must close them. `stderr_read` is the read end of an anonymous
+/// pipe wired to the daemon's stderr, so an early-exit traceback can be
+/// surfaced (None only if the pipe couldn't be created — non-fatal, we just
+/// lose stderr capture and fall back to the generic message).
 ///
 /// Mirrors `_start_daemon_process`:
 /// - CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS
-/// - stdio → DEVNULL
-pub fn spawn_daemon(python_exe: &str, debug: bool) -> Result<(HANDLE, u32), String> {
+/// - stdin/stdout → NUL; stderr → inheritable anonymous pipe (parent reads it)
+///
+/// Trade-off vs. the old NUL-redirected stderr: once the launcher closes its
+/// read end (after the daemon is up or has exited), any *post-startup* write
+/// to the daemon's stderr hits a reader-less pipe and raises BrokenPipeError.
+/// In practice this is fine — the daemon logs to daemon.log, not stderr, in
+/// non-debug mode (server.py only adds a stderr StreamHandler under --debug),
+/// so the only post-startup stderr writes are catastrophic crashes that are
+/// already fatal. Keeping the read end open instead would risk the pipe
+/// buffer filling and blocking the daemon on a large stderr flood.
+pub fn spawn_daemon(python_exe: &str, debug: bool) -> Result<(HANDLE, u32, Option<HANDLE>), String> {
     let mut args = format!("-m agent_windows --daemon");
     if debug {
         args.push_str(" --debug");
@@ -245,10 +332,12 @@ pub fn spawn_daemon(python_exe: &str, debug: bool) -> Result<(HANDLE, u32), Stri
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-    // Redirect stdio to NUL so the detached daemon has no console handles.
+    // Redirect stdin/stdout to NUL. stderr goes to an inheritable anonymous
+    // pipe so we can read the daemon's real startup error (import failures,
+    // tracebacks) when it exits early — those are written by the interpreter
+    // to stderr regardless of the daemon's logging config.
     let mut startup: STARTUPINFOW = unsafe { std::mem::zeroed() };
     startup.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
-    // hStdInput/Output/Error point at NUL — set via dwFlags.
     const STARTF_USESTDHANDLES: u32 = 0x0000_0100;
     startup.dwFlags = STARTF_USESTDHANDLES;
 
@@ -259,10 +348,81 @@ pub fn spawn_daemon(python_exe: &str, debug: bool) -> Result<(HANDLE, u32), Stri
     }
     if !nul_out.is_null() {
         startup.hStdOutput = nul_out;
+    }
+
+    // Inheritable anonymous pipe for stderr. If creation fails, fall back to
+    // NUL for stderr and proceed without capture — better to start the daemon
+    // than to fail outright over a missing diagnostic.
+    let (stderr_read, stderr_write) = create_inheritable_pipe();
+    let stderr_captured = !stderr_read.is_null() && !stderr_write.is_null();
+    if stderr_captured {
+        // The read end is intentionally NOT added to the inheritable handle
+        // list below — only the write end reaches the child. (No need to clear
+        // the INHERIT flag: the PROC_THREAD_ATTRIBUTE_HANDLE_LIST is the sole
+        // authority on what gets inherited when present.)
+        startup.hStdError = stderr_write;
+    } else if !nul_out.is_null() {
         startup.hStdError = nul_out;
     }
 
     let mut info: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+
+    // CRITICAL: we must inherit ONLY the std handles we set (the stderr pipe
+    // write end, plus the NUL stdin/stdout), NOT the launcher's own console
+    // handles. Blanket bInheritHandles=TRUE would also inherit the parent's
+    // console (the shell that launched us), defeating DETACHED_PROCESS — the
+    // daemon would stay attached to the parent console and the shell would
+    // hang waiting for it to release the console (observed: 5-min deadlock).
+    //
+    // The fix is STARTUPINFOEXW with a PROC_THREAD_ATTRIBUTE_HANDLE_LIST that
+    // names exactly the handles the child may inherit; CreateProcessW then
+    // ignores all other inheritable handles. This is how Rust's std
+    // Command+Stdio::piped() avoids the same trap.
+    // Collect the handles the child should inherit (deduplicated — stderr may
+    // alias the NUL stdout handle when capture is disabled).
+    let mut inherit_handles: Vec<HANDLE> = Vec::new();
+    for h in [nul_in, nul_out, if stderr_captured { stderr_write } else { nul_out }] {
+        if !h.is_null() && !inherit_handles.contains(&h) {
+            inherit_handles.push(h);
+        }
+    }
+
+    let attr = HandleList::new(&inherit_handles);
+    let mut creation_flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW;
+
+    // When we have a handle-list whitelist, spawn with bInheritHandles=TRUE +
+    // STARTUPINFOEXW: the child inherits ONLY the listed handles (NUL stdio +
+    // stderr pipe), so it cannot inherit the parent's console (which would
+    // defeat DETACHED_PROCESS and deadlock the parent shell).
+    //
+    // Fallback (whitelist build failed): bInheritHandles=FALSE + plain
+    // STARTUPINFOW. This matches the pre-#9 baseline exactly — no handles are
+    // inherited at all. Critically, the fallback must NOT keep
+    // bInheritHandles=TRUE without a whitelist: that would silently
+    // reintroduce the console-inheritance deadlock this whole mechanism
+    // exists to prevent. Stderr capture is lost in the fallback, but the
+    // daemon still starts.
+    //
+    // `startup_ex` must outlive CreateProcessW (it holds the attribute-list
+    // pointer), so it's declared in the outer scope and populated by branch.
+    let mut startup_ex: STARTUPINFOEXW = unsafe { std::mem::zeroed() };
+    let inherit: i32;
+    let startup_ptr: *mut STARTUPINFOW;
+    if let Some(a) = &attr {
+        startup_ex.StartupInfo = startup;
+        startup_ex.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
+        startup_ex.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
+        startup_ex.lpAttributeList = a.ptr();
+        creation_flags |= EXTENDED_STARTUPINFO_PRESENT;
+        inherit = 1;
+        startup_ptr = &mut startup_ex.StartupInfo as *mut STARTUPINFOW;
+    } else {
+        startup_ex.StartupInfo = startup;
+        startup_ex.StartupInfo.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+        startup_ex.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
+        inherit = 0;
+        startup_ptr = &mut startup_ex.StartupInfo as *mut STARTUPINFOW;
+    }
 
     let ok = unsafe {
         CreateProcessW(
@@ -270,14 +430,17 @@ pub fn spawn_daemon(python_exe: &str, debug: bool) -> Result<(HANDLE, u32), Stri
             cmdline_w.as_mut_ptr(),
             std::ptr::null(),
             std::ptr::null(),
-            0,
-            DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW,
+            inherit,
+            creation_flags,
             std::ptr::null(),
             std::ptr::null(),
-            &mut startup,
+            startup_ptr as *mut _,
             &mut info,
         )
     };
+    // `attr` (and its backing buffer) drops here, AFTER CreateProcessW — but
+    // the attribute list must be freed with DeleteProcThreadAttributeList
+    // before the buffer is freed; HandleList's Drop does that in order.
 
     if !nul_in.is_null() {
         unsafe { CloseHandle(nul_in) };
@@ -285,8 +448,18 @@ pub fn spawn_daemon(python_exe: &str, debug: bool) -> Result<(HANDLE, u32), Stri
     if !nul_out.is_null() {
         unsafe { CloseHandle(nul_out) };
     }
+    // Close the write end in the parent immediately: the child holds its own
+    // copy, and once the child exits the read end sees EOF (otherwise the read
+    // would block forever waiting for a writer that never closes).
+    if !stderr_write.is_null() {
+        unsafe { CloseHandle(stderr_write) };
+    }
 
     if ok == 0 {
+        // Spawn failed — clean up the pipe read end too.
+        if !stderr_read.is_null() {
+            unsafe { CloseHandle(stderr_read) };
+        }
         return Err(format!(
             "Failed to spawn daemon (winerror {})",
             unsafe { GetLastError() }
@@ -296,7 +469,200 @@ pub fn spawn_daemon(python_exe: &str, debug: bool) -> Result<(HANDLE, u32), Stri
     // We don't need the thread handle or the primary thread; close it. Keep
     // the process handle so we can poll for early exit (M-31 equivalent).
     unsafe { CloseHandle(info.hThread) };
-    Ok((info.hProcess, info.dwProcessId))
+    let stderr = if stderr_captured { Some(stderr_read) } else { None };
+    Ok((info.hProcess, info.dwProcessId, stderr))
+}
+
+/// Create an inheritable anonymous pipe (for wiring the daemon's stderr).
+/// Returns (read, write); either may be null on failure (caller checks).
+fn create_inheritable_pipe() -> (HANDLE, HANDLE) {
+    let mut sa: SECURITY_ATTRIBUTES = unsafe { std::mem::zeroed() };
+    sa.nLength = std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32;
+    sa.bInheritHandle = 1;
+    let mut read: HANDLE = std::ptr::null_mut();
+    let mut write: HANDLE = std::ptr::null_mut();
+    let ok = unsafe { CreatePipe(&mut read, &mut write, &sa, 0) };
+    if ok == 0 {
+        return (std::ptr::null_mut(), std::ptr::null_mut());
+    }
+    (read, write)
+}
+
+/// RAII wrapper around a `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`, the mechanism
+/// that restricts handle inheritance to an explicit set when spawning with
+/// `bInheritHandles=TRUE`. Without this, the child would also inherit the
+/// parent's console handles, defeating `DETACHED_PROCESS` and deadlocking the
+/// parent shell (it waits for all console-attached descendants).
+///
+/// The backing buffer is a heap allocation aligned to `usize` (the documented
+/// requirement is pointer alignment). `Drop` calls `DeleteProcThreadAttributeList`
+/// before the buffer is released.
+struct HandleList {
+    buf: Box<[usize]>,
+}
+
+impl HandleList {
+    /// Build a handle list permitting the child to inherit exactly `handles`.
+    /// Returns None on failure or empty input — the caller MUST then spawn
+    /// with bInheritHandles=FALSE (not TRUE) to avoid re-introducing the
+    /// console-inheritance deadlock; see `spawn_daemon`'s fallback branch.
+    fn new(handles: &[HANDLE]) -> Option<HandleList> {
+        if handles.is_empty() {
+            return None;
+        }
+        // First call: discover the required byte size.
+        let mut size: usize = 0;
+        unsafe {
+            InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut size);
+        }
+        // size is in bytes; round up to usize words for proper alignment.
+        let words = size.div_ceil(std::mem::size_of::<usize>());
+        let mut buf = vec![0usize; words.max(1)];
+        let ptr = buf.as_mut_ptr() as LPPROC_THREAD_ATTRIBUTE_LIST;
+        let ok = unsafe {
+            InitializeProcThreadAttributeList(ptr, 1, 0, &mut size)
+        };
+        if ok == 0 {
+            return None;
+        }
+        let ok = unsafe {
+            UpdateProcThreadAttribute(
+                ptr,
+                0,
+                PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
+                handles.as_ptr() as *const _,
+                std::mem::size_of_val(handles),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+            )
+        };
+        if ok == 0 {
+            unsafe { DeleteProcThreadAttributeList(ptr) };
+            return None;
+        }
+        Some(HandleList { buf: buf.into_boxed_slice() })
+    }
+
+    /// Raw pointer for STARTUPINFOEXW.lpAttributeList. Valid while `self` lives.
+    fn ptr(&self) -> LPPROC_THREAD_ATTRIBUTE_LIST {
+        self.buf.as_ptr() as LPPROC_THREAD_ATTRIBUTE_LIST
+    }
+}
+
+impl Drop for HandleList {
+    fn drop(&mut self) {
+        unsafe {
+            DeleteProcThreadAttributeList(self.buf.as_ptr() as LPPROC_THREAD_ATTRIBUTE_LIST);
+        }
+    }
+}
+
+/// Read all bytes from a stderr pipe handle until EOF, decoding as UTF-8
+/// (lossy — Python tracebacks are UTF-8).
+///
+/// Safety contract: this is only called after `poll_process` reports the child
+/// has exited. An exited child has closed its write end, so the (synchronous)
+/// pipe yields any buffered bytes then EOF immediately — the call never blocks
+/// in the normal early-exit path. The 1s-per-read timeout is a defensive cap
+/// for the theoretical race where the OS hasn't yet torn down the child's
+/// handles; it is not the primary safety mechanism. Capped at
+/// `MAX_STDERR_CAPTURE` bytes. Note: a daemon that writes >4KB (the default
+/// pipe buffer) of stderr WITHOUT exiting would block on its own write and
+/// never trigger `poll_process` — but the daemon only writes stderr on a fatal
+/// startup error (then exits), so this doesn't arise in practice.
+pub fn read_stderr_to_string(handle: HANDLE) -> String {
+    const STDERR_READ_TIMEOUT_MS: u32 = 1_000;
+    let mut out = Vec::new();
+    loop {
+        match overlapped_read_chunk_timed(handle, STDERR_READ_TIMEOUT_MS) {
+            Ok(chunk) if chunk.is_empty() => break, // EOF
+            Ok(chunk) => {
+                out.extend_from_slice(&chunk);
+                if out.len() > MAX_STDERR_CAPTURE {
+                    out.truncate(MAX_STDERR_CAPTURE);
+                    break;
+                }
+            }
+            Err(_) => break, // timeout or pipe closed — take what we have
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// One overlapped ReadFile bounded by `timeout_ms`, returning raw bytes.
+/// Distinguishes EOF (Ok(empty)) from a hard error (Err). Mirrors
+/// `overlapped_read_chunk` but signals EOF instead of treating it as data.
+fn overlapped_read_chunk_timed(handle: HANDLE, timeout_ms: u32) -> Result<Vec<u8>, String> {
+    let event = new_event()?;
+    let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
+    overlapped.hEvent = event;
+    let ovl_ptr = &mut overlapped as *mut _;
+
+    let mut buf = [0u8; 4096];
+    // All Win32 calls below are unsafe; group them in one block. We close
+    // `event` on every path (success, EOF, error) to avoid a handle leak.
+    let result = unsafe {
+        let mut read: u32 = 0;
+        let ok = ReadFile(
+            handle,
+            buf.as_mut_ptr(),
+            buf.len() as u32,
+            &mut read,
+            ovl_ptr,
+        );
+        let err = GetLastError();
+        // Synchronous completion.
+        if ok != 0 {
+            CloseHandle(event);
+            return Ok(buf[..read as usize].to_vec());
+        }
+        // ERROR_HANDLE_EOF / ERROR_BROKEN_PIPE → the write end is closed: EOF.
+        if err == ERROR_HANDLE_EOF || err == ERROR_BROKEN_PIPE {
+            CloseHandle(event);
+            return Ok(Vec::new());
+        }
+        if err != ERROR_IO_PENDING {
+            CloseHandle(event);
+            return Err(format!("ReadFile failed (winerror {})", err));
+        }
+        // Pending — wait for completion.
+        let rc = WaitForSingleObject(event, timeout_ms);
+        if rc == WAIT_TIMEOUT {
+            CancelIo(handle);
+            CloseHandle(event);
+            return Err(format!("Timed out waiting {}ms for stderr", timeout_ms));
+        }
+        let mut transferred: u32 = 0;
+        let got = GetOverlappedResult(handle, ovl_ptr, &mut transferred, 0);
+        let gerr = GetLastError();
+        CloseHandle(event);
+        if got == 0 && (gerr == ERROR_HANDLE_EOF || gerr == ERROR_BROKEN_PIPE) {
+            return Ok(Vec::new());
+        }
+        if got == 0 {
+            return Err(format!("GetOverlappedResult failed (winerror {})", gerr));
+        }
+        Ok(buf[..transferred as usize].to_vec())
+    };
+    result
+}
+
+/// Cap on how many stderr bytes we buffer before truncating. The daemon's
+/// early-exit traceback is small; this guards against a pathological flood.
+const MAX_STDERR_CAPTURE: usize = 8 * 1024;
+
+/// Truncate a stderr snippet for inclusion in an error message: cap at `max`
+/// chars and back up to a UTF-8 char boundary so we never split a multibyte
+/// sequence. Mirrors agent-browser's `connection.rs:729-737` truncation.
+pub fn truncate_for_error_msg(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        return s;
+    }
+    let mut end = max;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
 }
 
 /// Poll whether a spawned daemon process has exited (and with what code).
@@ -313,10 +679,16 @@ pub fn poll_process(handle: HANDLE) -> Option<u32> {
 }
 
 /// Open a handle to `NUL` for stdio redirection. `read=true` → read access.
+/// The handle is marked inheritable so it can be listed in the spawn handle
+/// list (only listed handles reach the child, but listed handles must also
+/// carry the INHERIT flag for the child to actually receive them).
 fn open_nul(read: bool) -> HANDLE {
     use windows_sys::Win32::Storage::FileSystem::{
         CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE,
     };
+    let mut sa: SECURITY_ATTRIBUTES = unsafe { std::mem::zeroed() };
+    sa.nLength = std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32;
+    sa.bInheritHandle = 1;
     let access = if read { 0x8000_0000 } else { 0x4000_0000 }; // GENERIC_READ / WRITE
     let nul_w = widen("NUL");
     unsafe {
@@ -324,7 +696,7 @@ fn open_nul(read: bool) -> HANDLE {
             nul_w.as_ptr(),
             access,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
-            std::ptr::null(),
+            &sa,
             3, // OPEN_EXISTING
             FILE_ATTRIBUTE_NORMAL,
             std::ptr::null_mut(),
