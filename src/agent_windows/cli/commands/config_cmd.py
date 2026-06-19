@@ -29,12 +29,12 @@ def config_show() -> None:
     config = load_config()
     display_config = copy.deepcopy(config)
     # Mask API key
-    if "grounding" in display_config and "api_key" in display_config["grounding"]:
-        key = display_config["grounding"]["api_key"]
+    if "vlm" in display_config and "api_key" in display_config["vlm"]:
+        key = display_config["vlm"]["api_key"]
         if key and len(key) > 8:
-            display_config["grounding"]["api_key"] = key[:4] + "..." + key[-4:]
+            display_config["vlm"]["api_key"] = key[:4] + "..." + key[-4:]
         elif key:
-            display_config["grounding"]["api_key"] = "***"
+            display_config["vlm"]["api_key"] = "***"
     path = get_config_path()
     typer.echo(f"# Config file: {path}")
     typer.echo(toml.dumps(display_config))
@@ -54,7 +54,7 @@ def config_set(
 def config_doctor() -> None:
     """Check whether the vision/grounding model is configured (no network calls)."""
     config = load_config()
-    g = config.get("grounding", {})
+    g = config.get("vlm", {})
     api_key = get_api_key()  # reads env var OR config (DPAPI-decrypted)
 
     typer.echo("Vision model configuration:")
@@ -72,5 +72,5 @@ def config_doctor() -> None:
         )
     else:
         typer.echo(
-            "Status: NOT READY — set grounding.api_key, or see the README."
+            "Status: NOT READY — set vlm.api_key, or see the README."
         )

@@ -106,7 +106,7 @@ class TestSinglePassGrounding:
         return (
             patch(
                 "agent_windows.core.grounding.load_config",
-                return_value={"grounding": {"enabled": True, "single_pass": single_pass_config}},
+                return_value={"vlm": {"enabled": True, "single_pass": single_pass_config}},
             ),
             patch(
                 "agent_windows.core.grounding.call_vision_model",
@@ -139,7 +139,7 @@ class TestSinglePassGrounding:
         assert mock_call.call_count == 2
 
     def test_single_pass_defaults_from_config(self):
-        """single_pass=None reads grounding.single_pass from config (the
+        """single_pass=None reads vlm.single_pass from config (the
         'configurable default' requirement)."""
         from agent_windows.core.grounding import ground_element
 

@@ -401,7 +401,7 @@ class TestWaitCommand:
 class TestConfigCommand:
     def test_show_masks_long_api_key(self):
         with patch("agent_windows.cli.commands.config_cmd.load_config",
-                   return_value={"grounding": {"api_key": "sk-1234567890abcdef"}}):
+                   return_value={"vlm": {"api_key": "sk-1234567890abcdef"}}):
             result = runner.invoke(app, ["config", "show"])
         assert result.exit_code == 0
         # first 4 + "..." + last 4 (tail slice computation is part of the contract)
@@ -411,7 +411,7 @@ class TestConfigCommand:
 
     def test_show_masks_short_api_key(self):
         with patch("agent_windows.cli.commands.config_cmd.load_config",
-                   return_value={"grounding": {"api_key": "short"}}):
+                   return_value={"vlm": {"api_key": "short"}}):
             result = runner.invoke(app, ["config", "show"])
         assert result.exit_code == 0
         assert "***" in result.output
@@ -419,16 +419,16 @@ class TestConfigCommand:
 
     def test_show_no_api_key_no_mask(self):
         with patch("agent_windows.cli.commands.config_cmd.load_config",
-                   return_value={"grounding": {"model": "x"}}):
+                   return_value={"vlm": {"model": "x"}}):
             result = runner.invoke(app, ["config", "show"])
         assert result.exit_code == 0
 
     @patch("agent_windows.cli.commands.config_cmd.set_config_value")
     def test_set_calls_set_config_value(self, mock_set):
-        result = runner.invoke(app, ["config", "set", "grounding.model", "gpt-4o"])
+        result = runner.invoke(app, ["config", "set", "vlm.model", "gpt-4o"])
         assert result.exit_code == 0
-        mock_set.assert_called_once_with("grounding.model", "gpt-4o")
-        assert "grounding.model = gpt-4o" in result.output
+        mock_set.assert_called_once_with("vlm.model", "gpt-4o")
+        assert "vlm.model = gpt-4o" in result.output
 
 
 # ── daemon command: start/stop/status branches ───────────────────────

@@ -21,11 +21,11 @@ class TestDeepMerge:
         assert result == {"a": 1, "b": 3, "c": 4}
 
     def test_nested_merge(self):
-        base = {"grounding": {"model": "a", "width": 1000}}
-        override = {"grounding": {"model": "b"}}
+        base = {"vlm": {"model": "a", "width": 1000}}
+        override = {"vlm": {"model": "b"}}
         result = _deep_merge(base, override)
-        assert result["grounding"]["model"] == "b"
-        assert result["grounding"]["width"] == 1000
+        assert result["vlm"]["model"] == "b"
+        assert result["vlm"]["width"] == 1000
 
     def test_no_mutate_base(self):
         base = {"a": 1}
@@ -61,9 +61,9 @@ class TestParseValue:
 
 class TestDefaultConfig:
     def test_has_grounding(self):
-        assert "grounding" in DEFAULT_CONFIG
-        assert DEFAULT_CONFIG["grounding"]["enabled"] is True
-        assert DEFAULT_CONFIG["grounding"]["width"] == 1000
+        assert "vlm" in DEFAULT_CONFIG
+        assert DEFAULT_CONFIG["vlm"]["enabled"] is True
+        assert DEFAULT_CONFIG["vlm"]["width"] == 1000
 
     def test_has_screenshot(self):
         assert "screenshot" in DEFAULT_CONFIG
@@ -71,8 +71,8 @@ class TestDefaultConfig:
         assert DEFAULT_CONFIG["screenshot"]["resampling"] == "BILINEAR"
 
     def test_grounding_image_encoding_defaults(self):
-        """H-08: vision API defaults to JPEG encoding."""
-        g = DEFAULT_CONFIG["grounding"]
+        """Vision API defaults to JPEG encoding."""
+        g = DEFAULT_CONFIG["vlm"]
         assert g["image_format"] == "JPEG"
         assert g["jpeg_quality"] == 85
 
@@ -110,10 +110,10 @@ class TestSecretProtection:
 
         cfg_path = tmp_path / "config.toml"
         monkeypatch.setattr(cfg, "get_config_path", lambda: cfg_path)
-        monkeypatch.delenv("AGENT_WINDOWS_GROUNDING_API_KEY", raising=False)
+        monkeypatch.delenv("AGENT_WINDOWS_VLM_API_KEY", raising=False)
         cfg._config_cache = None
 
-        src = {"grounding": {"api_key": "sk-secret"}}
+        src = {"vlm": {"api_key": "sk-secret"}}
         cfg.save_config(src)
 
         # On disk: encrypted blob; plaintext absent.
@@ -121,13 +121,13 @@ class TestSecretProtection:
         assert "sk-secret" not in raw
         assert "dpapi:" in raw
         # Caller's dict is not mutated.
-        assert src["grounding"]["api_key"] == "sk-secret"
+        assert src["vlm"]["api_key"] == "sk-secret"
         # Load round-trips back to plaintext.
         loaded = cfg.load_config()
-        assert loaded["grounding"]["api_key"] == "sk-secret"
+        assert loaded["vlm"]["api_key"] == "sk-secret"
 
     def test_save_applies_owner_only_acl(self, tmp_path, monkeypatch):
-        """M-01: save_config must actually set an owner-only DACL on the file
+        """save_config must actually set an owner-only DACL on the file
         (replacing the POSIX chmod no-op). ``_secure_config_file`` is best-effort
         and swallows errors, so the round-trip test above wouldn't catch a broken
         ACL path — this asserts the DACL state directly. Catches the same class
@@ -138,9 +138,9 @@ class TestSecretProtection:
 
         cfg_path = tmp_path / "config.toml"
         monkeypatch.setattr(cfg, "get_config_path", lambda: cfg_path)
-        monkeypatch.delenv("AGENT_WINDOWS_GROUNDING_API_KEY", raising=False)
+        monkeypatch.delenv("AGENT_WINDOWS_VLM_API_KEY", raising=False)
         cfg._config_cache = None
-        cfg.save_config({"grounding": {"api_key": "sk-acl"}})
+        cfg.save_config({"vlm": {"api_key": "sk-acl"}})
 
         sd = win32security.GetFileSecurity(
             str(cfg_path), win32security.DACL_SECURITY_INFORMATION
@@ -170,7 +170,7 @@ class TestSecretProtection:
         cfg_path = tmp_path / "config.toml"
         monkeypatch.setattr(cfg, "get_config_path", lambda: cfg_path)
         cfg._config_cache = None
-        cfg.save_config({"grounding": {"api_key": 123}})  # must not raise
+        cfg.save_config({"vlm": {"api_key": 123}})  # must not raise
         assert cfg_path.exists()
 
 
@@ -275,12 +275,12 @@ class TestSecureDirectory:
 
 
 class TestSetConfigAllowlist:
-    """L-07: set_config_value rejects arbitrary keys, accepts only the schema."""
+    """set_config_value rejects arbitrary keys, accepts only the schema."""
 
     def test_known_leaves_are_settable(self):
         from agent_windows.utils.config import _settable_config_keys
         keys = _settable_config_keys()
-        assert "grounding.model" in keys
+        assert "vlm.model" in keys
         # shell.blacklist is documented as string-settable (shell_runner reads str|list).
         assert "shell.blacklist" in keys
         # Optional key read with a fallback, not in DEFAULT_CONFIG.
@@ -290,7 +290,7 @@ class TestSetConfigAllowlist:
         """Setting a bare section name would clobber the whole section."""
         from agent_windows.utils.config import _settable_config_keys
         keys = _settable_config_keys()
-        assert "grounding" not in keys
+        assert "vlm" not in keys
         assert "screenshot" not in keys
 
     def test_rejects_unknown_section(self):
@@ -301,30 +301,30 @@ class TestSetConfigAllowlist:
     def test_rejects_unknown_key_in_known_section(self):
         from agent_windows.utils.config import set_config_value
         with pytest.raises(ValueError, match="unknown config key"):
-            set_config_value("grounding.evil_key", "pwned")
+            set_config_value("vlm.evil_key", "pwned")
 
     def test_rejects_bare_section_name(self):
         from agent_windows.utils.config import set_config_value
         with pytest.raises(ValueError, match="unknown config key"):
-            set_config_value("grounding", "pwned")
+            set_config_value("vlm", "pwned")
 
     def test_accepts_known_key(self, tmp_path, monkeypatch):
         import agent_windows.utils.config as cfg
 
         cfg_path = tmp_path / "config.toml"
         monkeypatch.setattr(cfg, "get_config_path", lambda: cfg_path)
-        monkeypatch.delenv("AGENT_WINDOWS_GROUNDING_API_KEY", raising=False)
+        monkeypatch.delenv("AGENT_WINDOWS_VLM_API_KEY", raising=False)
         cfg._config_cache = None
 
-        cfg.set_config_value("grounding.model", "gpt-test")
-        assert cfg.load_config()["grounding"]["model"] == "gpt-test"
+        cfg.set_config_value("vlm.model", "gpt-test")
+        assert cfg.load_config()["vlm"]["model"] == "gpt-test"
 
     def test_accepts_optional_key(self, tmp_path, monkeypatch):
         import agent_windows.utils.config as cfg
 
         cfg_path = tmp_path / "config.toml"
         monkeypatch.setattr(cfg, "get_config_path", lambda: cfg_path)
-        monkeypatch.delenv("AGENT_WINDOWS_GROUNDING_API_KEY", raising=False)
+        monkeypatch.delenv("AGENT_WINDOWS_VLM_API_KEY", raising=False)
         cfg._config_cache = None
 
         cfg.set_config_value("screenshot.dir", str(tmp_path))
@@ -336,7 +336,7 @@ class TestSetConfigAllowlist:
 
         cfg_path = tmp_path / "config.toml"
         monkeypatch.setattr(cfg, "get_config_path", lambda: cfg_path)
-        monkeypatch.delenv("AGENT_WINDOWS_GROUNDING_API_KEY", raising=False)
+        monkeypatch.delenv("AGENT_WINDOWS_VLM_API_KEY", raising=False)
         cfg._config_cache = None
 
         cfg.set_config_value("shell.blacklist", "rm -rf")

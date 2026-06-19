@@ -41,7 +41,7 @@ def mock_config():
     """Provide a mock for load_config returning a standard config."""
     with patch("agent_windows.utils.config.load_config") as m:
         m.return_value = {
-            "grounding": {"enabled": True, "model": "test", "engine": "openai", "width": 1000, "height": 1000},
+            "vlm": {"enabled": True, "model": "test", "engine": "openai", "width": 1000, "height": 1000},
             "screenshot": {"backend": "auto", "scale": 1.0, "max_screenshot_age_days": 7, "max_screenshot_dir_mb": 500, "cleanup_interval_minutes": 10},
             "tree": {"max_depth": 30},
             "daemon": {"idle_timeout_minutes": 30},

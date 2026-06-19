@@ -209,7 +209,7 @@ class TestClientCache:
 
     def test_falls_back_to_env_api_key_when_config_empty(self, monkeypatch):
         """An empty/absent config api_key falls back to the env var."""
-        monkeypatch.setenv("AGENT_WINDOWS_GROUNDING_API_KEY", "env-key")
+        monkeypatch.setenv("AGENT_WINDOWS_VLM_API_KEY", "env-key")
         fake_client = MagicMock()
         fake_client.chat.completions.create.return_value = MagicMock(
             choices=[MagicMock(message=MagicMock(content="r"))]

@@ -138,7 +138,7 @@ class TestDetectElements:
     @patch("agent_windows.core.grounding.load_config")
     def test_basic_detection(self, mock_config, mock_api, mock_capture):
         mock_config.return_value = {
-            "grounding": {"enabled": True, "model": "test-model", "engine": "openai", "width": 1000, "height": 1000}
+            "vlm": {"enabled": True, "model": "test-model", "engine": "openai", "width": 1000, "height": 1000}
         }
         mock_api.return_value = '[{"label": "icon", "bbox": [100, 200, 150, 250]}]'
         mock_capture.return_value = Image.new("RGB", (1920, 1080))
@@ -164,7 +164,7 @@ class TestDetectElements:
     @patch("agent_windows.core.grounding.load_config")
     def test_multiple_targets(self, mock_config, mock_api, mock_capture):
         mock_config.return_value = {
-            "grounding": {"enabled": True, "model": "test", "engine": "openai", "width": 1000, "height": 1000}
+            "vlm": {"enabled": True, "model": "test", "engine": "openai", "width": 1000, "height": 1000}
         }
         mock_api.return_value = json.dumps([
             {"label": "a", "bbox": [10, 20, 30, 40]},
@@ -183,7 +183,7 @@ class TestDetectElements:
     @patch("agent_windows.core.grounding.load_config")
     def test_zero_targets(self, mock_config, mock_api, mock_capture):
         mock_config.return_value = {
-            "grounding": {"enabled": True, "model": "test", "engine": "openai", "width": 1000, "height": 1000}
+            "vlm": {"enabled": True, "model": "test", "engine": "openai", "width": 1000, "height": 1000}
         }
         mock_api.return_value = "[]"
         mock_capture.return_value = Image.new("RGB", (1920, 1080))
@@ -197,7 +197,7 @@ class TestDetectElements:
     @patch("agent_windows.core.grounding.load_config")
     def test_model_override(self, mock_config, mock_api, mock_capture):
         mock_config.return_value = {
-            "grounding": {"enabled": True, "model": "default", "engine": "openai", "width": 1000, "height": 1000}
+            "vlm": {"enabled": True, "model": "default", "engine": "openai", "width": 1000, "height": 1000}
         }
         mock_api.return_value = "[]"
         mock_capture.return_value = Image.new("RGB", (1920, 1080))
@@ -214,7 +214,7 @@ class TestDetectElements:
     @patch("agent_windows.core.grounding.load_config")
     def test_max_targets_passed_to_prompt(self, mock_config, mock_api, mock_capture):
         mock_config.return_value = {
-            "grounding": {"enabled": True, "model": "test", "engine": "openai", "width": 1000, "height": 1000}
+            "vlm": {"enabled": True, "model": "test", "engine": "openai", "width": 1000, "height": 1000}
         }
         mock_api.return_value = "[]"
         mock_capture.return_value = Image.new("RGB", (1920, 1080))
@@ -228,7 +228,7 @@ class TestDetectElements:
 
     @patch("agent_windows.core.grounding.load_config")
     def test_disabled_raises(self, mock_config):
-        mock_config.return_value = {"grounding": {"enabled": False}}
+        mock_config.return_value = {"vlm": {"enabled": False}}
         with pytest.raises(RuntimeError, match="disabled"):
             detect_elements("test")
 
@@ -237,7 +237,7 @@ class TestDetectElements:
     @patch("agent_windows.core.grounding.load_config")
     def test_inverted_bbox_auto_swap(self, mock_config, mock_api, mock_capture):
         mock_config.return_value = {
-            "grounding": {"enabled": True, "model": "test", "engine": "openai", "width": 1000, "height": 1000}
+            "vlm": {"enabled": True, "model": "test", "engine": "openai", "width": 1000, "height": 1000}
         }
         # Model returns inverted box: x2 < x1, y2 < y1
         mock_api.return_value = '[{"label": "inv", "bbox": [200, 300, 100, 200]}]'
@@ -254,7 +254,7 @@ class TestDetectElements:
     @patch("agent_windows.core.grounding.load_config")
     def test_max_targets_truncation(self, mock_config, mock_api, mock_capture):
         mock_config.return_value = {
-            "grounding": {"enabled": True, "model": "test", "engine": "openai", "width": 1000, "height": 1000}
+            "vlm": {"enabled": True, "model": "test", "engine": "openai", "width": 1000, "height": 1000}
         }
         # Model returns 5 targets, but max_targets=2
         targets = [{"label": f"t{i}", "bbox": [i*10, i*10, i*10+5, i*10+5]} for i in range(5)]
@@ -269,7 +269,7 @@ class TestDetectElements:
     @patch("agent_windows.core.grounding.load_config")
     def test_negative_max_targets_clamped(self, mock_config, mock_api, mock_capture):
         mock_config.return_value = {
-            "grounding": {"enabled": True, "model": "test", "engine": "openai", "width": 1000, "height": 1000}
+            "vlm": {"enabled": True, "model": "test", "engine": "openai", "width": 1000, "height": 1000}
         }
         mock_api.return_value = '[{"label": "x", "bbox": [1, 2, 3, 4]}]'
         mock_capture.return_value = Image.new("RGB", (1920, 1080))
@@ -282,7 +282,7 @@ class TestDetectElements:
     @patch("agent_windows.core.grounding.load_config")
     def test_image_path(self, mock_config, mock_api):
         mock_config.return_value = {
-            "grounding": {"enabled": True, "model": "test", "engine": "openai", "width": 1000, "height": 1000}
+            "vlm": {"enabled": True, "model": "test", "engine": "openai", "width": 1000, "height": 1000}
         }
         mock_api.return_value = "[]"
 
@@ -299,7 +299,7 @@ class TestDetectElements:
     @patch("agent_windows.core.grounding.load_config")
     def test_image_path_not_found_raises(self, mock_config):
         mock_config.return_value = {
-            "grounding": {"enabled": True, "model": "test", "engine": "openai"}
+            "vlm": {"enabled": True, "model": "test", "engine": "openai"}
         }
         with pytest.raises(ValueError, match="not found"):
             detect_elements("test", image_path="/nonexistent/image.png")
@@ -309,7 +309,7 @@ class TestDetectElements:
     @patch("agent_windows.core.grounding.load_config")
     def test_output_path(self, mock_config, mock_api, mock_capture):
         mock_config.return_value = {
-            "grounding": {"enabled": True, "model": "test", "engine": "openai", "width": 1000, "height": 1000}
+            "vlm": {"enabled": True, "model": "test", "engine": "openai", "width": 1000, "height": 1000}
         }
         mock_api.return_value = "[]"
         mock_capture.return_value = Image.new("RGB", (100, 100))
@@ -324,7 +324,7 @@ class TestDetectElements:
     @patch("agent_windows.core.grounding.load_config")
     def test_custom_prompt(self, mock_config, mock_api, mock_capture):
         mock_config.return_value = {
-            "grounding": {
+            "vlm": {
                 "enabled": True,
                 "model": "test",
                 "engine": "openai",

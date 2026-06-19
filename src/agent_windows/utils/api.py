@@ -56,7 +56,7 @@ def encode_image(image: Image.Image, format: str = "JPEG", max_size: int = 0, qu
 
 
 def _resolve_image_format(config: dict[str, Any]) -> tuple[str, int]:
-    """Resolve the vision API image format and JPEG quality from grounding config.
+    """Resolve the vision API image format and JPEG quality from vlm config.
 
     Returns:
         (format, quality) where format is "JPEG" or "PNG".
@@ -81,7 +81,7 @@ def call_vision_model(
     Args:
         image: PIL Image to send.
         prompt: Text prompt for the model.
-        config: Grounding config dict (engine, model, api_base, api_key, etc.).
+        config: Vision model config dict (engine, model, api_base, api_key, etc.).
         max_tokens: Maximum tokens in the model response (default 100 for grounding).
 
     Returns:
@@ -92,12 +92,12 @@ def call_vision_model(
     """
     engine = config.get("engine", "openai").lower()
 
-    # Resolve the API key ONCE here. The production caller passes the grounding
+    # Resolve the API key ONCE here. The production caller passes the vlm
     # sub-config from load_config(), which already merges the env-var override
     # (config.py:183-186); for raw-config callers (tests), fall back to the env
     # var directly. This removes the per-backend duplication of the same
-    # `config.get("api_key") or env` resolution. (ARCH3-03)
-    api_key = config.get("api_key") or os.environ.get("AGENT_WINDOWS_GROUNDING_API_KEY", "")
+    # `config.get("api_key") or env` resolution.
+    api_key = config.get("api_key") or os.environ.get("AGENT_WINDOWS_VLM_API_KEY", "")
 
     if engine in ("openai", "doubao", "gemini_compatible"):
         return _call_openai_compatible(image, prompt, config, api_key, max_tokens)

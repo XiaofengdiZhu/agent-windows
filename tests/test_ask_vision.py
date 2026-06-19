@@ -15,7 +15,7 @@ class TestAskVisionParams:
     @patch("agent_windows.core.grounding.load_config")
     def test_basic_prompt(self, mock_config, mock_api, mock_capture):
         mock_config.return_value = {
-            "grounding": {"enabled": True, "model": "gpt-4o-mini", "engine": "openai"}
+            "vlm": {"enabled": True, "model": "gpt-4o-mini", "engine": "openai"}
         }
         mock_api.return_value = "I see a desktop with several icons."
         mock_capture.return_value = Image.new("RGB", (100, 100))
@@ -35,7 +35,7 @@ class TestAskVisionParams:
     @patch("agent_windows.core.grounding.load_config")
     def test_model_override(self, mock_config, mock_api, mock_capture):
         mock_config.return_value = {
-            "grounding": {"enabled": True, "model": "gpt-4o-mini", "engine": "openai"}
+            "vlm": {"enabled": True, "model": "gpt-4o-mini", "engine": "openai"}
         }
         mock_api.return_value = "Response from custom model"
         mock_capture.return_value = Image.new("RGB", (100, 100))
@@ -52,7 +52,7 @@ class TestAskVisionParams:
     @patch("agent_windows.core.grounding.load_config")
     def test_image_path(self, mock_config, mock_api):
         mock_config.return_value = {
-            "grounding": {"enabled": True, "model": "gpt-4o-mini", "engine": "openai"}
+            "vlm": {"enabled": True, "model": "gpt-4o-mini", "engine": "openai"}
         }
         mock_api.return_value = "Image analysis"
 
@@ -76,7 +76,7 @@ class TestAskVisionParams:
     @patch("agent_windows.core.grounding.load_config")
     def test_disabled_raises(self, mock_config):
         mock_config.return_value = {
-            "grounding": {"enabled": False}
+            "vlm": {"enabled": False}
         }
         with pytest.raises(RuntimeError, match="disabled"):
             ask_vision("test")
@@ -86,7 +86,7 @@ class TestAskVisionParams:
     @patch("agent_windows.core.grounding.load_config")
     def test_output_save(self, mock_config, mock_api, mock_capture):
         mock_config.return_value = {
-            "grounding": {"enabled": True, "model": "gpt-4o-mini", "engine": "openai"}
+            "vlm": {"enabled": True, "model": "gpt-4o-mini", "engine": "openai"}
         }
         mock_api.return_value = "response"
         mock_capture.return_value = Image.new("RGB", (100, 100), color="blue")

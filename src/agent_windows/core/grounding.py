@@ -67,7 +67,7 @@ def ground_element(
         Dict with: coordinate (x,y), confidence, method, screenshot_path.
     """
     config = load_config()
-    ground_config = config.get("grounding", {})
+    ground_config = config.get("vlm", {})
 
     if not ground_config.get("enabled", True):
         raise RuntimeError("Visual grounding is disabled in config")
@@ -249,7 +249,7 @@ def ask_vision(
         Dict with: response (raw text), screenshot_path, model_used.
     """
     config = load_config()
-    ground_config = config.get("grounding", {})
+    ground_config = config.get("vlm", {})
 
     if not ground_config.get("enabled", True):
         raise RuntimeError("Visual grounding is disabled in config")
@@ -345,7 +345,7 @@ def detect_elements(
         screenshot_path.
     """
     config = load_config()
-    ground_config = config.get("grounding", {})
+    ground_config = config.get("vlm", {})
 
     if not ground_config.get("enabled", True):
         raise RuntimeError("Visual grounding is disabled in config")

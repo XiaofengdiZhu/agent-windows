@@ -87,7 +87,7 @@ def get_prompts_dir() -> Path:
 # ── Defaults ──────────────────────────────────────────────────────
 
 DEFAULT_CONFIG: dict[str, Any] = {
-    "grounding": {
+    "vlm": {
         "enabled": True,
         "engine": "openai",
         "model": "gpt-4o-mini",
@@ -101,7 +101,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "max_drift": 40,
         "image_format": "JPEG",  # Vision API image encoding: "JPEG" or "PNG"
         "jpeg_quality": 85,  # JPEG quality (1-95) for vision API, ignored when PNG
-        "single_pass": False,  # H-07: skip the fine-pass API call (1 call, ~2x faster, lower precision)
+        "single_pass": False,  # Skip the fine-pass API call (1 call, faster, lower precision)
     },
     "screenshot": {
         "backend": "auto",
@@ -172,18 +172,18 @@ def load_config() -> dict[str, Any]:
         # Deep merge: user values override defaults
         merged = _deep_merge(DEFAULT_CONFIG, user_config)
 
-        # Decrypt the api_key if it was stored as a DPAPI blob (M-01). Legacy
+        # Decrypt the api_key if it was stored as a DPAPI blob. Legacy
         # plaintext values pass through unchanged for backward compatibility.
-        g = merged.get("grounding")
+        g = merged.get("vlm")
         if isinstance(g, dict):
             raw_key = g.get("api_key", "")
             if isinstance(raw_key, str) and raw_key.startswith("dpapi:"):
                 g["api_key"] = _decrypt_secret(raw_key)
 
         # Environment variable overrides API key
-        env_key = os.environ.get("AGENT_WINDOWS_GROUNDING_API_KEY", "")
+        env_key = os.environ.get("AGENT_WINDOWS_VLM_API_KEY", "")
         if env_key:
-            merged.setdefault("grounding", {})["api_key"] = env_key
+            merged.setdefault("vlm", {})["api_key"] = env_key
 
         # Update cache
         _config_cache = merged
@@ -196,8 +196,8 @@ def load_config() -> dict[str, Any]:
 def save_config(config: dict[str, Any]) -> None:
     """Save config dict to TOML file.
 
-    The ``grounding.api_key`` is DPAPI-encrypted at rest; all other values are
-    non-secret. The file is also restricted to its owner via an ACL (M-01). The
+    The ``vlm.api_key`` is DPAPI-encrypted at rest; all other values are
+    non-secret. The file is also restricted to its owner via an ACL. The
     caller's dict is not mutated — encryption is applied to a shallow copy used
     only for serialization, so the in-memory config keeps the usable key.
     """
@@ -206,17 +206,17 @@ def save_config(config: dict[str, Any]) -> None:
 
     # Encrypt the api_key on a copy so the caller's dict keeps the plaintext.
     to_write = dict(config)
-    grounding = to_write.get("grounding")
-    if isinstance(grounding, dict):
-        grounding = dict(grounding)
-        key = grounding.get("api_key", "")
+    vlm = to_write.get("vlm")
+    if isinstance(vlm, dict):
+        vlm = dict(vlm)
+        key = vlm.get("api_key", "")
         # Mirror the decrypt-side guard: only a real non-empty plaintext string
         # gets encrypted. A pre-prefixed dpapi: blob is written through unchanged
         # (avoids double-encryption), and a non-string key (e.g. a hand-edited
         # ``api_key = 123``) is left as-is rather than crashing in .encode().
         if isinstance(key, str) and key and not key.startswith("dpapi:"):
-            grounding["api_key"] = _encrypt_secret(key)
-        to_write["grounding"] = grounding
+            vlm["api_key"] = _encrypt_secret(key)
+        to_write["vlm"] = vlm
 
     config_path.write_text(toml.dumps(to_write), encoding="utf-8")
     _secure_config_file(config_path)
@@ -259,7 +259,7 @@ def _settable_config_keys() -> frozenset[str]:
 
 
 def set_config_value(key: str, value: str) -> None:
-    """Set a dotted key value in config (e.g. 'grounding.model' → config['grounding']['model']).
+    """Set a dotted key value in config (e.g. 'vlm.model' → config['vlm']['model']).
 
     Value is parsed as int/float/bool if possible, otherwise kept as string.
 
@@ -268,13 +268,13 @@ def set_config_value(key: str, value: str) -> None:
     ``INVALID_PARAMS``). This is defense-in-depth for the CLI ``config set``
     path — there is no config-mutation RPC today, but an allowlist prevents an
     arbitrary key from creating a bogus section (``evil.payload``) or clobbering
-    a whole section (``grounding``) by setting its name, and guards a future
-    config RPC if one is added. (L-07)
+    a whole section (``vlm``) by setting its name, and guards a future
+    config RPC if one is added.
     """
     if key not in _settable_config_keys():
         raise ValueError(
             f"Refusing to set unknown config key {key!r}: only keys present in "
-            "the default schema are settable (L-07). Run `config show` for the "
+            "the default schema are settable. Run `config show` for the "
             "valid keys."
         )
     config = load_config()
@@ -303,12 +303,12 @@ def get_config_value(key: str) -> Any:
 
 
 def get_api_key() -> str:
-    """Get grounding API key from env var or config."""
-    env_key = os.environ.get("AGENT_WINDOWS_GROUNDING_API_KEY", "")
+    """Get vision model API key from env var or config."""
+    env_key = os.environ.get("AGENT_WINDOWS_VLM_API_KEY", "")
     if env_key:
         return env_key
     config = load_config()
-    return config.get("grounding", {}).get("api_key", "")
+    return config.get("vlm", {}).get("api_key", "")
 
 
 def get_screenshot_save_dir() -> Path:
