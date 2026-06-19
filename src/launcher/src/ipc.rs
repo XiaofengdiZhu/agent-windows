@@ -34,6 +34,21 @@ const CONNECT_BACKOFF: Duration = Duration::from_millis(10);
 const TRANSIENT_RETRIES: u32 = 3;
 const TRANSIENT_BACKOFF: Duration = Duration::from_millis(50);
 
+/// Build the JSON-RPC 2.0 request string. Centralized here so every call site
+/// (the dispatcher in `main.rs`, the shutdown RPC in `daemon.rs::kill_daemon`)
+/// shares one envelope shape: omit `params` when empty, include otherwise.
+/// `id` is constant at 1 — one request per connection, so uniqueness is
+/// trivial (single-client serial model).
+pub(crate) fn build_request(method: &str, params: &serde_json::Value) -> String {
+    use serde_json::json;
+    // Match the Python client: omit params when empty, include otherwise.
+    if params.as_object().map(|o| o.is_empty()).unwrap_or(false) {
+        json!({ "jsonrpc": "2.0", "method": method, "id": 1 }).to_string()
+    } else {
+        json!({ "jsonrpc": "2.0", "method": method, "id": 1, "params": params }).to_string()
+    }
+}
+
 /// Connect to the daemon pipe, send `request` (newline appended), return the
 /// raw response string. Retries the connect on `ERROR_FILE_NOT_FOUND`, and
 /// retries the *whole* connect+transact on transient mid-request failures
@@ -116,7 +131,39 @@ fn is_transient(err: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::is_transient;
+    use super::{build_request, is_transient};
+    use serde_json::{json, Value};
+
+    #[test]
+    fn build_request_omits_empty_params() {
+        // Mirrors the Python client: when params is an empty object, the
+        // envelope omits the `params` field entirely. Locked because the
+        // daemon-side parser tolerates both, but the wire shape is a contract.
+        let req = build_request("ping", &json!({}));
+        let parsed: Value = serde_json::from_str(&req).unwrap();
+        assert_eq!(parsed["jsonrpc"], "2.0");
+        assert_eq!(parsed["method"], "ping");
+        assert_eq!(parsed["id"], 1);
+        assert!(parsed.get("params").is_none(), "empty params must be omitted");
+    }
+
+    #[test]
+    fn build_request_includes_nonempty_params() {
+        let req = build_request("click", &json!({ "x": 10, "y": 20 }));
+        let parsed: Value = serde_json::from_str(&req).unwrap();
+        assert_eq!(parsed["method"], "click");
+        assert_eq!(parsed["params"]["x"], 10);
+        assert_eq!(parsed["params"]["y"], 20);
+    }
+
+    #[test]
+    fn build_request_id_is_constant_one() {
+        // Single-client serial model: one request per connection, so id is
+        // always 1. Locked so a future "add a counter" change is deliberate.
+        let req = build_request("ping", &json!({}));
+        let parsed: Value = serde_json::from_str(&req).unwrap();
+        assert_eq!(parsed["id"], 1);
+    }
 
     #[test]
     fn transient_winerror_codes_retry() {

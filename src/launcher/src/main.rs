@@ -126,7 +126,7 @@ fn run_call(method: &str, params: &serde_json::Value, global: &GlobalFlags) -> E
     }
 
     // Build the JSON-RPC request: {"jsonrpc":"2.0","method":..,"id":1,"params":..}
-    let request = build_request(method, params);
+    let request = ipc::build_request(method, params);
 
     match ipc::send_to_daemon(&request) {
         Ok(response) => {
@@ -190,7 +190,7 @@ fn run_wait(spec: WaitSpec, global: &GlobalFlags) -> ExitCode {
     let start = std::time::Instant::now();
 
     loop {
-        let req = build_request(
+        let req = ipc::build_request(
             "wait_check",
             &json!({ probe_key: probe_val }),
         );
@@ -270,7 +270,7 @@ fn run_local(local: LocalAction, global: &GlobalFlags) -> ExitCode {
         }
         LocalAction::DaemonStop => {
             // Send a shutdown request via IPC (best-effort).
-            let req = build_request("shutdown", &json!({}));
+            let req = ipc::build_request("shutdown", &json!({}));
             match ipc::send_to_daemon(&req) {
                 Ok(_) => {
                     output::print_text("Daemon shutdown requested");
@@ -284,7 +284,7 @@ fn run_local(local: LocalAction, global: &GlobalFlags) -> ExitCode {
         }
         LocalAction::DaemonStatus => {
             let pipe_up = ipc::daemon_pipe_exists();
-            let pid = read_daemon_pid();
+            let pid = daemon::read_pid_from_file();
             // A daemon is "running" if its PID is alive AND the pipe responds.
             let alive = match pid {
                 Some(p) if win32::is_process_alive(p) => true,
@@ -337,12 +337,6 @@ fn daemon_spawn_and_wait(python: &str) -> Result<String, String> {
     }
 }
 
-/// Read the daemon PID from its PID file (best-effort).
-fn read_daemon_pid() -> Option<u32> {
-    let content = std::fs::read_to_string(daemon::pid_file_path()).ok()?;
-    content.lines().next()?.trim().parse().ok()
-}
-
 /// Read the daemon's self-reported version from `~/.agent-windows/daemon.version`.
 fn read_daemon_version() -> String {
     match std::fs::read_to_string(daemon::version_file_path()) {
@@ -358,14 +352,18 @@ fn read_daemon_version() -> String {
     }
 }
 
-/// Locate the Python interpreter that has `agent_windows` installed.
+/// Locate the Python interpreter that will run the daemon.
 ///
 /// Resolution order:
 /// 1. `$AGENT_WINDOWS_PYTHON` — explicit override (highest priority).
 /// 2. `python` on PATH — the common case; uv tool installs and venvs put the
-///    right interpreter first on PATH. (We verify it can import the module
-///    before returning, and fall back if not.)
-/// 3. Last resort: `python` verbatim (let the spawn fail with a clear message).
+///    right interpreter first on PATH.
+///
+/// We deliberately do NOT verify the interpreter here: importing the module
+/// would cost a process spawn (~230ms) and defeat the launcher's fast-startup
+/// goal. If this `python` lacks `agent_windows` installed, the spawn still
+/// fails fast — `ensure_daemon_running` detects the early exit and surfaces
+/// the daemon's real stderr traceback instead.
 fn resolve_python_exe() -> String {
     if let Ok(p) = std::env::var("AGENT_WINDOWS_PYTHON") {
         if !p.is_empty() {
@@ -378,20 +376,13 @@ fn resolve_python_exe() -> String {
     "python".into()
 }
 
-/// Build the JSON-RPC 2.0 request string.
-fn build_request(method: &str, params: &serde_json::Value) -> String {
-    // Match the Python client: omit params when empty, include otherwise.
-    if params.as_object().map(|o| o.is_empty()).unwrap_or(false) {
-        json!({ "jsonrpc": "2.0", "method": method, "id": 1 }).to_string()
-    } else {
-        json!({ "jsonrpc": "2.0", "method": method, "id": 1, "params": params }).to_string()
-    }
-}
-
-/// Map a JSON-RPC error code to a process exit code. We mirror the convention
-/// that application errors (-1xxx) exit 1; protocol errors exit 2.
+/// Map a JSON-RPC error code to a process exit code. Protocol errors
+/// (the JSON-RPC 2.0 reserved range `-32700..=-32000`, e.g. PARSE_ERROR /
+/// INVALID_REQUEST / METHOD_NOT_FOUND / INVALID_PARAMS) exit 2; everything
+/// else — the application range `-1001..=-1999` or any other code — exits 1.
+/// See `src/agent_windows/ipc/protocol.py` for the authoritative code list.
 fn exit_code_for(code: i64) -> u8 {
-    if code >= -3999 && code <= -32000 {
+    if (-32700..=-32000).contains(&code) {
         2 // protocol error
     } else {
         1 // application error
@@ -433,11 +424,55 @@ Commands:
 
   wait                 Wait for seconds / element / text
   batch                Execute multiple commands in one IPC round-trip
+  shell                Run a shell command (subject to the daemon's blacklist)
 
   daemon start/stop/status         Daemon management
+  ping                             Daemon health check (round-trip)
 
 Native launcher (fast startup). For --no-daemon or config commands, use
 agent-windows-python (the Python CLI).
 "#;
     output::print_text(help);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::exit_code_for;
+
+    /// The JSON-RPC 2.0 reserved range (-32700..=-32000) maps to exit 2
+    /// (protocol error). Locks the boundary so a future edit to the range is
+    /// caught. The Python codes live in `ipc/protocol.py`: PARSE_ERROR=-32700,
+    /// INVALID_REQUEST=-32600, METHOD_NOT_FOUND=-32601, INVALID_PARAMS=-32602,
+    /// and the application range ELEMENT_NOT_FOUND=-1001 .. DAEMON_INTERNAL=-1999.
+    #[test]
+    fn exit_code_protocol_range_is_2() {
+        // Endpoints of the reserved range.
+        assert_eq!(exit_code_for(-32700), 2);
+        assert_eq!(exit_code_for(-32000), 2);
+        // The four standard protocol codes all map to 2.
+        assert_eq!(exit_code_for(-32700), 2); // PARSE_ERROR
+        assert_eq!(exit_code_for(-32600), 2); // INVALID_REQUEST
+        assert_eq!(exit_code_for(-32601), 2); // METHOD_NOT_FOUND
+        assert_eq!(exit_code_for(-32602), 2); // INVALID_PARAMS
+    }
+
+    #[test]
+    fn exit_code_application_range_is_1() {
+        // Application-specific codes (ELEMENT_NOT_FOUND .. DAEMON_INTERNAL_ERROR).
+        assert_eq!(exit_code_for(-1001), 1);
+        assert_eq!(exit_code_for(-1003), 1); // WAIT_TIMEOUT
+        assert_eq!(exit_code_for(-1999), 1); // DAEMON_INTERNAL_ERROR
+    }
+
+    #[test]
+    fn exit_code_just_outside_reserved_range_is_1() {
+        // One step below the reserved range is NOT a protocol error.
+        // (This is the regression guard: the old code used `-3999` as the lower
+        // bound, which would have classified -3500 / -3999 as exit 2.)
+        assert_eq!(exit_code_for(-32701), 1);
+        assert_eq!(exit_code_for(-31999), 1);
+        assert_eq!(exit_code_for(-3500), 1);
+        assert_eq!(exit_code_for(-3999), 1);
+        assert_eq!(exit_code_for(0), 1);
+    }
 }

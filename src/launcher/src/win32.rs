@@ -11,7 +11,7 @@ use std::time::Duration;
 use windows_sys::Win32::{
     Foundation::{
         CloseHandle, GetLastError, ERROR_BROKEN_PIPE, ERROR_HANDLE_EOF, ERROR_IO_PENDING,
-        ERROR_NO_DATA, ERROR_PIPE_NOT_CONNECTED, FALSE, HANDLE, WAIT_TIMEOUT,
+        ERROR_NO_DATA, ERROR_PIPE_NOT_CONNECTED, FALSE, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT,
     },
     Security::SECURITY_ATTRIBUTES,
     Storage::FileSystem::{ReadFile, WriteFile},
@@ -32,6 +32,12 @@ const READ_TIMEOUT_MS: u32 = 150_000;
 /// Overlapped write of the full payload, completing within the read timeout.
 /// Mirrors `_overlapped_write_all`.
 pub fn write_pipe(handle: HANDLE, data: &[u8]) -> Result<(), String> {
+    // WriteFile takes a u32 length; guard the cast so a >4 GiB payload (not
+    // reachable today, but defensive against a future caller) fails cleanly
+    // instead of silently truncating to a short write. Done BEFORE allocating
+    // the event handle so the error path doesn't leak it.
+    let len = u32::try_from(data.len()).map_err(|_| "write payload too large")?;
+
     let event = new_event()?;
     let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
     overlapped.hEvent = event;
@@ -42,7 +48,7 @@ pub fn write_pipe(handle: HANDLE, data: &[u8]) -> Result<(), String> {
         let ok = WriteFile(
             handle,
             data.as_ptr(),
-            data.len() as u32,
+            len,
             &mut written,
             ovl_ptr,
         );
@@ -60,6 +66,11 @@ pub fn write_pipe(handle: HANDLE, data: &[u8]) -> Result<(), String> {
 /// `send_to_daemon`. Returns the raw bytes (caller decodes + trims).
 pub fn read_pipe_until_newline(handle: HANDLE) -> Result<Vec<u8>, String> {
     let mut out = Vec::with_capacity(4096);
+    // Track how far we've already scanned for `\n`, so each chunk is scanned
+    // once rather than re-scanning the whole accumulated buffer (which would be
+    // O(n²) up to the 10 MiB cap). `scan_from` is the byte offset in `out` at
+    // which the next scan should begin.
+    let mut scan_from = 0usize;
     loop {
         let chunk = overlapped_read_chunk(handle)?;
         if chunk.is_empty() {
@@ -69,9 +80,10 @@ pub fn read_pipe_until_newline(handle: HANDLE) -> Result<Vec<u8>, String> {
         if out.len() > MAX_MESSAGE_SIZE {
             return Err("Message exceeds maximum size".into());
         }
-        if out.contains(&b'\n') {
+        if out[scan_from..].contains(&b'\n') {
             break;
         }
+        scan_from = out.len().saturating_sub(1);
     }
     Ok(out)
 }
@@ -137,6 +149,13 @@ fn complete_overlapped(
                 // (Mirrors pipe.py's CancelIo on timeout.)
                 unsafe { CancelIo(handle) };
                 return Err(format!("Timed out waiting {}ms for daemon", timeout_ms));
+            }
+            // WAIT_OBJECT_0 = signalled (done). Anything else (WAIT_FAILED, an
+            // abandoned wait, …) is an error — don't fall through to reading
+            // `transferred`, which may be uninitialized in that case. Capture
+            // the winerror before GetOverlappedResult clobbers it.
+            if rc != WAIT_OBJECT_0 {
+                return Err(format!("WaitForSingleObject failed (winerror {})", rc));
             }
             let mut transferred: u32 = 0;
             if unsafe { GetOverlappedResult(handle, overlapped_ptr, &mut transferred, 0) } == 0 {
@@ -631,6 +650,12 @@ fn overlapped_read_chunk_timed(handle: HANDLE, timeout_ms: u32) -> Result<Vec<u8
             CancelIo(handle);
             CloseHandle(event);
             return Err(format!("Timed out waiting {}ms for stderr", timeout_ms));
+        }
+        // WAIT_OBJECT_0 = signalled. Anything else (WAIT_FAILED, …) is an error —
+        // don't read `transferred`, which may be unset.
+        if rc != WAIT_OBJECT_0 {
+            CloseHandle(event);
+            return Err(format!("WaitForSingleObject failed (winerror {})", rc));
         }
         let mut transferred: u32 = 0;
         let got = GetOverlappedResult(handle, ovl_ptr, &mut transferred, 0);

@@ -181,8 +181,8 @@ fn daemon_version_matches() -> bool {
 /// removed either way so the next spawn starts clean.
 fn kill_daemon() -> Result<(), String> {
     // Fire-and-forget: write shutdown, don't block on the response.
-    let req = "{\"jsonrpc\":\"2.0\",\"method\":\"shutdown\",\"id\":1}";
-    let _ = send_no_wait(req);
+    let req = crate::ipc::build_request("shutdown", &serde_json::Value::Object(Default::default()));
+    let _ = send_no_wait(&req);
 
     let deadline = Instant::now() + GRACEFUL_SHUTDOWN_WAIT;
     while Instant::now() < deadline {
@@ -248,7 +248,7 @@ fn daemon_process_alive() -> bool {
 }
 
 /// Parse line 1 of the PID file as the daemon PID.
-fn read_pid_from_file() -> Option<u32> {
+pub(crate) fn read_pid_from_file() -> Option<u32> {
     let content = std::fs::read_to_string(pid_file_path()).ok()?;
     let first_line = content.lines().next()?;
     first_line.trim().parse::<u32>().ok()

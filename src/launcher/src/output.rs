@@ -128,11 +128,16 @@ fn write_handle(handle: HANDLE, bytes: &[u8]) {
     // Encode to UTF-16 for WriteConsoleW (handles Unicode on the console).
     let utf16: Vec<u16> = String::from_utf8_lossy(bytes).encode_utf16().collect();
     let mut written: u32 = 0;
+    // Lengths here are bounded by console output strings (tiny), but guard the
+    // casts anyway for symmetry with write_pipe and to stay correct if a future
+    // caller passes a large buffer.
+    let n16 = u32::try_from(utf16.len()).unwrap_or(u32::MAX);
+    let n8 = u32::try_from(bytes.len()).unwrap_or(u32::MAX);
     let ok = unsafe {
-        WriteConsoleW(handle, utf16.as_ptr().cast(), utf16.len() as u32, &mut written, std::ptr::null())
+        WriteConsoleW(handle, utf16.as_ptr().cast(), n16, &mut written, std::ptr::null())
     };
     if ok == 0 {
         // Fallback: raw bytes via WriteFile (redirected streams, pipes).
-        unsafe { WriteFile(handle, bytes.as_ptr(), bytes.len() as u32, &mut written, std::ptr::null_mut()) };
+        unsafe { WriteFile(handle, bytes.as_ptr(), n8, &mut written, std::ptr::null_mut()) };
     }
 }

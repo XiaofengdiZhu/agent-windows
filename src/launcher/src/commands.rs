@@ -360,6 +360,46 @@ impl ParsedArgs {
     }
 }
 
+/// An optional integer option: return `default` when absent, but reject a
+/// *present but malformed* value with `invalid_value` (so an agent consumer
+/// can rely on the typed error contract to detect a bad argument, instead of
+/// silently getting the default). `name` is the first spelling, used for the
+/// error message.
+///
+/// Note: a trailing value-option with no following token (e.g. `scroll 5 5
+/// --amount`) is recorded by `ParsedArgs` as the empty string, not as absent.
+/// We treat empty as "use the default" (the user wrote the flag but supplied
+/// no value) and only reject a *non-empty* unparseable value.
+fn opt_int(p: &ParsedArgs, names: &[&str], default: i64) -> Result<i64, ParseError> {
+    match p.value(names) {
+        None | Some("") => Ok(default),
+        Some(v) => v.parse().map_err(|_| {
+            invalid(format!("--{} must be an integer", names[0]))
+        }),
+    }
+}
+
+/// Same as `opt_int` but for floating-point options. Rejects non-finite
+/// values (NaN/±Infinity): Rust's `str::parse::<f64>()` accepts `"nan"` and
+/// `"inf"`, and a NaN `--timeout` would make `start.elapsed() >= timeout`
+/// always false (an infinite poll loop in `run_wait`).
+fn opt_float(p: &ParsedArgs, names: &[&str], default: f64) -> Result<f64, ParseError> {
+    match p.value(names) {
+        None | Some("") => Ok(default),
+        Some(v) => v.parse::<f64>().map_err(|_| {
+            invalid(format!("--{} must be a number", names[0]))
+        }).and_then(|f| {
+            if f.is_finite() {
+                Ok(f)
+            } else {
+                Err(invalid(format!(
+                    "--{} must be a finite number (not nan/inf)", names[0]
+                )))
+            }
+        }),
+    }
+}
+
 fn parse_xy(rest: &[String], method: &str) -> Result<Action, ParseError> {
     let p = ParsedArgs::parse(rest, &[]);
     let x: i64 = p.pos(0, "x")?.parse().map_err(|_| invalid("x must be an integer"))?;
@@ -414,7 +454,7 @@ fn parse_scroll(rest: &[String]) -> Result<Action, ParseError> {
     let x: i64 = p.pos(0, "x")?.parse().map_err(|_| invalid("x must be an integer"))?;
     let y: i64 = p.pos(1, "y")?.parse().map_err(|_| invalid("y must be an integer"))?;
     let direction = p.value(&["direction"]).unwrap_or("down").to_string();
-    let amount: i64 = p.value(&["amount"]).map(|v| v.parse().unwrap_or(3)).unwrap_or(3);
+    let amount: i64 = opt_int(&p, &["amount"], 3)?;
     Ok(Action::Call {
         method: "scroll".into(),
         params: json!({ "x": x, "y": y, "direction": direction, "amount": amount }),
@@ -442,7 +482,7 @@ fn parse_observe(rest: &[String]) -> Result<Action, ParseError> {
 fn parse_screenshot(rest: &[String]) -> Result<Action, ParseError> {
     let p = ParsedArgs::parse(rest, &["output", "o", "monitor", "selector", "s", "bbox"]);
     let output = p.value(&["output", "o"]).unwrap_or("").to_string();
-    let monitor: i64 = p.value(&["monitor"]).map(|v| v.parse().unwrap_or(-1)).unwrap_or(-1);
+    let monitor: i64 = opt_int(&p, &["monitor"], -1)?;
     let mut params = Map::new();
     params.insert("output".into(), output.into());
     params.insert("monitor".into(), monitor.into());
@@ -484,7 +524,7 @@ fn parse_ask_vision(rest: &[String]) -> Result<Action, ParseError> {
 fn parse_detect(rest: &[String]) -> Result<Action, ParseError> {
     let p = ParsedArgs::parse(rest, &["max-targets", "image", "i", "model", "m", "output", "o"]);
     let description = p.pos(0, "description")?;
-    let max_targets: i64 = p.value(&["max-targets"]).map(|v| v.parse().unwrap_or(20)).unwrap_or(20);
+    let max_targets: i64 = opt_int(&p, &["max-targets"], 20)?;
     let mut params = Map::new();
     params.insert("description".into(), description.into());
     params.insert("max_targets".into(), max_targets.into());
@@ -519,7 +559,7 @@ fn parse_highlight(rest: &[String]) -> Result<Action, ParseError> {
 fn parse_diff(rest: &[String]) -> Result<Action, ParseError> {
     let p = ParsedArgs::parse(rest, &["threshold", "t", "compare", "c", "output", "o"]);
     let baseline = p.pos(0, "baseline")?;
-    let threshold: i64 = p.value(&["threshold", "t"]).map(|v| v.parse().unwrap_or(30)).unwrap_or(30);
+    let threshold: i64 = opt_int(&p, &["threshold", "t"], 30)?;
     let mut params = Map::new();
     params.insert("baseline".into(), baseline.into());
     params.insert("threshold".into(), threshold.into());
@@ -596,8 +636,8 @@ fn parse_app(rest: &[String]) -> Result<Action, ParseError> {
                 .parse().map_err(|_| invalid("--width must be integer"))?;
             let height: i64 = p.value(&["height"]).ok_or_else(|| missing("--height required"))?
                 .parse().map_err(|_| invalid("--height must be integer"))?;
-            let x: i64 = p.value(&["x"]).map(|v| v.parse().unwrap_or(-1)).unwrap_or(-1);
-            let y: i64 = p.value(&["y"]).map(|v| v.parse().unwrap_or(-1)).unwrap_or(-1);
+            let x: i64 = opt_int(&p, &["x"], -1)?;
+            let y: i64 = opt_int(&p, &["y"], -1)?;
             Ok(Action::Call {
                 method: "app_resize".into(),
                 params: json!({ "name_or_title": name, "width": width, "height": height, "x": x, "y": y }),
@@ -690,8 +730,8 @@ fn parse_wait(rest: &[String]) -> Result<Action, ParseError> {
     //   wait --text "..."  → client-side polling via wait_check
     let p = ParsedArgs::parse(rest, &["text", "timeout", "t", "interval"]);
     let text_mode = p.value(&["text"]).map(|t| WaitProbe::Text(t.into()));
-    let timeout: f64 = p.value(&["timeout", "t"]).map(|v| v.parse().unwrap_or(30.0)).unwrap_or(30.0);
-    let interval: f64 = p.value(&["interval"]).map(|v| v.parse().unwrap_or(0.5)).unwrap_or(0.5);
+    let timeout: f64 = opt_float(&p, &["timeout", "t"], 30.0)?;
+    let interval: f64 = opt_float(&p, &["interval"], 0.5)?;
 
     let t0 = p.positionals.first().map(|s| s.as_str()).unwrap_or("");
 
@@ -757,7 +797,7 @@ fn parse_batch(rest: &[String], _global: &GlobalFlags) -> Result<Action, ParseEr
         return Err(invalid("commands must be a non-empty JSON array"));
     }
     let stop_on_error = !p.flag(&["continue-on-error"]);
-    let delay: f64 = p.value(&["delay", "d"]).map(|v| v.parse().unwrap_or(0.0)).unwrap_or(0.0);
+    let delay: f64 = opt_float(&p, &["delay", "d"], 0.0)?;
     Ok(Action::Call {
         method: "batch".into(),
         params: json!({ "commands": commands, "stop_on_error": stop_on_error, "delay": delay }),
@@ -985,7 +1025,8 @@ mod tests {
                 // leak into the positional list.
                 assert_eq!(params["x"], 5);
                 assert_eq!(params["y"], 5);
-                // amount=Some("") → "".parse() fails → unwrap_or(3).
+                // amount=Some("") → opt_int treats empty as "use default" (3),
+                // so a trailing `--amount` with no value still yields the default.
                 assert_eq!(params["amount"], 3);
             }
             other => panic!("expected Call, got {:?}", other),
@@ -1004,6 +1045,68 @@ mod tests {
                 assert_eq!(params["height"], 9);
                 assert_eq!(params["name_or_title"], "n");
             }
+            other => panic!("expected Call, got {:?}", other),
+        }
+    }
+
+    // ── L-05: malformed optional numeric → invalid_value (not silent default) ─
+    //
+    // The typed-error contract promises `invalid_value` when "a value failed
+    // to parse", so an agent consumer can detect a bad argument and retry with
+    // a fix. The old `.map(|v| v.parse().unwrap_or(DEFAULT)).unwrap_or(DEFAULT)`
+    // shape silently returned the default for a *present but malformed* value,
+    // defeating that signal. These lock the new behavior: malformed → error;
+    // absent → default; empty (trailing flag with no value) → default.
+
+    #[test]
+    fn malformed_int_option_is_invalid_value() {
+        let g = GlobalFlags::default();
+        // `scroll x y --amount abc` must surface invalid_value, not silently
+        // produce amount=3.
+        let e = parse(&argv(&["scroll", "1", "2", "--amount", "abc"]), &g).unwrap_err();
+        assert_eq!(e.type_name(), "invalid_value");
+        assert!(e.message().contains("amount"));
+        // Same for an app-resize optional (x/y) — earlier these silently
+        // defaulted to -1, inconsistent with width/height which already errored.
+        let e = parse(&argv(&["app", "resize", "n", "--width", "10", "--height", "10", "--x", "nope"]), &g)
+            .unwrap_err();
+        assert_eq!(e.type_name(), "invalid_value");
+        assert!(e.message().contains("x"));
+    }
+
+    #[test]
+    fn malformed_float_option_is_invalid_value() {
+        let g = GlobalFlags::default();
+        // wait --timeout abc (f64 path via opt_float).
+        let e = parse(&argv(&["wait", "--text", "hi", "--timeout", "abc"]), &g).unwrap_err();
+        assert_eq!(e.type_name(), "invalid_value");
+        assert!(e.message().contains("timeout"));
+        // batch --delay notanumber (f64 path).
+        let e = parse(&argv(&["batch", "--delay", "fast", "[{}]"]), &g).unwrap_err();
+        assert_eq!(e.type_name(), "invalid_value");
+        assert!(e.message().contains("delay"));
+    }
+
+    #[test]
+    fn nonfinite_float_option_is_invalid_value() {
+        // Rust's f64 parsing accepts "nan"/"inf", but a NaN --timeout would make
+        // `start.elapsed() >= timeout` always false → an infinite poll loop in
+        // run_wait. opt_float must reject non-finite values.
+        let g = GlobalFlags::default();
+        for bad in &["nan", "inf", "-inf", "infinity"] {
+            let e = parse(&argv(&["wait", "--text", "hi", "--timeout", bad]), &g).unwrap_err();
+            assert_eq!(e.type_name(), "invalid_value", "nan/inf {:?} must be rejected", bad);
+            assert!(e.message().contains("finite"), "msg for {:?}: {}", bad, e.message());
+        }
+    }
+
+    #[test]
+    fn absent_numeric_option_uses_default() {
+        let g = GlobalFlags::default();
+        // No --amount → default 3 still applies (regression guard: the
+        // malformed→error change must not break the absent case).
+        match parse(&argv(&["scroll", "1", "2"]), &g) {
+            Ok(Action::Call { params, .. }) => assert_eq!(params["amount"], 3),
             other => panic!("expected Call, got {:?}", other),
         }
     }
