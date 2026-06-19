@@ -27,11 +27,14 @@ use crate::ipc::widen;
 /// Max bytes we'll buffer for a single response (matches Python's 10 MB guard).
 const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
 /// Read/write timeout in ms (matches config `ipc.read_timeout_seconds` = 150s).
-const READ_TIMEOUT_MS: u32 = 150_000;
+/// `pub(crate)` so the IPC layer can use it as the default per-op timeout.
+pub(crate) const READ_TIMEOUT_MS: u32 = 150_000;
 
-/// Overlapped write of the full payload, completing within the read timeout.
-/// Mirrors `_overlapped_write_all`.
-pub fn write_pipe(handle: HANDLE, data: &[u8]) -> Result<(), String> {
+/// Overlapped write of the full payload, completing within `timeout_ms`.
+/// Mirrors `_overlapped_write_all`. The caller supplies the per-write timeout:
+/// normal requests use `READ_TIMEOUT_MS`; fire-and-forget paths (`send_no_wait`)
+/// pass a short bound so a wedged daemon can't block the kill path for minutes.
+pub fn write_pipe(handle: HANDLE, data: &[u8], timeout_ms: u32) -> Result<(), String> {
     // WriteFile takes a u32 length; guard the cast so a >4 GiB payload (not
     // reachable today, but defensive against a future caller) fails cleanly
     // instead of silently truncating to a short write. Done BEFORE allocating
@@ -52,7 +55,7 @@ pub fn write_pipe(handle: HANDLE, data: &[u8]) -> Result<(), String> {
             &mut written,
             ovl_ptr,
         );
-        complete_overlapped(handle, event, ovl_ptr, ok != FALSE, READ_TIMEOUT_MS, written as usize)
+        complete_overlapped(handle, event, ovl_ptr, ok != FALSE, timeout_ms, written as usize)
     };
     unsafe { CloseHandle(event) };
     let transferred = result?;
@@ -63,8 +66,9 @@ pub fn write_pipe(handle: HANDLE, data: &[u8]) -> Result<(), String> {
 }
 
 /// Read newline-delimited chunks until `\n` or EOF. Mirrors the read loop in
-/// `send_to_daemon`. Returns the raw bytes (caller decodes + trims).
-pub fn read_pipe_until_newline(handle: HANDLE) -> Result<Vec<u8>, String> {
+/// `send_to_daemon`. Each chunk read is bounded by `timeout_ms`. Returns the
+/// raw bytes (caller decodes + trims).
+pub fn read_pipe_until_newline(handle: HANDLE, timeout_ms: u32) -> Result<Vec<u8>, String> {
     let mut out = Vec::with_capacity(4096);
     // Track how far we've already scanned for `\n`, so each chunk is scanned
     // once rather than re-scanning the whole accumulated buffer (which would be
@@ -72,7 +76,7 @@ pub fn read_pipe_until_newline(handle: HANDLE) -> Result<Vec<u8>, String> {
     // which the next scan should begin.
     let mut scan_from = 0usize;
     loop {
-        let chunk = overlapped_read_chunk(handle)?;
+        let chunk = overlapped_read_chunk(handle, timeout_ms)?;
         if chunk.is_empty() {
             break; // EOF
         }
@@ -88,9 +92,9 @@ pub fn read_pipe_until_newline(handle: HANDLE) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-/// One overlapped ReadFile of up to 64 KiB, bounded by the read timeout.
+/// One overlapped ReadFile of up to 64 KiB, bounded by `timeout_ms`.
 /// Mirrors `_overlapped_read_chunk`. Returns the bytes actually read.
-fn overlapped_read_chunk(handle: HANDLE) -> Result<Vec<u8>, String> {
+fn overlapped_read_chunk(handle: HANDLE, timeout_ms: u32) -> Result<Vec<u8>, String> {
     let event = new_event()?;
     let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
     overlapped.hEvent = event;
@@ -106,7 +110,7 @@ fn overlapped_read_chunk(handle: HANDLE) -> Result<Vec<u8>, String> {
             &mut read,
             ovl_ptr,
         );
-        complete_overlapped(handle, event, ovl_ptr, ok != FALSE, READ_TIMEOUT_MS, read as usize)
+        complete_overlapped(handle, event, ovl_ptr, ok != FALSE, timeout_ms, read as usize)
     };
     unsafe { CloseHandle(event) };
     let n = result?;

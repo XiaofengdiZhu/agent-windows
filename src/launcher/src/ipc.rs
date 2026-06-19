@@ -16,7 +16,7 @@ use windows_sys::Win32::{
     Storage::FileSystem::{CreateFileW, FILE_FLAG_OVERLAPPED, OPEN_EXISTING},
 };
 
-use crate::win32::{pipe_exists, wait_named_pipe};
+use crate::win32::pipe_exists;
 
 /// Win32 error: file not found (the pipe doesn't exist right now).
 const ERROR_FILE_NOT_FOUND: u32 = 2;
@@ -56,9 +56,29 @@ pub(crate) fn build_request(method: &str, params: &serde_json::Value) -> String 
 ///
 /// Errors surface as human-readable strings (the caller decides exit code).
 pub fn send_to_daemon(request: &str) -> Result<String, String> {
+    send_to_daemon_bounded(request, crate::win32::READ_TIMEOUT_MS)
+}
+
+/// Same as `send_to_daemon` but the *whole* call (all transient retries
+/// included) is bounded by `timeout_ms` of wall-clock time, not just one
+/// attempt. Used by polling callers (`run_wait`) that must enforce a per-probe
+/// deadline: a `wait --timeout 5` should never block ~15s on a wedged daemon
+/// that breaks the pipe slowly across the 3 transient retries.
+///
+/// Each retry's per-attempt timeout is the remaining budget, so the attempts
+/// can't overrun the caller's deadline even on the slow-break transient path.
+pub fn send_to_daemon_bounded(request: &str, timeout_ms: u32) -> Result<String, String> {
+    let start = Instant::now();
     let mut last_err = String::from("could not connect to daemon pipe");
     for attempt in 0..TRANSIENT_RETRIES {
-        match connect_and_transact(request) {
+        // Shrink the per-attempt timeout to the budget left so the sum of all
+        // transient retries can't exceed the caller's `timeout_ms`. A 0 (or
+        // already-expired) budget still gets one final attempt at 0ms — which
+        // either completes synchronously (healthy daemon) or times out and
+        // returns, rather than looping.
+        let elapsed_ms = start.elapsed().as_millis().min(u32::MAX as u128) as u32;
+        let attempt_timeout = timeout_ms.saturating_sub(elapsed_ms);
+        match connect_and_transact(request, attempt_timeout) {
             Ok(resp) => return Ok(resp),
             Err(e) if is_transient(&e) && attempt + 1 < TRANSIENT_RETRIES => {
                 // Broken pipe / connection reset — the daemon likely cycled its
@@ -75,7 +95,7 @@ pub fn send_to_daemon(request: &str) -> Result<String, String> {
 
 /// One full connect + send + recv attempt. Returns a string that callers can
 /// classify via `is_transient`.
-fn connect_and_transact(request: &str) -> Result<String, String> {
+fn connect_and_transact(request: &str, timeout_ms: u32) -> Result<String, String> {
     let pipe_name_w = widen(PIPE_NAME);
 
     for attempt in 0..CONNECT_RETRIES {
@@ -104,7 +124,7 @@ fn connect_and_transact(request: &str) -> Result<String, String> {
         }
 
         // Got a handle — send/receive, then close.
-        let result = transact(handle, request);
+        let result = transact(handle, request, timeout_ms);
         unsafe { CloseHandle(handle) };
         return result;
     }
@@ -202,12 +222,12 @@ mod tests {
 }
 
 /// Low-level send + recv on a connected overlapped pipe handle.
-fn transact(handle: HANDLE, request: &str) -> Result<String, String> {
+fn transact(handle: HANDLE, request: &str, timeout_ms: u32) -> Result<String, String> {
     let payload = format!("{}\n", request);
     let bytes = payload.as_bytes();
 
-    crate::win32::write_pipe(handle, bytes)?;
-    let resp = crate::win32::read_pipe_until_newline(handle)?;
+    crate::win32::write_pipe(handle, bytes, timeout_ms)?;
+    let resp = crate::win32::read_pipe_until_newline(handle, timeout_ms)?;
     // The response is UTF-8; strip the trailing newline.
     Ok(String::from_utf8_lossy(&resp)
         .trim_end_matches('\n')
@@ -226,8 +246,10 @@ pub fn daemon_pipe_exists() -> bool {
 /// when its main loop is idle regardless of whether we read the response.
 ///
 /// Returns Ok once the request bytes are written; the actual effect happens
-/// asynchronously. Best-effort: returns Err if we can't connect/write within
-/// a short window (caller shouldn't depend on the result).
+/// asynchronously. Best-effort: returns Err if we can't connect or the write
+/// doesn't complete within a short window (~2s). The write timeout is bounded
+/// independently of the 150s read timeout so a wedged daemon can't pin the
+/// kill path — `daemon stop`/`kill_daemon` must stay non-blocking.
 pub fn send_no_wait(request: &str) -> Result<(), String> {
     let pipe_name_w = widen(PIPE_NAME);
     // Fewer retries than a normal request — this is best-effort, and if the
@@ -252,25 +274,22 @@ pub fn send_no_wait(request: &str) -> Result<(), String> {
             }
             return Err(format!("Cannot connect to daemon pipe (winerror {})", err));
         }
-        // Write and close immediately — don't wait for/read the response.
-        let result = crate::win32::write_pipe(handle, format!("{}\n", request).as_bytes());
+        // Write and close immediately — don't wait for/read the response. Bounded
+        // to 2s: the shutdown request is ~60 bytes, the pipe buffer is 64 KiB by
+        // default, so a healthy daemon accepts it near-instantly. A write that
+        // doesn't complete in 2s means the daemon is wedged — give up and let
+        // the caller's PID poll / force-kill handle it (the kill path must not
+        // block for the 150s read timeout here).
+        const SEND_NO_WAIT_WRITE_MS: u32 = 2_000;
+        let result = crate::win32::write_pipe(
+            handle,
+            format!("{}\n", request).as_bytes(),
+            SEND_NO_WAIT_WRITE_MS,
+        );
         unsafe { CloseHandle(handle) };
         return result;
     }
     Err("daemon pipe not available".into())
-}
-
-/// Wait for the pipe to appear, polling up to `timeout`. Used after spawning a
-/// fresh daemon while it initializes.
-pub fn wait_for_pipe(timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if wait_named_pipe(PIPE_NAME, Duration::from_millis(100)) {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    false
 }
 
 /// Encode a `&str` into a NUL-terminated UTF-16 Vec for the W-suffix Win32 APIs.

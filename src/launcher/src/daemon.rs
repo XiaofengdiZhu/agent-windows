@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use crate::ipc::{daemon_pipe_exists, send_no_wait, wait_for_pipe};
+use crate::ipc::{daemon_pipe_exists, send_no_wait};
 use crate::win32::{is_process_alive, poll_process, read_stderr_to_string, spawn_daemon, truncate_for_error_msg};
 use windows_sys::Win32::Foundation::HANDLE;
 
@@ -73,11 +73,27 @@ pub fn ensure_daemon_running(python_exe: &str, debug: bool) -> Result<(), String
         cleanup_stale_files();
     }
 
-    // Genuinely gone — spawn a fresh one. `stderr_read` is the read end of an
-    // anonymous pipe wired to the daemon's stderr, so if it exits early we can
-    // surface the real traceback (import failure, etc.) instead of a generic
-    // "check the logs" message (#9).
-    let (handle, _pid, stderr_read) = spawn_daemon(python_exe, debug)
+    // Genuinely gone — spawn a fresh one and wait for its pipe, surfacing
+    // stderr on early exit. Shared with `daemon start` so both paths get the
+    // same early-exit diagnostic (the #9 fix was asymmetric before: only this
+    // cold-start path surfaced the traceback, `daemon start` didn't).
+    spawn_and_wait_for_pipe(python_exe, debug).map(|_| ())
+}
+
+/// Spawn a daemon and wait for its pipe to come up, polling for early exit so
+/// a startup failure (bad PYTHONPATH, missing dep, version-mismatch abort) is
+/// surfaced with the real stderr traceback instead of a generic timeout.
+///
+/// Returns `Ok(pid)` once the pipe responds (the freshly-spawned daemon's PID),
+/// or `Err` with either the embedded stderr (early exit) or a did-not-become-
+/// ready message (timed out). The caller owns closing the handles it still
+/// holds on the success path — here we close them internally since both callers
+/// (`ensure_daemon_running`, `daemon start`) only want the pid-or-error.
+pub(crate) fn spawn_and_wait_for_pipe(python_exe: &str, debug: bool) -> Result<u32, String> {
+    // `stderr_read` is the read end of an anonymous pipe wired to the daemon's
+    // stderr, so if it exits early we can surface the real traceback (import
+    // failure, etc.) instead of a generic "check the logs" message (#9).
+    let (handle, pid, stderr_read) = spawn_daemon(python_exe, debug)
         .map_err(|e| format!("Daemon not running, failed to start: {}", e))?;
 
     // Retry until the pipe appears, or the spawned process exits (fail fast —
@@ -88,7 +104,7 @@ pub fn ensure_daemon_running(python_exe: &str, debug: bool) -> Result<(), String
         if daemon_pipe_exists() {
             close_handle(handle);
             close_stderr(stderr_read);
-            return Ok(());
+            return Ok(pid);
         }
         if let Some(code) = poll_process(handle) {
             let stderr = stderr_read
@@ -259,12 +275,6 @@ pub fn home_dir() -> PathBuf {
     std::env::var_os("USERPROFILE")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
-}
-
-/// Block until the daemon pipe is ready, polling up to `timeout`. Used by the
-/// `daemon start` subcommand.
-pub fn wait_daemon_ready(timeout: Duration) -> bool {
-    wait_for_pipe(timeout)
 }
 
 #[cfg(test)]

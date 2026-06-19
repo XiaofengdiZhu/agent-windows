@@ -16,7 +16,6 @@ mod output;
 mod win32;
 
 use std::process::ExitCode;
-use std::time::Duration;
 
 use commands::{parse, Action, GlobalFlags, LocalAction, WaitProbe, WaitSpec};
 use serde_json::json;
@@ -190,11 +189,32 @@ fn run_wait(spec: WaitSpec, global: &GlobalFlags) -> ExitCode {
     let start = std::time::Instant::now();
 
     loop {
+        // Enforce the deadline *during* a probe, not only between probes.
+        // Each wait_check round-trip can otherwise block up to 150s (the read
+        // timeout) on a wedged daemon, so a `wait --timeout 5` would actually
+        // stall ~150s before the timeout check below ran. Bound each probe's
+        // read to the remaining budget so the caller's --timeout is honored.
+        let remaining = spec.timeout - start.elapsed().as_secs_f64();
+        if remaining <= 0.0 {
+            report_error(
+                &format!("{} not found within {}s", describe, spec.timeout),
+                "timeout",
+                global,
+            );
+            return ExitCode::from(1);
+        }
+        // Cap the per-probe read timeout at the remaining budget (and the 150s
+        // ceiling). send_to_daemon_bounded shrinks each transient retry's
+        // timeout to what's left of this budget, so the whole probe — retries
+        // included — stays bounded by `remaining`.
+        let probe_timeout_ms = (remaining * 1000.0) as u32;
+        let probe_timeout_ms = probe_timeout_ms.min(win32::READ_TIMEOUT_MS);
+
         let req = ipc::build_request(
             "wait_check",
             &json!({ probe_key: probe_val }),
         );
-        match ipc::send_to_daemon(&req) {
+        match ipc::send_to_daemon_bounded(&req, probe_timeout_ms) {
             Ok(resp) => {
                 if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&resp) {
                     if parsed.get("error").is_none() {
@@ -238,14 +258,6 @@ fn run_wait(spec: WaitSpec, global: &GlobalFlags) -> ExitCode {
             }
         }
 
-        if start.elapsed().as_secs_f64() >= spec.timeout {
-            report_error(
-                &format!("{} not found within {}s", describe, spec.timeout),
-                "timeout",
-                global,
-            );
-            return ExitCode::from(1);
-        }
         std::thread::sleep(std::time::Duration::from_secs_f64(poll));
     }
 }
@@ -257,7 +269,7 @@ fn run_local(local: LocalAction, global: &GlobalFlags) -> ExitCode {
     match local {
         LocalAction::DaemonStart => {
             let python = resolve_python_exe();
-            match daemon_spawn_and_wait(&python) {
+            match daemon_spawn_and_wait(&python, global.debug) {
                 Ok(msg) => {
                     output::print_text(&msg);
                     ExitCode::SUCCESS
@@ -317,23 +329,18 @@ fn run_local(local: LocalAction, global: &GlobalFlags) -> ExitCode {
 }
 
 /// Spawn the daemon and wait for it to be ready (mirrors `daemon start`).
-fn daemon_spawn_and_wait(python: &str) -> Result<String, String> {
+/// Shares the same spawn + early-exit-poll + stderr-surfacing loop as
+/// `ensure_daemon_running`, so a broken-Python install fails fast (~one poll
+/// interval) with the real traceback instead of hanging 5s on the generic
+/// "did not become ready" message. The earlier asymmetry (#9 was only applied
+/// to the cold-start path) is closed here.
+fn daemon_spawn_and_wait(python: &str, debug: bool) -> Result<String, String> {
     if ipc::daemon_pipe_exists() {
         return Ok("Daemon already running".into());
     }
-    let (handle, pid, stderr_read) = win32::spawn_daemon(python, false)?;
-    let ready = daemon::wait_daemon_ready(Duration::from_secs(5));
-    unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) };
-    // `daemon start` doesn't poll for early exit (it waits on the pipe), so we
-    // have no use for the captured stderr here — just close it to avoid a
-    // handle leak. The early-exit diagnostic lives in ensure_daemon_running.
-    if let Some(h) = stderr_read {
-        unsafe { windows_sys::Win32::Foundation::CloseHandle(h) };
-    }
-    if ready {
-        Ok(format!("Daemon started (PID {})", pid))
-    } else {
-        Err("Daemon did not become ready".into())
+    match daemon::spawn_and_wait_for_pipe(python, debug) {
+        Ok(pid) => Ok(format!("Daemon started (PID {})", pid)),
+        Err(e) => Err(e),
     }
 }
 
