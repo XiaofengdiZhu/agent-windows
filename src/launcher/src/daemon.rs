@@ -358,10 +358,18 @@ pub(crate) fn read_pid_from_file() -> Option<(u32, Option<f64>)> {
 }
 
 /// Resolve `~`. On Windows that's `%USERPROFILE%`.
+///
+/// USERPROFILE is set on every normal Windows install. The launcher's `main`
+/// checks for it up front and fails with a clear contract error if missing, so
+/// this function is only reached when USERPROFILE is present. We still panic
+/// (rather than fall back to `"."`) as a defense-in-depth net: a silent
+/// relative-path fallback would scatter daemon state across whatever CWD the
+/// launcher was invoked from — and under a service account could write into
+/// System32. `panic = "abort"` means this aborts with the message on stderr.
 pub fn home_dir() -> PathBuf {
     std::env::var_os("USERPROFILE")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
+        .unwrap_or_else(|| panic!("USERPROFILE is not set — cannot locate the daemon state directory"))
 }
 
 #[cfg(test)]

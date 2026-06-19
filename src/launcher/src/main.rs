@@ -26,6 +26,12 @@ fn main() -> ExitCode {
     // ── Parse global flags (consumed before the command name) ──────────────
     let (global, cmd_argv) = strip_global_flags(&argv);
 
+    // `--help` works without a USERPROFILE (it never touches the daemon state
+    // dir), so resolve it lazily — but for every real command we need a home
+    // dir to locate ~/.agent-windows. USERPROFILE is set on every normal
+    // Windows install; if it's missing we fail loudly here with the proper
+    // error contract (JSON in --format json mode) instead of silently writing
+    // state into whatever CWD we were launched from (L-09).
     let action = match parse(&cmd_argv, &global) {
         Ok(a) => a,
         Err(e) => {
@@ -37,6 +43,19 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
+
+    // Help doesn't need a home dir; every other action reads/writes daemon
+    // state files under ~/.agent-windows.
+    if !matches!(action, Action::Help) && std::env::var_os("USERPROFILE").is_none() {
+        report_error(
+            "USERPROFILE is not set — cannot locate the daemon state directory \
+             (~/.agent-windows). Set USERPROFILE to your user profile directory \
+             (e.g. C:\\Users\\<you>).",
+            "usage",
+            &global,
+        );
+        return ExitCode::from(1);
+    }
 
     match action {
         Action::Help => {
