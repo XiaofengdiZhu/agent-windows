@@ -156,7 +156,8 @@ pub fn parse(argv: &[String], global: &GlobalFlags) -> Result<Action, ParseError
         "ask-vision" => parse_ask_vision(rest),
         "detect" => parse_detect(rest),
         "get-text" => {
-            let selector = require_positional(rest, 0, "selector")?;
+            let p = ParsedArgs::parse(rest, &[]);
+            let selector = p.pos(0, "selector")?;
             Ok(Action::Call {
                 method: "get_text".into(),
                 params: json!({ "selector": selector }),
@@ -185,7 +186,8 @@ pub fn parse(argv: &[String], global: &GlobalFlags) -> Result<Action, ParseError
         // ── Input (keyboard) ──────────────────────────────────────────────
         "type" => parse_type(rest),
         "shortcut" => {
-            let keys = require_positional(rest, 0, "keys")?;
+            let p = ParsedArgs::parse(rest, &[]);
+            let keys = p.pos(0, "keys")?;
             Ok(Action::Call {
                 method: "shortcut".into(),
                 params: json!({ "keys": keys }),
@@ -195,7 +197,8 @@ pub fn parse(argv: &[String], global: &GlobalFlags) -> Result<Action, ParseError
         // ── System groups ─────────────────────────────────────────────────
         "app" => parse_app(rest),
         "shell" => {
-            let command = require_positional(rest, 0, "command")?;
+            let p = ParsedArgs::parse(rest, &[]);
+            let command = p.pos(0, "command")?;
             Ok(Action::Call {
                 method: "shell".into(),
                 params: json!({ "command": command }),
@@ -235,83 +238,117 @@ pub struct GlobalFlags {
 }
 
 // ── Helpers: tiny option parser ─────────────────────────────────────────────
+//
+// A single pass turns `rest` into one consistent view of positionals vs.
+// options. The old design had THREE independent passes (split_args,
+// opt_value, require_positional) that disagreed about what counts as a
+// positional — a flag's value (e.g. the `800` in `--width 800`) isn't a
+// positional, but split_args counted it as one, so `require_positional`
+// could grab the wrong token. `ParsedArgs` fixes that by knowing, in
+// advance, which flags take a value and consuming it as part of the option.
 
-/// Split `rest` into (positionals, options-present-set). An option is any arg
-/// starting with `--`; we only track presence (values are pulled separately).
-fn split_args(rest: &[String]) -> (Vec<&str>, Vec<&str>) {
-    let mut pos = Vec::new();
-    let mut opts = Vec::new();
-    for a in rest {
-        if let Some(name) = a.strip_prefix("--") {
-            opts.push(name);
-        } else {
-            pos.push(a.as_str());
-        }
-    }
-    (pos, opts)
-}
-
-/// Get a `--opt value` or `-o value` from the slice, or None.
+/// One pass over `rest`, producing positionals + option values + boolean flags.
 ///
-/// `names` lists every accepted form, e.g. `&["output", "o"]` matches both
-/// `--output value`/`--output=value` and `-o value`/`-o=value`. This mirrors
-/// Typer's `Option("--long", "-s")` short-option support.
-fn opt_value<'a>(rest: &'a [String], names: &[&str]) -> Option<&'a str> {
-    let long_forms: Vec<String> = names.iter().map(|n| format!("--{}", n)).collect();
-    let short_forms: Vec<String> = names
-        .iter()
-        .filter(|n| n.len() == 1)
-        .map(|n| format!("-{}", n))
-        .collect();
-    let all_forms: Vec<&str> = long_forms
-        .iter()
-        .chain(short_forms.iter())
-        .map(|s| s.as_str())
-        .collect();
+/// `value_opts` lists every option name (long, and single-char short) that
+/// consumes the following token as its value, e.g. `["output", "o", "monitor"]`.
+/// A name appears once regardless of long/short form; both `--output x` and
+/// `-o x` work, as do `--output=x` / `-o=x`. Options not in `value_opts` are
+/// treated as boolean flags (presence only). Anything not recognized as an
+/// option is a positional.
+struct ParsedArgs {
+    positionals: Vec<String>,
+    /// Canonical (first-listed) name → value, for value-taking options.
+    values: std::collections::HashMap<String, String>,
+    /// Canonical names of present boolean flags.
+    flags: Vec<String>,
+}
 
-    let mut iter = rest.iter();
-    while let Some(a) = iter.next() {
-        // Exact flag match → next arg is the value.
-        if all_forms.contains(&a.as_str()) {
-            return iter.next().map(|s| s.as_str());
-        }
-        // `--flag=value` / `-f=value` form.
-        for form in &all_forms {
-            if let Some(v) = a.strip_prefix(&format!("{}=", form)) {
-                return Some(v);
+impl ParsedArgs {
+    fn parse(rest: &[String], value_opts: &[&str]) -> ParsedArgs {
+        // Map every accepted spelling → canonical name (first in the group).
+        // A group like ["output", "o"] means both --output and -o map to "output".
+        let mut spelling_to_canon: std::collections::HashMap<String, String> = Default::default();
+        for canon in value_opts {
+            spelling_to_canon.insert(format!("--{}", canon), (*canon).into());
+            if canon.len() == 1 {
+                spelling_to_canon.insert(format!("-{}", canon), (*canon).into());
             }
         }
+
+        let mut positionals = Vec::new();
+        let mut values: std::collections::HashMap<String, String> = Default::default();
+        let mut flags = Vec::new();
+
+        let mut i = 0;
+        while i < rest.len() {
+            let a = &rest[i];
+
+            // `--name=value` / `-n=value` form. Check against every value-opt
+            // spelling so an unknown `--x=y` falls through to positional/flag.
+            if let Some(eq) = a.find('=') {
+                let (lhs, rhs) = a.split_at(eq);
+                let rhs = &rhs[1..]; // drop '='
+                if let Some(canon) = spelling_to_canon.get(lhs) {
+                    values.insert(canon.clone(), rhs.into());
+                    i += 1;
+                    continue;
+                }
+            }
+
+            // Exact `--name` / `-n` form.
+            if let Some(canon) = spelling_to_canon.get(a) {
+                // Value-taking option → consume the next token as its value.
+                // Missing value is recorded as empty-string (the command may
+                // still surface a clear error); we don't panic.
+                let v = rest.get(i + 1).map(|s| s.clone()).unwrap_or_default();
+                values.insert(canon.clone(), v);
+                i += 2;
+                continue;
+            }
+
+            // Boolean flag: `--name` where name isn't a value-opt. We still
+            // accept the short `-n` form. Record under the bare name.
+            if let Some(name) = a.strip_prefix("--") {
+                flags.push(name.into());
+                i += 1;
+                continue;
+            }
+            if a.starts_with('-') && a.len() == 2 && a != "-" {
+                flags.push(a[1..].into());
+                i += 1;
+                continue;
+            }
+
+            // Otherwise it's a positional.
+            positionals.push(a.clone());
+            i += 1;
+        }
+
+        ParsedArgs { positionals, values, flags }
     }
-    None
-}
 
-/// True if any of the given flag forms (e.g. `--right`, `-k`) is present.
-fn has_flag(rest: &[String], names: &[&str]) -> bool {
-    let forms: Vec<String> = names
-        .iter()
-        .flat_map(|n| {
-            let mut v = vec![format!("--{}", n)];
-            if n.len() == 1 {
-                v.push(format!("-{}", n));
-            }
-            v
+    /// The positional at `idx`, or a MissingArgument error.
+    fn pos(&self, idx: usize, name: &str) -> Result<String, ParseError> {
+        self.positionals.get(idx).cloned().ok_or_else(|| {
+            missing(format!("Missing required positional argument: {}", name))
         })
-        .collect();
-    rest.iter().any(|a| forms.contains(a))
-}
+    }
 
-fn require_positional(rest: &[String], idx: usize, name: &str) -> Result<String, ParseError> {
-    let (pos, _) = split_args(rest);
-    pos.get(idx)
-        .map(|s| s.to_string())
-        .ok_or_else(|| missing(format!("Missing required positional argument: {}", name)))
+    /// First present value-option among `names` (long/short treated equal).
+    fn value(&self, names: &[&str]) -> Option<&str> {
+        names.iter().find_map(|n| self.values.get(*n).map(|s| s.as_str()))
+    }
+
+    /// True if any of the boolean flag names is present (long/short equal).
+    fn flag(&self, names: &[&str]) -> bool {
+        names.iter().any(|n| self.flags.iter().any(|f| f == n))
+    }
 }
 
 fn parse_xy(rest: &[String], method: &str) -> Result<Action, ParseError> {
-    let x: i64 = require_positional(rest, 0, "x")?.parse()
-        .map_err(|_| invalid("x must be an integer"))?;
-    let y: i64 = require_positional(rest, 1, "y")?.parse()
-        .map_err(|_| invalid("y must be an integer"))?;
+    let p = ParsedArgs::parse(rest, &[]);
+    let x: i64 = p.pos(0, "x")?.parse().map_err(|_| invalid("x must be an integer"))?;
+    let y: i64 = p.pos(1, "y")?.parse().map_err(|_| invalid("y must be an integer"))?;
     Ok(Action::Call {
         method: method.into(),
         params: json!({ "x": x, "y": y }),
@@ -319,26 +356,23 @@ fn parse_xy(rest: &[String], method: &str) -> Result<Action, ParseError> {
 }
 
 fn parse_xy_opts(rest: &[String], method: &str, flags: &[&str]) -> Result<Action, ParseError> {
-    let x: i64 = require_positional(rest, 0, "x")?.parse()
-        .map_err(|_| invalid("x must be an integer"))?;
-    let y: i64 = require_positional(rest, 1, "y")?.parse()
-        .map_err(|_| invalid("y must be an integer"))?;
+    let p = ParsedArgs::parse(rest, &[]);
+    let x: i64 = p.pos(0, "x")?.parse().map_err(|_| invalid("x must be an integer"))?;
+    let y: i64 = p.pos(1, "y")?.parse().map_err(|_| invalid("y must be an integer"))?;
     let mut params = Map::new();
     params.insert("x".into(), x.into());
     params.insert("y".into(), y.into());
     for f in flags {
-        // flags arrive as "right"/"double" (no dashes); has_flag adds them.
-        params.insert((*f).into(), has_flag(rest, &[f]).into());
+        params.insert((*f).into(), p.flag(&[f]).into());
     }
     Ok(Action::Call { method: method.into(), params: Value::Object(params) })
 }
 
 fn parse_mouse_button(rest: &[String], method: &str) -> Result<Action, ParseError> {
-    let x: i64 = require_positional(rest, 0, "x")?.parse()
-        .map_err(|_| invalid("x must be an integer"))?;
-    let y: i64 = require_positional(rest, 1, "y")?.parse()
-        .map_err(|_| invalid("y must be an integer"))?;
-    let button = opt_value(rest, &["button"]).unwrap_or("left");
+    let p = ParsedArgs::parse(rest, &["button"]);
+    let x: i64 = p.pos(0, "x")?.parse().map_err(|_| invalid("x must be an integer"))?;
+    let y: i64 = p.pos(1, "y")?.parse().map_err(|_| invalid("y must be an integer"))?;
+    let button = p.value(&["button"]).unwrap_or("left").to_string();
     Ok(Action::Call {
         method: method.into(),
         params: json!({ "x": x, "y": y, "button": button }),
@@ -346,32 +380,26 @@ fn parse_mouse_button(rest: &[String], method: &str) -> Result<Action, ParseErro
 }
 
 fn parse_drag(rest: &[String]) -> Result<Action, ParseError> {
-    let x1: i64 = require_positional(rest, 0, "x1")?.parse()
-        .map_err(|_| invalid("x1 must be an integer"))?;
-    let y1: i64 = require_positional(rest, 1, "y1")?.parse()
-        .map_err(|_| invalid("y1 must be an integer"))?;
-    let x2: i64 = require_positional(rest, 2, "x2")?.parse()
-        .map_err(|_| invalid("x2 must be an integer"))?;
-    let y2: i64 = require_positional(rest, 3, "y2")?.parse()
-        .map_err(|_| invalid("y2 must be an integer"))?;
+    let p = ParsedArgs::parse(rest, &[]);
+    let x1: i64 = p.pos(0, "x1")?.parse().map_err(|_| invalid("x1 must be an integer"))?;
+    let y1: i64 = p.pos(1, "y1")?.parse().map_err(|_| invalid("y1 must be an integer"))?;
+    let x2: i64 = p.pos(2, "x2")?.parse().map_err(|_| invalid("x2 must be an integer"))?;
+    let y2: i64 = p.pos(3, "y2")?.parse().map_err(|_| invalid("y2 must be an integer"))?;
     let mut params = Map::new();
     params.insert("x1".into(), x1.into());
     params.insert("y1".into(), y1.into());
     params.insert("x2".into(), x2.into());
     params.insert("y2".into(), y2.into());
-    params.insert("right".into(), has_flag(rest, &["right"]).into());
+    params.insert("right".into(), p.flag(&["right"]).into());
     Ok(Action::Call { method: "drag".into(), params: Value::Object(params) })
 }
 
 fn parse_scroll(rest: &[String]) -> Result<Action, ParseError> {
-    let x: i64 = require_positional(rest, 0, "x")?.parse()
-        .map_err(|_| invalid("x must be an integer"))?;
-    let y: i64 = require_positional(rest, 1, "y")?.parse()
-        .map_err(|_| invalid("y must be an integer"))?;
-    let direction = opt_value(rest, &["direction"]).unwrap_or("down");
-    let amount: i64 = opt_value(rest, &["amount"])
-        .map(|v| v.parse().unwrap_or(3))
-        .unwrap_or(3);
+    let p = ParsedArgs::parse(rest, &["direction", "amount"]);
+    let x: i64 = p.pos(0, "x")?.parse().map_err(|_| invalid("x must be an integer"))?;
+    let y: i64 = p.pos(1, "y")?.parse().map_err(|_| invalid("y must be an integer"))?;
+    let direction = p.value(&["direction"]).unwrap_or("down").to_string();
+    let amount: i64 = p.value(&["amount"]).map(|v| v.parse().unwrap_or(3)).unwrap_or(3);
     Ok(Action::Call {
         method: "scroll".into(),
         params: json!({ "x": x, "y": y, "direction": direction, "amount": amount }),
@@ -379,9 +407,10 @@ fn parse_scroll(rest: &[String]) -> Result<Action, ParseError> {
 }
 
 fn parse_observe(rest: &[String]) -> Result<Action, ParseError> {
-    let snapshot = has_flag(rest, &["snapshot"]);
-    let screenshot = has_flag(rest, &["screenshot"]);
-    let ground = opt_value(rest, &["ground"]).unwrap_or("");
+    let p = ParsedArgs::parse(rest, &["ground"]);
+    let snapshot = p.flag(&["snapshot"]);
+    let screenshot = p.flag(&["screenshot"]);
+    let ground = p.value(&["ground"]).unwrap_or("").to_string();
     // Default: snapshot + screenshot when no flags.
     let (snap, shot) = if !snapshot && !screenshot && ground.is_empty() {
         (true, true)
@@ -396,17 +425,16 @@ fn parse_observe(rest: &[String]) -> Result<Action, ParseError> {
 }
 
 fn parse_screenshot(rest: &[String]) -> Result<Action, ParseError> {
-    let output = opt_value(rest, &["output", "o"]).unwrap_or("");
-    let monitor: i64 = opt_value(rest, &["monitor"])
-        .map(|v| v.parse().unwrap_or(-1))
-        .unwrap_or(-1);
+    let p = ParsedArgs::parse(rest, &["output", "o", "monitor", "selector", "s", "bbox"]);
+    let output = p.value(&["output", "o"]).unwrap_or("").to_string();
+    let monitor: i64 = p.value(&["monitor"]).map(|v| v.parse().unwrap_or(-1)).unwrap_or(-1);
     let mut params = Map::new();
     params.insert("output".into(), output.into());
     params.insert("monitor".into(), monitor.into());
-    if let Some(sel) = opt_value(rest, &["selector", "s"]) {
+    if let Some(sel) = p.value(&["selector", "s"]) {
         params.insert("selector".into(), sel.into());
     }
-    if let Some(bbox) = opt_value(rest, &["bbox"]) {
+    if let Some(bbox) = p.value(&["bbox"]) {
         let nums: Result<Vec<i64>, ParseError> = bbox
             .split(',')
             .map(|n| n.parse().map_err(|_| invalid(format!("invalid bbox value: {}", n))))
@@ -417,98 +445,71 @@ fn parse_screenshot(rest: &[String]) -> Result<Action, ParseError> {
 }
 
 fn parse_ground(rest: &[String]) -> Result<Action, ParseError> {
-    let description = require_positional(rest, 0, "description")?;
+    let p = ParsedArgs::parse(rest, &[]);
+    let description = p.pos(0, "description")?;
     let mut params = Map::new();
     params.insert("description".into(), description.into());
-    if has_flag(rest, &["single-pass"]) {
+    if p.flag(&["single-pass"]) {
         params.insert("single_pass".into(), true.into());
     }
     Ok(Action::Call { method: "ground".into(), params: Value::Object(params) })
 }
 
 fn parse_ask_vision(rest: &[String]) -> Result<Action, ParseError> {
-    let prompt = require_positional(rest, 0, "prompt")?;
+    let p = ParsedArgs::parse(rest, &["image", "i", "model", "m", "output", "o"]);
+    let prompt = p.pos(0, "prompt")?;
     let mut params = Map::new();
     params.insert("prompt".into(), prompt.into());
-    if let Some(v) = opt_value(rest, &["image", "i"]) {
-        params.insert("image".into(), v.into());
-    }
-    if let Some(v) = opt_value(rest, &["model", "m"]) {
-        params.insert("model".into(), v.into());
-    }
-    if let Some(v) = opt_value(rest, &["output", "o"]) {
-        params.insert("output".into(), v.into());
-    }
+    if let Some(v) = p.value(&["image", "i"]) { params.insert("image".into(), v.into()); }
+    if let Some(v) = p.value(&["model", "m"]) { params.insert("model".into(), v.into()); }
+    if let Some(v) = p.value(&["output", "o"]) { params.insert("output".into(), v.into()); }
     Ok(Action::Call { method: "ask-vision".into(), params: Value::Object(params) })
 }
 
 fn parse_detect(rest: &[String]) -> Result<Action, ParseError> {
-    let description = require_positional(rest, 0, "description")?;
-    let max_targets: i64 = opt_value(rest, &["max-targets"])
-        .map(|v| v.parse().unwrap_or(20))
-        .unwrap_or(20);
+    let p = ParsedArgs::parse(rest, &["max-targets", "image", "i", "model", "m", "output", "o"]);
+    let description = p.pos(0, "description")?;
+    let max_targets: i64 = p.value(&["max-targets"]).map(|v| v.parse().unwrap_or(20)).unwrap_or(20);
     let mut params = Map::new();
     params.insert("description".into(), description.into());
     params.insert("max_targets".into(), max_targets.into());
-    if let Some(v) = opt_value(rest, &["image", "i"]) {
-        params.insert("image".into(), v.into());
-    }
-    if let Some(v) = opt_value(rest, &["model", "m"]) {
-        params.insert("model".into(), v.into());
-    }
-    if let Some(v) = opt_value(rest, &["output", "o"]) {
-        params.insert("output".into(), v.into());
-    }
+    if let Some(v) = p.value(&["image", "i"]) { params.insert("image".into(), v.into()); }
+    if let Some(v) = p.value(&["model", "m"]) { params.insert("model".into(), v.into()); }
+    if let Some(v) = p.value(&["output", "o"]) { params.insert("output".into(), v.into()); }
     Ok(Action::Call { method: "detect".into(), params: Value::Object(params) })
 }
 
 fn parse_highlight(rest: &[String]) -> Result<Action, ParseError> {
-    let x1: i64 = require_positional(rest, 0, "x1")?.parse()
-        .map_err(|_| invalid("x1 must be an integer"))?;
-    let y1: i64 = require_positional(rest, 1, "y1")?.parse()
-        .map_err(|_| invalid("y1 must be an integer"))?;
-    let x2: i64 = require_positional(rest, 2, "x2")?.parse()
-        .map_err(|_| invalid("x2 must be an integer"))?;
-    let y2: i64 = require_positional(rest, 3, "y2")?.parse()
-        .map_err(|_| invalid("y2 must be an integer"))?;
+    let p = ParsedArgs::parse(rest, &["label", "l", "color", "c", "image", "i", "output", "o"]);
+    let x1: i64 = p.pos(0, "x1")?.parse().map_err(|_| invalid("x1 must be an integer"))?;
+    let y1: i64 = p.pos(1, "y1")?.parse().map_err(|_| invalid("y1 must be an integer"))?;
+    let x2: i64 = p.pos(2, "x2")?.parse().map_err(|_| invalid("x2 must be an integer"))?;
+    let y2: i64 = p.pos(3, "y2")?.parse().map_err(|_| invalid("y2 must be an integer"))?;
     let mut params = Map::new();
     params.insert("x1".into(), x1.into());
     params.insert("y1".into(), y1.into());
     params.insert("x2".into(), x2.into());
     params.insert("y2".into(), y2.into());
-    if let Some(v) = opt_value(rest, &["label", "l"]) {
-        params.insert("label".into(), v.into());
-    }
+    if let Some(v) = p.value(&["label", "l"]) { params.insert("label".into(), v.into()); }
     // Python only sends color when it differs from the default ("red"); mirror
     // that so the daemon's own default applies when the user omits --color.
-    if let Some(color) = opt_value(rest, &["color", "c"]) {
-        if color != "red" {
-            params.insert("color".into(), color.into());
-        }
+    if let Some(color) = p.value(&["color", "c"]) {
+        if color != "red" { params.insert("color".into(), color.into()); }
     }
-    if let Some(v) = opt_value(rest, &["image", "i"]) {
-        params.insert("image".into(), v.into());
-    }
-    if let Some(v) = opt_value(rest, &["output", "o"]) {
-        params.insert("output".into(), v.into());
-    }
+    if let Some(v) = p.value(&["image", "i"]) { params.insert("image".into(), v.into()); }
+    if let Some(v) = p.value(&["output", "o"]) { params.insert("output".into(), v.into()); }
     Ok(Action::Call { method: "highlight".into(), params: Value::Object(params) })
 }
 
 fn parse_diff(rest: &[String]) -> Result<Action, ParseError> {
-    let baseline = require_positional(rest, 0, "baseline")?;
-    let threshold: i64 = opt_value(rest, &["threshold", "t"])
-        .map(|v| v.parse().unwrap_or(30))
-        .unwrap_or(30);
+    let p = ParsedArgs::parse(rest, &["threshold", "t", "compare", "c", "output", "o"]);
+    let baseline = p.pos(0, "baseline")?;
+    let threshold: i64 = p.value(&["threshold", "t"]).map(|v| v.parse().unwrap_or(30)).unwrap_or(30);
     let mut params = Map::new();
     params.insert("baseline".into(), baseline.into());
     params.insert("threshold".into(), threshold.into());
-    if let Some(v) = opt_value(rest, &["compare", "c"]) {
-        params.insert("compare".into(), v.into());
-    }
-    if let Some(v) = opt_value(rest, &["output", "o"]) {
-        params.insert("output".into(), v.into());
-    }
+    if let Some(v) = p.value(&["compare", "c"]) { params.insert("compare".into(), v.into()); }
+    if let Some(v) = p.value(&["output", "o"]) { params.insert("output".into(), v.into()); }
     Ok(Action::Call { method: "diff".into(), params: Value::Object(params) })
 }
 
@@ -519,7 +520,8 @@ fn parse_is(rest: &[String]) -> Result<Action, ParseError> {
         "enabled" => "enabled",
         _ => return Err(unknown_subcommand("is", sub, &["visible", "enabled"])),
     };
-    let selector = require_positional(&rest[1..], 0, "selector")?;
+    let p = ParsedArgs::parse(&rest[1..], &[]);
+    let selector = p.pos(0, "selector")?;
     Ok(Action::Call {
         method: "element_state".into(),
         params: json!({ "selector": selector, "check": check }),
@@ -527,10 +529,11 @@ fn parse_is(rest: &[String]) -> Result<Action, ParseError> {
 }
 
 fn parse_type(rest: &[String]) -> Result<Action, ParseError> {
-    let text = require_positional(rest, 0, "text")?;
+    let p = ParsedArgs::parse(rest, &["at"]);
+    let text = p.pos(0, "text")?;
     let mut params = Map::new();
     params.insert("text".into(), text.into());
-    if let Some(at) = opt_value(rest, &["at"]) {
+    if let Some(at) = p.value(&["at"]) {
         // `--at X,Y` → at_x, at_y (mirrors input.py:32-36)
         let parts: Vec<&str> = at.split(',').collect();
         if parts.len() != 2 {
@@ -541,8 +544,8 @@ fn parse_type(rest: &[String]) -> Result<Action, ParseError> {
         params.insert("at_x".into(), x.into());
         params.insert("at_y".into(), y.into());
     }
-    params.insert("enter".into(), has_flag(rest, &["enter"]).into());
-    params.insert("clear".into(), has_flag(rest, &["clear"]).into());
+    params.insert("enter".into(), p.flag(&["enter"]).into());
+    params.insert("clear".into(), p.flag(&["clear"]).into());
     Ok(Action::Call { method: "type".into(), params: Value::Object(params) })
 }
 
@@ -553,17 +556,18 @@ fn parse_app(rest: &[String]) -> Result<Action, ParseError> {
     let args = &rest[1..];
     match sub.as_str() {
         "launch" => {
-            let name_or_path = require_positional(args, 0, "name_or_path")?;
+            let p = ParsedArgs::parse(args, &[]);
+            let name_or_path = p.pos(0, "name_or_path")?;
             // remaining positionals become app args
-            let (pos, _) = split_args(args);
-            let app_args: Vec<&str> = pos.iter().skip(1).copied().collect();
+            let app_args: Vec<String> = p.positionals.iter().skip(1).cloned().collect();
             Ok(Action::Call {
                 method: "app_launch".into(),
                 params: json!({ "name_or_path": name_or_path, "args": app_args }),
             })
         }
         "switch" => {
-            let name = require_positional(args, 0, "name_or_title")?;
+            let p = ParsedArgs::parse(args, &[]);
+            let name = p.pos(0, "name_or_title")?;
             Ok(Action::Call {
                 method: "app_switch".into(),
                 params: json!({ "name_or_title": name }),
@@ -571,15 +575,14 @@ fn parse_app(rest: &[String]) -> Result<Action, ParseError> {
         }
         "list" => Ok(Action::Call { method: "app_list".into(), params: json!({}) }),
         "resize" => {
-            let name = require_positional(args, 0, "name_or_title")?;
-            let width: i64 = opt_value(args, &["width"])
-                .ok_or_else(|| missing("--width required"))?
+            let p = ParsedArgs::parse(args, &["width", "height", "x", "y"]);
+            let name = p.pos(0, "name_or_title")?;
+            let width: i64 = p.value(&["width"]).ok_or_else(|| missing("--width required"))?
                 .parse().map_err(|_| invalid("--width must be integer"))?;
-            let height: i64 = opt_value(args, &["height"])
-                .ok_or_else(|| missing("--height required"))?
+            let height: i64 = p.value(&["height"]).ok_or_else(|| missing("--height required"))?
                 .parse().map_err(|_| invalid("--height must be integer"))?;
-            let x: i64 = opt_value(args, &["x"]).map(|v| v.parse().unwrap_or(-1)).unwrap_or(-1);
-            let y: i64 = opt_value(args, &["y"]).map(|v| v.parse().unwrap_or(-1)).unwrap_or(-1);
+            let x: i64 = p.value(&["x"]).map(|v| v.parse().unwrap_or(-1)).unwrap_or(-1);
+            let y: i64 = p.value(&["y"]).map(|v| v.parse().unwrap_or(-1)).unwrap_or(-1);
             Ok(Action::Call {
                 method: "app_resize".into(),
                 params: json!({ "name_or_title": name, "width": width, "height": height, "x": x, "y": y }),
@@ -596,19 +599,22 @@ fn parse_fs(rest: &[String]) -> Result<Action, ParseError> {
     let args = &rest[1..];
     match sub.as_str() {
         "read" => {
-            let path = require_positional(args, 0, "path")?;
+            let p = ParsedArgs::parse(args, &[]);
+            let path = p.pos(0, "path")?;
             Ok(Action::Call { method: "fs_read".into(), params: json!({ "path": path }) })
         }
         "write" => {
-            let path = require_positional(args, 0, "path")?;
-            let content = require_positional(args, 1, "content")?;
+            let p = ParsedArgs::parse(args, &[]);
+            let path = p.pos(0, "path")?;
+            let content = p.pos(1, "content")?;
             Ok(Action::Call {
                 method: "fs_write".into(),
                 params: json!({ "path": path, "content": content }),
             })
         }
         "list" => {
-            let path = require_positional(args, 0, "path")?;
+            let p = ParsedArgs::parse(args, &[]);
+            let path = p.pos(0, "path")?;
             Ok(Action::Call { method: "fs_list".into(), params: json!({ "path": path }) })
         }
         _ => Err(unknown_subcommand("fs", sub, VALID)),
@@ -622,17 +628,19 @@ fn parse_clipboard(rest: &[String]) -> Result<Action, ParseError> {
     let args = &rest[1..];
     match sub.as_str() {
         "get" => {
+            let p = ParsedArgs::parse(args, &[]);
             let mut params = Map::new();
-            if has_flag(args, &["keyboard", "k"]) {
+            if p.flag(&["keyboard", "k"]) {
                 params.insert("keyboard".into(), true.into());
             }
             Ok(Action::Call { method: "clipboard_get".into(), params: Value::Object(params) })
         }
         "set" => {
-            let text = require_positional(args, 0, "text")?;
+            let p = ParsedArgs::parse(args, &[]);
+            let text = p.pos(0, "text")?;
             let mut params = Map::new();
             params.insert("text".into(), text.into());
-            if has_flag(args, &["keyboard", "k"]) {
+            if p.flag(&["keyboard", "k"]) {
                 params.insert("keyboard".into(), true.into());
             }
             Ok(Action::Call { method: "clipboard_set".into(), params: Value::Object(params) })
@@ -649,7 +657,8 @@ fn parse_process(rest: &[String]) -> Result<Action, ParseError> {
     match sub.as_str() {
         "list" => Ok(Action::Call { method: "process_list".into(), params: json!({}) }),
         "kill" => {
-            let pid_or_name = require_positional(args, 0, "pid_or_name")?;
+            let p = ParsedArgs::parse(args, &[]);
+            let pid_or_name = p.pos(0, "pid_or_name")?;
             Ok(Action::Call {
                 method: "process_kill".into(),
                 params: json!({ "pid_or_name": pid_or_name }),
@@ -664,16 +673,12 @@ fn parse_wait(rest: &[String]) -> Result<Action, ParseError> {
     //   wait <seconds>     → if seconds <= 0, error; else LOCAL sleep (no IPC)
     //   wait @eN [...]     → client-side polling via wait_check
     //   wait --text "..."  → client-side polling via wait_check
-    let text_mode = opt_value(rest, &["text"]).map(|t| WaitProbe::Text(t.into()));
-    let timeout: f64 = opt_value(rest, &["timeout", "t"])
-        .map(|v| v.parse().unwrap_or(30.0))
-        .unwrap_or(30.0);
-    let interval: f64 = opt_value(rest, &["interval"])
-        .map(|v| v.parse().unwrap_or(0.5))
-        .unwrap_or(0.5);
+    let p = ParsedArgs::parse(rest, &["text", "timeout", "t", "interval"]);
+    let text_mode = p.value(&["text"]).map(|t| WaitProbe::Text(t.into()));
+    let timeout: f64 = p.value(&["timeout", "t"]).map(|v| v.parse().unwrap_or(30.0)).unwrap_or(30.0);
+    let interval: f64 = p.value(&["interval"]).map(|v| v.parse().unwrap_or(0.5)).unwrap_or(0.5);
 
-    let (pos, _) = split_args(rest);
-    let t0 = pos.first().copied().unwrap_or("");
+    let t0 = p.positionals.first().map(|s| s.as_str()).unwrap_or("");
 
     // Selector mode: wait @eN
     if let Some(sel) = t0.strip_prefix("@e") {
@@ -712,20 +717,20 @@ fn parse_wait(rest: &[String]) -> Result<Action, ParseError> {
 }
 
 fn parse_batch(rest: &[String], _global: &GlobalFlags) -> Result<Action, ParseError> {
+    let p = ParsedArgs::parse(rest, &["file", "f", "delay", "d"]);
     // --file / stdin / positional JSON
-    let raw = if let Some(path) = opt_value(rest, &["file", "f"]) {
+    let raw = if let Some(path) = p.value(&["file", "f"]) {
         std::fs::read_to_string(path).map_err(|e| invalid(format!("cannot read --file: {}", e)))?
     } else {
-        let (pos, _) = split_args(rest);
-        match pos.first().copied() {
-            Some("-") => {
+        match p.positionals.first() {
+            Some(s) if s == "-" => {
                 use std::io::Read;
-                let mut s = String::new();
-                std::io::stdin().read_to_string(&mut s)
+                let mut buf = String::new();
+                std::io::stdin().read_to_string(&mut buf)
                     .map_err(|e| invalid(format!("cannot read stdin: {}", e)))?;
-                s
+                buf
             }
-            Some(json) => json.to_string(),
+            Some(json) => json.clone(),
             None => {
                 return Err(missing("provide commands as argument, --file, or stdin (-)"));
             }
@@ -736,10 +741,8 @@ fn parse_batch(rest: &[String], _global: &GlobalFlags) -> Result<Action, ParseEr
     if !commands.is_array() || commands.as_array().unwrap().is_empty() {
         return Err(invalid("commands must be a non-empty JSON array"));
     }
-    let stop_on_error = !has_flag(rest, &["continue-on-error"]);
-    let delay: f64 = opt_value(rest, &["delay", "d"])
-        .map(|v| v.parse().unwrap_or(0.0))
-        .unwrap_or(0.0);
+    let stop_on_error = !p.flag(&["continue-on-error"]);
+    let delay: f64 = p.value(&["delay", "d"]).map(|v| v.parse().unwrap_or(0.0)).unwrap_or(0.0);
     Ok(Action::Call {
         method: "batch".into(),
         params: json!({ "commands": commands, "stop_on_error": stop_on_error, "delay": delay }),
@@ -762,7 +765,7 @@ use crate::output::print_text;
 
 #[cfg(test)]
 mod tests {
-    use super::{parse, GlobalFlags};
+    use super::{parse, Action, GlobalFlags};
 
     fn argv(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| s.to_string()).collect()
@@ -820,5 +823,126 @@ mod tests {
         let g = GlobalFlags::default();
         assert!(parse(&argv(&["ping"]), &g).is_ok());
         assert!(parse(&argv(&["app", "list"]), &g).is_ok());
+    }
+
+    // ── ParsedArgs: the regression suite ───────────────────────────────────
+    //
+    // These lock the behavior that motivated the single-pass rewrite. The old
+    // split_args/opt_value/require_positional trio each walked the args
+    // independently and disagreed about what counts as a positional — a value-
+    // taking option's argument (e.g. the `800` in `--width 800`) was counted
+    // as a positional, so a later positional could grab the wrong token.
+
+    /// Regression: a flag's value must NOT be mistaken for a positional.
+    /// `app resize NAME --width 800` → name=NAME, width=800, not width=NAME.
+    #[test]
+    fn value_opt_not_counted_as_positional() {
+        let g = GlobalFlags::default();
+        match parse(&argv(&["app", "resize", "notepad", "--width", "800", "--height", "600"]), &g) {
+            Ok(Action::Call { method, params }) => {
+                assert_eq!(method, "app_resize");
+                assert_eq!(params["name_or_title"], "notepad");
+                assert_eq!(params["width"], 800);
+                assert_eq!(params["height"], 600);
+            }
+            other => panic!("expected Call, got {:?}", other),
+        }
+    }
+
+    /// Regression: the same when the value comes BEFORE the positionals.
+    /// Order must not matter; `--output` here takes the next token as its value.
+    #[test]
+    fn value_opt_before_positional() {
+        let g = GlobalFlags::default();
+        // screenshot --output shot.png has no positionals; verify it doesn't
+        // swallow a stray token. `--bbox` is value-taking too.
+        match parse(&argv(&["screenshot", "--output", "out.png", "--bbox", "0,0,10,10"]), &g) {
+            Ok(Action::Call { method, params }) => {
+                assert_eq!(method, "screenshot");
+                assert_eq!(params["output"], "out.png");
+                assert_eq!(params["bbox"], serde_json::json!([0, 0, 10, 10]));
+            }
+            other => panic!("expected Call, got {:?}", other),
+        }
+    }
+
+    /// `--name=value` form must bind to the option, and `=` must not leak
+    /// into positionals.
+    #[test]
+    fn equals_form_binds_value() {
+        let g = GlobalFlags::default();
+        match parse(&argv(&["app", "resize", "notepad", "--width=900", "--height=700"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert_eq!(params["width"], 900);
+                assert_eq!(params["height"], 700);
+                assert_eq!(params["name_or_title"], "notepad");
+            }
+            other => panic!("expected Call, got {:?}", other),
+        }
+    }
+
+    /// Short option (`-o`) must behave like its long form, including `=`.
+    #[test]
+    fn short_option_aliases_long() {
+        let g = GlobalFlags::default();
+        let a = parse(&argv(&["ask-vision", "describe this", "-o", "r.json"]), &g).unwrap();
+        let b = parse(&argv(&["ask-vision", "describe this", "--output", "r.json"]), &g).unwrap();
+        let c = parse(&argv(&["ask-vision", "describe this", "-o=r.json"]), &g).unwrap();
+        match (a, b, c) {
+            (Action::Call { params: pa, .. },
+             Action::Call { params: pb, .. },
+             Action::Call { params: pc, .. }) => {
+                assert_eq!(pa["output"], "r.json");
+                assert_eq!(pb["output"], "r.json");
+                assert_eq!(pc["output"], "r.json");
+                assert_eq!(pa["prompt"], "describe this");
+            }
+            other => panic!("expected Call x3, got {:?}", other),
+        }
+    }
+
+    /// Boolean flags (presence-only) must still be recognized in any slot,
+    /// and must NOT consume the following token.
+    #[test]
+    fn boolean_flag_does_not_consume_next() {
+        let g = GlobalFlags::default();
+        // `type hello --enter` → enter=true, text=hello. The `--enter` flag
+        // must not eat a following positional (there is none here, but the
+        // negative case below proves it doesn't consume).
+        match parse(&argv(&["type", "hello", "--enter"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert_eq!(params["text"], "hello");
+                assert_eq!(params["enter"], true);
+            }
+            other => panic!("expected Call, got {:?}", other),
+        }
+        // Flag sandwiched between positionals: must not consume pos[1].
+        match parse(&argv(&["click", "10", "--right", "20"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert_eq!(params["x"], 10);
+                assert_eq!(params["y"], 20);
+                assert_eq!(params["right"], true);
+            }
+            other => panic!("expected Call, got {:?}", other),
+        }
+    }
+
+    /// A trailing value-taking option with no following token is recorded as
+    /// present-but-empty, NOT fabricated into a positional, and never panics.
+    /// The old `opt_value` did `iter.next()` blindly; in some arg shapes that
+    /// grabbed the wrong token. This locks the no-panic, empty-string contract.
+    #[test]
+    fn trailing_value_opt_records_empty_not_positional() {
+        let g = GlobalFlags::default();
+        // screenshot --monitor (no value): monitor=Some("") → "".parse()
+        // fails → unwrap_or(-1). No panic, no phantom positional, output file
+        // stays empty (proving nothing was mis-grabbed).
+        match parse(&argv(&["screenshot", "--monitor"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert_eq!(params["monitor"], -1);
+                assert_eq!(params["output"], "");
+            }
+            other => panic!("expected Call, got {:?}", other),
+        }
     }
 }
