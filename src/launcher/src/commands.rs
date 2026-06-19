@@ -7,8 +7,11 @@
 //! own arms; everything else routes through the generic table.
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use serde_json::{json, Map, Value};
+
+use crate::output::print_text;
 
 /// A typed parse error. Carries both a machine-readable `type` (stable string
 /// for the JSON error contract, so an agent consumer can pick a retry strategy
@@ -814,9 +817,6 @@ fn parse_daemon(rest: &[String]) -> Result<Action, ParseError> {
         _ => Err(unknown_subcommand("daemon", sub, VALID)),
     }
 }
-
-use std::time::Duration;
-use crate::output::print_text;
 
 #[cfg(test)]
 mod tests {

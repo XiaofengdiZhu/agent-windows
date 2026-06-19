@@ -33,6 +33,10 @@ const CONNECT_BACKOFF: Duration = Duration::from_millis(10);
 /// already tolerates.
 const TRANSIENT_RETRIES: u32 = 3;
 const TRANSIENT_BACKOFF: Duration = Duration::from_millis(50);
+/// Connect retries for the fire-and-forget `send_no_wait` path (shutdown RPC).
+/// Fewer than the normal CONNECT_RETRIES — best-effort, and if the pipe is
+/// mid-recreate the caller's PID poll / force-kill handles the rest.
+const SEND_NO_WAIT_RETRIES: u32 = 20;
 
 /// Build the JSON-RPC 2.0 request string. Centralized here so every call site
 /// (the dispatcher in `main.rs`, the shutdown RPC in `daemon.rs::kill_daemon`)
@@ -252,9 +256,7 @@ pub fn daemon_pipe_exists() -> bool {
 /// kill path — `daemon stop`/`kill_daemon` must stay non-blocking.
 pub fn send_no_wait(request: &str) -> Result<(), String> {
     let pipe_name_w = widen(PIPE_NAME);
-    // Fewer retries than a normal request — this is best-effort, and if the
-    // pipe is mid-recreate the caller's PID poll / force-kill handles it.
-    for attempt in 0..20 {
+    for attempt in 0..SEND_NO_WAIT_RETRIES {
         let handle = unsafe {
             CreateFileW(
                 pipe_name_w.as_ptr(),
@@ -268,7 +270,7 @@ pub fn send_no_wait(request: &str) -> Result<(), String> {
         };
         if handle == INVALID_HANDLE_VALUE {
             let err = unsafe { GetLastError() };
-            if err == ERROR_FILE_NOT_FOUND && attempt + 1 < 20 {
+            if err == ERROR_FILE_NOT_FOUND && attempt + 1 < SEND_NO_WAIT_RETRIES {
                 std::thread::sleep(CONNECT_BACKOFF);
                 continue;
             }
