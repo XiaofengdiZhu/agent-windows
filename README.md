@@ -186,7 +186,7 @@ agent-windows-python config doctor
 
 Config file: `~/.agent-windows/config.toml` (auto-created with owner-only permissions)
 
-> **Security**: The `vlm.api_key` is **encrypted at rest** with Windows DPAPI (current-user scope) and the file is restricted to your Windows account via an owner-only ACL. Decryption happens transparently on load — you only ever set the plaintext key. Legacy plaintext keys in an existing file still work and are encrypted on the next `config set`. API keys in `config show` output are automatically masked. For CI/CD or shared environments, use the `AGENT_WINDOWS_VLM_API_KEY` environment variable — it takes priority over the config file and is never written to disk.
+> **Security**: The `vlm.api_key` is **encrypted at rest** with Windows DPAPI (current-user scope); the config file is also restricted to your Windows account via an owner-only ACL. Always set the key through `config set vlm.api_key sk-...` (or the `AGENT_WINDOWS_VLM_API_KEY` env var) — it is encrypted transparently on save and decrypted transparently on load, so you never handle the encrypted form. API keys in `config show` output are automatically masked. For CI/CD or shared environments, prefer the `AGENT_WINDOWS_VLM_API_KEY` environment variable — it takes priority over the config file and is never written to disk.
 
 ```toml
 [vlm]

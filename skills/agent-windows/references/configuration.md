@@ -35,7 +35,7 @@ Vision model settings for `ground`, `detect`, and `ask-vision`.
 | `engine` | str | `"openai"` | Vision engine: `openai`, `anthropic`, or `gemini` |
 | `model` | str | `"gpt-4o-mini"` | Default model for vision calls |
 | `api_base` | str | `"https://api.openai.com/v1"` | API endpoint URL |
-| `api_key` | str | `""` | API key. **Encrypted at rest** with Windows DPAPI (current-user scope); set via `config set vlm.api_key sk-...` and it is transparently decrypted on load. Legacy plaintext values still work and are re-encrypted on next write. (Or use the `AGENT_WINDOWS_VLM_API_KEY` env var) |
+| `api_key` | str | `""` | API key. **Encrypted at rest** with Windows DPAPI (current-user scope). Set it via `config set vlm.api_key sk-...` — it is encrypted transparently on save and decrypted transparently on load. (Or use the `AGENT_WINDOWS_VLM_API_KEY` env var, which is never written to disk.) |
 | `timeout` | int | `30` | Request timeout in seconds |
 | `width` | int | `1000` | Screenshot resize width for model input |
 | `height` | int | `1000` | Screenshot resize height for model input |
