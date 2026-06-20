@@ -144,7 +144,7 @@ Three ways (priority order: env var > config > interactive):
 export AGENT_WINDOWS_VLM_API_KEY="sk-..."
 
 # Config file
-agent-windows-python config set vlm.api_key "sk-..."
+agent-windows config set vlm.api_key "sk-..."
 
 # Or leave empty and set at runtime
 ```

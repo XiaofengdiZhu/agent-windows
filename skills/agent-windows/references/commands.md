@@ -556,13 +556,13 @@ agent-windows daemon status    # Check if running, PID, version
 
 ### config init / show / set / doctor
 
-Configuration management. These run locally.
+Configuration management. The launcher forwards these to the bundled Python CLI transparently, so use `agent-windows config ...` directly.
 
 ```bash
-agent-windows-python config init              # Create default config file
-agent-windows-python config show              # Print full config
-agent-windows-python config set tree.max_depth 50   # Set a config value
-agent-windows-python config doctor            # Check whether the vision model is configured
+agent-windows config init              # Create default config file
+agent-windows config show              # Print full config
+agent-windows config set tree.max_depth 50   # Set a config value
+agent-windows config doctor            # Check whether the vision model is configured
 ```
 
 Config file: `~/.agent-windows/config.toml`

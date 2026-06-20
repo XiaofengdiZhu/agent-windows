@@ -47,7 +47,7 @@ Every desktop interaction follows this cycle:
 
 ```bash
 # Initialize config (first time only)
-agent-windows-python config init
+agent-windows config init
 
 # See the screen
 agent-windows observe
@@ -109,16 +109,16 @@ agent-windows screenshot -o shot.png     # Save to file
 `ground`, `detect`, and `ask-vision` need a configured multimodal model to read the screen. Check if one is ready:
 
 ```bash
-agent-windows-python config doctor      # shows whether the vision model is configured
+agent-windows config doctor      # shows whether the vision model is configured
 ```
 
 If it reports **NOT READY**, help the user configure it before using vision commands:
 
 ```bash
-agent-windows-python config set vlm.api_key sk-...      # their API key
-agent-windows-python config set vlm.engine openai       # openai / anthropic / gemini
-agent-windows-python config set vlm.model gpt-4o-mini   # a cheap multimodal model
-agent-windows-python config doctor                            # verify
+agent-windows config set vlm.api_key sk-...      # their API key
+agent-windows config set vlm.engine openai       # openai / anthropic / gemini
+agent-windows config set vlm.model gpt-4o-mini   # a cheap multimodal model
+agent-windows config doctor                            # verify
 ```
 
 > Even when your own model is multimodal, prefer routing image work through these commands: a screenshot in context costs many tokens, while `ground`/`detect` return ready-to-click coordinates in one short call.

@@ -109,10 +109,10 @@ agent-windows observe
 4. Network connectivity
 
 **Recovery**:
-1. Check API key: `agent-windows-python config doctor` (or `config show` and look for the `vlm.api_key` line)
-2. Set the key: `export AGENT_WINDOWS_VLM_API_KEY="sk-..."` or `agent-windows-python config set vlm.api_key "sk-..."`
+1. Check API key: `agent-windows config doctor` (or `config show` and look for the `vlm.api_key` line)
+2. Set the key: `export AGENT_WINDOWS_VLM_API_KEY="sk-..."` or `agent-windows config set vlm.api_key "sk-..."`
 3. Test with a simple call: `agent-windows ground "desktop"`
-4. If timeout, increase: `agent-windows-python config set vlm.timeout 60`
+4. If timeout, increase: `agent-windows config set vlm.timeout 60`
 
 ## Wait Timeout
 
@@ -137,8 +137,8 @@ agent-windows observe
 3. **App not responding**: The target window is frozen or busy.
 
 **Recovery**:
-1. Increase depth: `agent-windows-python config set tree.max_depth 50`
-2. Include offscreen elements: `agent-windows-python config set tree.include_offscreen true`
+1. Increase depth: `agent-windows config set tree.max_depth 50`
+2. Include offscreen elements: `agent-windows config set tree.include_offscreen true`
 3. Use vision tools (`ground`, `detect`, `ask-vision`) for elements not visible to UIA
 
 ## Screenshot Looks Wrong

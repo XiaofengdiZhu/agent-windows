@@ -26,6 +26,25 @@ fn main() -> ExitCode {
     // ── Parse global flags (consumed before the command name) ──────────────
     let (global, cmd_argv) = strip_global_flags(&argv);
 
+    // `config` is delegated to the Python CLI (`agent-windows-python`). It
+    // touches only the local config file (no daemon, no COM/UIA), but porting
+    // it to Rust would mean duplicating DEFAULT_CONFIG, DPAPI encryption, the
+    // owner-only ACL, and the toml read/write path — all already tested on the
+    // Python side — for a low-frequency management command where the ~230ms
+    // Python startup is negligible. Delegating keeps a single source of truth
+    // for config schema and serialization, and the daemon reads the same file
+    // either way, so config changes still hot-apply on the next command.
+    //
+    // We intercept BEFORE `parse` so the full original argv (including global
+    // flags like --format/--debug) is forwarded verbatim — the Python Typer CLI
+    // parses those itself, exactly as if the user had typed
+    // `agent-windows-python` directly. Only the literal `config` top-level
+    // command is delegated; `config` appearing as an argument to another
+    // command can't reach here (cmd_argv[0] is the command name).
+    if cmd_argv.first().is_some_and(|c| c == "config") {
+        return run_python_cli(&argv, &global);
+    }
+
     // `--help` works without a USERPROFILE (it never touches the daemon state
     // dir), so resolve it lazily — but for every real command we need a home
     // dir to locate ~/.agent-windows. USERPROFILE is set on every normal
@@ -86,6 +105,8 @@ fn main() -> ExitCode {
 ///   - `daemon`  — daemon lifecycle/startup failure or a JSON-RPC error reply
 ///   - `ipc`     — named-pipe transport failure (connect/send/recv)
 ///   - `usage`   — `--no-daemon` unsupported by the launcher
+///   - `launch`  — a delegated subprocess (e.g. `config` → agent-windows-python)
+///                  could not be started (missing exe, permission denied, …)
 ///   - `timeout` — a `wait` probe exceeded its timeout
 fn report_error(msg: &str, error_type: &str, global: &GlobalFlags) {
     if global.format_json {
@@ -328,6 +349,68 @@ fn run_wait(spec: WaitSpec, global: &GlobalFlags) -> ExitCode {
     }
 }
 
+/// Delegate to the Python CLI (`agent-windows-python`), forwarding the full
+/// original argv verbatim. Used for `config` (and any future command not yet
+/// ported to the launcher). Stdio is inherited so output/exit-code/global-flag
+/// behavior is identical to calling `agent-windows-python` directly.
+///
+/// The sibling executable is located next to this launcher: `uv tool install`
+/// places both `agent-windows.exe` and `agent-windows-python.exe` in the same
+/// `Scripts/` directory (see pyproject.toml `[project.scripts]` +
+/// `[tool.uv.build-backend.data]`). Falling back to `agent-windows-python` on
+/// PATH covers `uv run` / venv layouts where the launcher may not sit beside
+/// the script.
+fn run_python_cli(argv: &[String], global: &GlobalFlags) -> ExitCode {
+    let exe = resolve_python_cli_exe();
+    let status = std::process::Command::new(&exe)
+        .args(argv)
+        // Inherit stdio: the child's stdout/stderr flow through unchanged, and
+        // its exit code is propagated. This makes delegation transparent — the
+        // caller sees exactly what `agent-windows-python <argv>` would produce.
+        .status();
+    match status {
+        Ok(s) => {
+            // ExitStatus::code() is Option<i32> (None on Unix signal death,
+            // which doesn't occur on Windows). Process exit codes are u32 on
+            // Windows; mask to the low byte the way the OS does for a parent
+            // (exit codes >255 collapse to the same low byte the shell sees).
+            let code = s.code().map(|c| (c & 0xFF) as u8).unwrap_or(1);
+            ExitCode::from(code)
+        }
+        Err(e) => {
+            report_error(
+                &format!(
+                    "Could not run '{}' for config delegation ({}). \
+                     Make sure agent-windows-python is installed (uv tool install agent-windows).",
+                    exe, e
+                ),
+                "launch",
+                global,
+            );
+            ExitCode::from(1)
+        }
+    }
+}
+
+/// Locate the `agent-windows-python` executable. Tries the sibling next to
+/// this launcher first, then falls back to a bare name on PATH.
+fn resolve_python_cli_exe() -> String {
+    if let Ok(self_path) = std::env::current_exe() {
+        if let Some(sibling) = self_path
+            .parent()
+            .map(|dir| dir.join("agent-windows-python.exe"))
+        {
+            if sibling.is_file() {
+                // Use the full path to avoid any PATH ambiguity.
+                return sibling.to_string_lossy().into_owned();
+            }
+        }
+    }
+    // Fallback for layouts where the two aren't co-located (e.g. uv run from a
+    // source checkout): let the OS resolve it from PATH.
+    "agent-windows-python.exe".into()
+}
+
 /// Run a local action (daemon start/stop/status). These never hit the IPC pipe
 /// for start/status (they manage the process directly); stop sends a shutdown
 /// request.
@@ -505,10 +588,11 @@ Commands:
   shell                Run a shell command (subject to the daemon's blacklist)
 
   daemon start/stop/status         Daemon management
+  config init/show/set/doctor      Configuration (delegated to the Python CLI)
   ping                             Daemon health check (round-trip)
 
-Native launcher (fast startup). For --no-daemon or config commands, use
-agent-windows-python (the Python CLI).
+Native launcher (fast startup). For --no-daemon mode, use agent-windows-python
+(the Python CLI) directly.
 "#;
     output::print_text(help);
 }

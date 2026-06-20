@@ -147,11 +147,10 @@ pub fn parse(argv: &[String], global: &GlobalFlags) -> Result<Action, ParseError
 
     match cmd {
         // ── Local commands ────────────────────────────────────────────────
+        // `config` is NOT listed here: it is intercepted in main.rs (before
+        // `parse` runs) and delegated to the Python CLI. Reaching this match
+        // arm with `config` would mean that early intercept was bypassed.
         "daemon" => parse_daemon(rest),
-        "config" => Err(unknown_command_full(
-            "config commands are not yet supported by the launcher — \
-             use the Python CLI (agent-windows-python)",
-        )),
 
         // ── Observation ───────────────────────────────────────────────────
         "observe" => parse_observe(rest),
@@ -221,15 +220,6 @@ pub fn parse(argv: &[String], global: &GlobalFlags) -> Result<Action, ParseError
         "ping" => Ok(Action::Call { method: "ping".into(), params: json!({}) }),
 
         _ => Err(unknown_command(cmd)),
-    }
-}
-
-/// A "not supported by the launcher" message — still typed as unknown_command
-/// since from the agent's perspective the command isn't usable here.
-fn unknown_command_full(msg: &str) -> ParseError {
-    ParseError {
-        kind: ErrorKind::UnknownCommand,
-        message: msg.into(),
     }
 }
 

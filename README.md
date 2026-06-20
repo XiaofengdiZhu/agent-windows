@@ -22,7 +22,7 @@ Then install agent-windows (recommended — adds it to your PATH as a persistent
 uv tool install agent-windows
 ```
 
-This installs the **native Rust launcher** (`agent-windows.exe`, ~12ms cold start) plus the Python CLI as `agent-windows-python` (fallback for `--no-daemon` and unported commands).
+This installs the **native Rust launcher** (`agent-windows.exe`, ~12ms cold start) plus the Python CLI as `agent-windows-python` (fallback for `--no-daemon`; the launcher also delegates `config` to it).
 
 One-off trial (runs without installing):
 
@@ -51,7 +51,7 @@ cd src/launcher && build.cmd build --release
 
 ```bash
 # Initialize config
-agent-windows-python config init
+agent-windows config init
 
 # Capture screenshot
 agent-windows screenshot
@@ -97,7 +97,7 @@ agent-windows.exe (native Rust launcher, ~12ms)
 Python daemon (persistent, COM STA worker)
 ```
 
-- **Native launcher** (`agent-windows.exe`): a Rust binary that parses argv and forwards JSON-RPC requests to the daemon. Source: `src/launcher/`. The Python CLI remains available as `agent-windows-python` for `--no-daemon` mode and unported commands.
+- **Native launcher** (`agent-windows.exe`): a Rust binary that parses argv and forwards JSON-RPC requests to the daemon. Source: `src/launcher/`. It also delegates `config` to the Python CLI (forwarding argv verbatim), so config is usable as `agent-windows config ...`. The Python CLI remains available directly as `agent-windows-python` for `--no-daemon` mode.
 - **Daemon**: Persistent Python process holding heavy imports (comtypes, uia, Pillow). Handlers are organized by domain in `daemon/handlers/`.
 - **IPC**: Named Pipe with per-user DACL security. JSON-RPC 2.0 protocol.
 - **Auto-start**: First CLI call starts daemon automatically. Idle timeout (30min) stops it.
@@ -150,7 +150,7 @@ Python daemon (persistent, COM STA worker)
 | Command | Description |
 |---------|-------------|
 | `daemon start/stop/status` | Daemon management |
-| `config init/show/set` | Configuration |
+| `config init/show/set/doctor` | Configuration (delegated to the Python CLI) |
 
 ### Global Options
 | Flag | Description |
@@ -165,20 +165,24 @@ Python daemon (persistent, COM STA worker)
 
 ```bash
 # 1. API key (or export AGENT_WINDOWS_VLM_API_KEY instead)
-agent-windows-python config set vlm.api_key sk-xxxxxxxx
+agent-windows config set vlm.api_key sk-xxxxxxxx
 
 # 2. Engine: openai (default) / anthropic / gemini
-agent-windows-python config set vlm.engine openai
+agent-windows config set vlm.engine openai
 
 # 3. Model (a cheap multimodal model is enough)
-agent-windows-python config set vlm.model gpt-4o-mini
+agent-windows config set vlm.model gpt-4o-mini
 
 # 4. (Non-OpenAI endpoints only) API base
-# agent-windows-python config set vlm.api_base https://api.openai.com/v1
+# agent-windows config set vlm.api_base https://api.openai.com/v1
 
 # 5. Verify
-agent-windows-python config doctor
+agent-windows config doctor
 ```
+
+> The `config` command is handled by the launcher: it forwards transparently
+> to the bundled Python CLI (`agent-windows-python`), which owns the config
+> schema and DPAPI encryption. No separate command name needed.
 
 > **Why configure one even if your agent model is multimodal?** Screenshots consume a lot of context tokens. Routing the image work to a dedicated cheap model via `ground`/`detect` returns ready-to-click coordinates in one short call, cutting both context usage and cost. `ground`'s two-pass coarse-to-fine strategy also lands clicks more precisely than a single whole-screenshot guess, and `detect` returns structured bounding boxes for every match.
 
@@ -187,6 +191,8 @@ agent-windows-python config doctor
 Config file: `~/.agent-windows/config.toml` (auto-created with owner-only permissions)
 
 > **Security**: The `vlm.api_key` is **encrypted at rest** with Windows DPAPI (current-user scope); the config file is also restricted to your Windows account via an owner-only ACL. Always set the key through `config set vlm.api_key sk-...` (or the `AGENT_WINDOWS_VLM_API_KEY` env var) — it is encrypted transparently on save and decrypted transparently on load, so you never handle the encrypted form. API keys in `config show` output are automatically masked. For CI/CD or shared environments, prefer the `AGENT_WINDOWS_VLM_API_KEY` environment variable — it takes priority over the config file and is never written to disk.
+
+> **When changes take effect**: The daemon re-reads the config file on every command (checking the file's modification time), so `config set` applies to the **next command** — no daemon restart needed. The one exception is `daemon.idle_timeout_minutes`: it's read once at daemon startup, so changing it requires a restart (`daemon stop` then `daemon start`, or just let the old one idle out).
 
 ```toml
 [vlm]

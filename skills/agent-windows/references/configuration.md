@@ -9,18 +9,21 @@ Path: `~/.agent-windows/config.toml`
 ### Management Commands
 
 ```bash
-agent-windows-python config init              # Create default config file
-agent-windows-python config show              # Print full config with file path
-agent-windows-python config set key value     # Set a config value (dotted key notation)
-agent-windows-python config doctor            # Check whether the vision model is configured
+agent-windows config init              # Create default config file
+agent-windows config show              # Print full config with file path
+agent-windows config set key value     # Set a config value (dotted key notation)
+agent-windows config doctor            # Check whether the vision model is configured
 ```
+
+> The launcher forwards `config` to the bundled Python CLI transparently — no
+> need to call `agent-windows-python` directly for config.
 
 ### Example
 
 ```bash
-agent-windows-python config set vlm.model gpt-4o
-agent-windows-python config set tree.max_depth 50
-agent-windows-python config set wait.poll_interval 0.3
+agent-windows config set vlm.model gpt-4o
+agent-windows config set tree.max_depth 50
+agent-windows config set wait.poll_interval 0.3
 ```
 
 ## Configuration Sections
@@ -105,7 +108,7 @@ Setting the blacklist:
 
 ```bash
 # Single pattern — works with `config set` (which only handles scalars):
-agent-windows-python config set shell.blacklist "Remove-Item"
+agent-windows config set shell.blacklist "Remove-Item"
 
 # Multiple patterns — edit config.toml directly into a TOML array:
 #   [shell]
@@ -153,6 +156,7 @@ agent-windows daemon status    # Check PID, version, pipe status
 
 ### Behavior
 
+- **Config hot-applies**: The daemon re-reads the config file on every command (via its mtime), so `config set` takes effect on the **next command** — no daemon restart needed. The only exception is `daemon.idle_timeout_minutes` (read once at startup); change it then restart the daemon.
 - **Idle Timeout**: Stops automatically after 30 minutes of no requests (configurable via `daemon.idle_timeout_minutes`).
 - **Version Check**: `daemon status` warns if daemon version doesn't match CLI version. Stale daemons are auto-restarted on version mismatch.
 - **`--no-daemon`**: Bypass daemon entirely. Runs commands in-process. Useful for debugging.
