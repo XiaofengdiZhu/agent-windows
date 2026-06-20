@@ -6,16 +6,53 @@ output for AI agent consumption.
 Simplified from Windows-MCP's tree service — no browser DOM/IA2 handling yet.
 """
 
+from __future__ import annotations
+
 import logging
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from _ctypes import COMError
+
 from agent_windows.utils.win32 import get_process_name
 from agent_windows.uia.enums import PropertyId, TreeScope
+from agent_windows.uia.exceptions import from_com_error, UIARetryableError
 
 logger = logging.getLogger(__name__)
+
+# Window-class name of the Windows desktop background window (explorer.exe).
+# Its subtree is the desktop icon list — low value for automation and pure noise,
+# so we show it in the window table but skip traversing it. The class name is
+# locale-invariant (unlike the window title, which localizes to e.g. "桌面").
+_DESKTOP_WINDOW_CLASS = "Progman"
+
+# Max retry attempts for building a window's UIA root when the target process is
+# busy (RPC_E_SERVERCALL_RETRYLATER etc.). Mirrors Windows-MCP's THREAD_MAX_RETRIES.
+# Only retryable COM errors are retried — dead-element / disconnected errors are
+# terminal (the window is gone) and won't benefit from another attempt.
+_WINDOW_MAX_RETRIES = 3
+
+
+def _should_skip_subtree(window: WindowInfo) -> bool:
+    """Whether to skip deep-traversing a window's subtree (the window itself is
+    still listed). Currently skips the desktop (Progman) icon list — low value
+    for automation and pure noise. Kept as a predicate so it is unit-testable
+    without driving the full COM traversal (PERF3-06)."""
+    return window.class_name == _DESKTOP_WINDOW_CLASS
+
+
+def _promote_modal_elements(elements: list[ElementInfo]) -> None:
+    """Stable-sort ``elements`` in place so modal-dialog elements come first.
+
+    The agent should see a blocking dialog before the window behind it. Done on
+    the list itself (not just at render time) so the @eN refs render_snapshot
+    emits match resolve_element's index-based lookup (PERF3-06). Stable sort
+    preserves within-group traversal order. Extracted as a named function so the
+    promotion logic is unit-testable directly rather than only via traverse_tree.
+    """
+    elements.sort(key=lambda el: 0 if el.is_modal else 1)
 
 # ── Tree cache ────────────────────────────────────────────────────
 
@@ -97,6 +134,10 @@ class ElementInfo:
     is_focused: bool = False
     is_enabled: bool = True
     is_offscreen: bool = False
+    # True for elements inside a modal dialog subtree. render_snapshot promotes
+    # these to the front of the interactive-elements list so the agent sees the
+    # blocking dialog first, but does NOT drop other windows' elements.
+    is_modal: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -108,6 +149,9 @@ class WindowInfo:
     handle: int
     bbox: BoundingBox | None
     is_active: bool = False
+    # Win32 window class name (e.g. "Progman" for the desktop). Used to skip
+    # traversing low-value subtrees without relying on the locale-dependent title.
+    class_name: str = ""
 
 
 # ── Window enumeration ────────────────────────────────────────────
@@ -155,12 +199,20 @@ def enumerate_windows() -> list[WindowInfo]:
         if bbox.area == 0:
             return True
 
+        # Get window class name (locale-invariant, e.g. "Progman" for desktop).
+        # Used to skip low-value subtrees; cheaper to fetch here once than to read
+        # via UIA ClassNameProperty per-element during traversal.
+        cls_buf = ctypes.create_unicode_buffer(257)
+        cls_len = ctypes.windll.user32.GetClassNameW(hwnd, cls_buf, 257)
+        class_name = cls_buf.value if cls_len else ""
+
         windows.append(WindowInfo(
             title=title,
             process_name=process_name,
             handle=hwnd,
             bbox=bbox,
             is_active=(hwnd == foreground),
+            class_name=class_name,
         ))
         return True
 
@@ -243,6 +295,13 @@ def traverse_tree(
         win_marker = " [active]" if win.is_active else ""
         tree_lines.append(f'  └─ Window "{win.title}" ({win.process_name}){win_marker}')
 
+        # Skip the desktop window's subtree (desktop icon list) — low value and
+        # pure noise. The window itself is still listed above so the agent knows
+        # it exists; only the deep traversal is skipped (PERF3-06).
+        if _should_skip_subtree(win):
+            tree_lines.append("      [desktop icons — skipped]")
+            continue
+
         try:
             _traverse_window(client, win, tree_lines, interactive_elements,
                            max_depth=max_depth, include_invisible=include_invisible,
@@ -252,6 +311,11 @@ def traverse_tree(
         except Exception as e:
             logger.warning("Failed to traverse window '%s': %s", win.title, e)
             tree_lines.append(f"      [traversal error: {e}]")
+
+    # Promote modal-dialog elements to the front (stable) so the agent sees the
+    # blocking dialog first. Done on the list itself (not just at render time) so
+    # @eN refs in render_snapshot match resolve_element's indices (PERF3-06).
+    _promote_modal_elements(interactive_elements)
 
     return {
         "cursor": cursor,
@@ -327,11 +391,47 @@ def _traverse_window(
     # per node. The request is built once per traversal in traverse_tree and
     # passed in (PERF3-04) — its property set is constant across windows.
 
-    try:
-        root = client.IUIAutomation.ElementFromHandleBuildCache(window.handle, cache_request)
-    except Exception as e:
-        logger.debug("ElementFromHandleBuildCache failed for %s: %s", window.title, e)
-        return
+    # Build the window root with retry. ElementFromHandleBuildCache is the most
+    # common failure point when the target process is momentarily busy
+    # (RPC_E_SERVERCALL_RETRYLATER / RPC_E_CALL_REJECTED). Only retryable COM
+    # errors are retried with exponential backoff; dead-element / disconnected
+    # errors mean the window is gone and are terminal (PERF3-06).
+    root = None
+    for attempt in range(_WINDOW_MAX_RETRIES + 1):
+        try:
+            root = client.IUIAutomation.ElementFromHandleBuildCache(window.handle, cache_request)
+            break
+        except COMError as e:
+            mapped = from_com_error(e)
+            if isinstance(mapped, UIARetryableError) and attempt < _WINDOW_MAX_RETRIES:
+                wait = 0.5 * (2 ** attempt)
+                # Don't let retry backoff eat the global wall-clock budget meant
+                # for traversal: if the next sleep would blow the deadline, give
+                # up on this window rather than starving the remaining ones.
+                if time.time() + wait > global_deadline:
+                    logger.debug(
+                        "ElementFromHandleBuildCache busy for '%s' but retry "
+                        "backoff %.1fs would exceed global deadline; giving up: %s",
+                        window.title, wait, mapped,
+                    )
+                    return
+                logger.debug(
+                    "ElementFromHandleBuildCache busy for '%s' (attempt %d/%d), "
+                    "retrying in %.1fs: %s",
+                    window.title, attempt + 1, _WINDOW_MAX_RETRIES, wait, mapped,
+                )
+                time.sleep(wait)
+                continue
+            # Non-retryable, or retries exhausted: give up on this window.
+            logger.debug(
+                "ElementFromHandleBuildCache failed for '%s' (giving up): %s",
+                window.title, mapped,
+            )
+            return
+        except Exception as e:
+            # Non-COM error (e.g. comtypes marshalling) — not retryable.
+            logger.debug("ElementFromHandleBuildCache failed for '%s': %s", window.title, e)
+            return
 
     if root is None:
         return
@@ -373,6 +473,9 @@ def _build_traversal_cache(client):
     cache.AddProperty(PropertyId.IsOffscreenProperty)
     cache.AddProperty(PropertyId.BoundingRectangleProperty)
     cache.AddProperty(PropertyId.HasKeyboardFocusProperty)
+    # WindowIsModal lets _traverse_node detect modal dialogs and mark their
+    # subtree so render_snapshot can promote those elements (PERF3-06).
+    cache.AddProperty(PropertyId.WindowIsModalProperty)
     cache.TreeScope = TreeScope.TreeScope_Element | TreeScope.TreeScope_Children
     cache.TreeFilter = client.IUIAutomation.RawViewCondition
     return cache
@@ -427,6 +530,7 @@ def _traverse_node(
     max_elements: int,
     global_deadline: float,
     cache_request,
+    in_modal_subtree: bool = False,
 ) -> None:
     """Recursively traverse a UIA node."""
     if depth >= max_depth:
@@ -505,6 +609,24 @@ def _traverse_node(
         except Exception:
             logger.debug("Failed to get cached node property", exc_info=True)
 
+        # Detect a modal dialog: a WindowControl whose WindowIsModal is True.
+        # Once entered, every interactive element in this subtree is marked
+        # is_modal so render_snapshot can promote them to the front. The flag
+        # propagates down via in_modal_subtree (PERF3-06).
+        is_modal_window = False
+        if control_type == "WindowControl":
+            try:
+                val = node.GetCachedPropertyValue(PropertyId.WindowIsModalProperty)
+                # Guard None explicitly: UIA may return a ReservedNotSupportedValue
+                # sentinel (a non-None COM object) for providers that don't
+                # implement the property, and bool(sentinel) would be True —
+                # falsely marking a non-modal window's subtree. Mirror the other
+                # property reads' None-aware handling.
+                is_modal_window = bool(val) if val is not None else False
+            except Exception:
+                logger.debug("Failed to get cached node property", exc_info=True)
+        this_in_modal = in_modal_subtree or is_modal_window
+
         # Build tree line
         prefix = " " * indent + "├─ " if depth > 0 else " " * indent
         if depth == 0:
@@ -517,6 +639,8 @@ def _traverse_node(
                 meta_parts.append("focused")
             if not is_enabled:
                 meta_parts.append("disabled")
+            if is_modal_window:
+                meta_parts.append("modal")
             if is_interactive and is_enabled:
                 meta_parts.append("interactive")
             meta_str = " ".join(f"[{m}]" for m in meta_parts)
@@ -533,6 +657,7 @@ def _traverse_node(
                     is_focused=is_focused,
                     is_enabled=is_enabled,
                     is_offscreen=is_offscreen,
+                    is_modal=this_in_modal,
                 ))
 
         # Recurse into children. PERF3-05: fetch all children pre-cached in one
@@ -545,6 +670,7 @@ def _traverse_node(
                     window, max_depth, include_invisible, include_offscreen,
                     indent, depth + 1, start_time, timeout,
                     max_elements, global_deadline, cache_request,
+                    in_modal_subtree=this_in_modal,
                 )
                 if max_elements > 0 and len(interactive) >= max_elements:
                     break
@@ -629,7 +755,9 @@ def render_snapshot(data: dict[str, Any]) -> str:
         parts.append(tree)
         parts.append("")
 
-    # Interactive elements table
+    # Interactive elements table. The list itself is already ordered with modal
+    # elements first (see traverse_tree), so @eN refs here match the indices
+    # resolve_element uses against interactive_elements (PERF3-06).
     elements = data.get("interactive_elements", [])
     if elements:
         parts.append("## Interactive Elements")
@@ -641,6 +769,8 @@ def render_snapshot(data: dict[str, Any]) -> str:
             name = el.name[:40] if el.name else ""
             pos = str(el.bbox) if el.bbox else "N/A"
             states = []
+            if el.is_modal:
+                states.append("modal")
             if el.is_focused:
                 states.append("focused")
             if not el.is_enabled:

@@ -23,21 +23,25 @@ import time
 from unittest.mock import patch, MagicMock
 
 import pytest
+from _ctypes import COMError
 
 from agent_windows.core import tree
 from agent_windows.core.tree import (
     _traverse_node,
     _traverse_window,
+    traverse_tree,
+    render_snapshot,
     resolve_element,
     ElementInfo,
     WindowInfo,
     BoundingBox,
     INTERACTIVE_TYPES,
 )
-from agent_windows.uia.enums import PropertyId
+from agent_windows.uia.enums import PropertyId, UIAError
 from agent_windows.uia.core import ControlType
 
 BUTTON = ControlType.ButtonControl   # 50000 → "ButtonControl" (interactive)
+WINDOW = ControlType.WindowControl   # 50032 → "WindowControl" (modal-detection)
 PANE = ControlType.PaneControl       # 50033 → "PaneControl" (NOT interactive)
 TEXT = ControlType.TextControl       # 50020 → "TextControl" (NOT interactive)
 EDIT = ControlType.EditControl       # 50004 → "EditControl" (interactive)
@@ -54,7 +58,8 @@ class FakeElement:
 
     def __init__(self, *, name="", control_type=TEXT, is_enabled=True,
                  is_offscreen=False, rect=RECT_ONSCREEN, has_keyboard_focus=False,
-                 children=None, raise_on=None, raise_on_build_updated=False):
+                 children=None, raise_on=None, raise_on_build_updated=False,
+                 is_modal=False):
         self._name = name
         self._control_type = control_type
         self._is_enabled = is_enabled
@@ -66,6 +71,8 @@ class FakeElement:
         self._raise_on = raise_on
         # If True, BuildUpdatedCache raises (PERF3-05 child-fetch failure test)
         self._raise_on_build_updated = raise_on_build_updated
+        # WindowIsModalProperty value (PERF3-06 modal-marking test)
+        self._is_modal = is_modal
 
     def GetCachedPropertyValue(self, prop_id):
         if self._raise_on == prop_id:
@@ -82,6 +89,8 @@ class FakeElement:
             return self._rect
         if prop_id == PropertyId.HasKeyboardFocusProperty:
             return self._has_focus
+        if prop_id == PropertyId.WindowIsModalProperty:
+            return self._is_modal
         return None
 
     def BuildUpdatedCache(self, children_req):
@@ -137,11 +146,20 @@ class FakeCacheRequest:
 
 
 class FakeIUIAutomation:
-    def __init__(self, root):
+    def __init__(self, root, element_side_effects=None):
         self._root = root
         self.RawViewCondition = object()  # opaque; traversal just forwards it
+        # Optional per-call override for ElementFromHandleBuildCache: a list of
+        # return values / exceptions consumed in order (MagicMock side_effect
+        # style). Exhausted or None → return self._root. Used by retry tests.
+        self._side_effects = list(element_side_effects) if element_side_effects else None
 
     def ElementFromHandleBuildCache(self, handle, cache):
+        if self._side_effects:
+            val = self._side_effects.pop(0)
+            if isinstance(val, Exception):
+                raise val
+            return val
         return self._root
 
     def CreateCacheRequest(self):
@@ -149,8 +167,8 @@ class FakeIUIAutomation:
 
 
 class FakeClient:
-    def __init__(self, root):
-        self.IUIAutomation = FakeIUIAutomation(root)
+    def __init__(self, root, element_side_effects=None):
+        self.IUIAutomation = FakeIUIAutomation(root, element_side_effects)
 
 
 def _link_siblings(elements):
@@ -543,3 +561,243 @@ class TestChildIterationSwallow:
         root = FakeElement(control_type=PANE, children=[child])
         _, interactive = traverse(FakeClient(root), root)
         assert [e.name for e in interactive] == ["parent-btn"]
+
+
+# ── window-level retry on busy target (PERF3-06) ────────────────────
+
+
+class TestWindowRetry:
+    def _win(self):
+        return WindowInfo(title="FakeWin", process_name="fake", handle=1,
+                          bbox=BoundingBox(0, 0, 800, 600), is_active=True)
+
+    def _retryable_comerror(self):
+        # RPC_E_SERVERCALL_RETRYLATER — target busy but alive, retryable.
+        return COMError(UIAError.RPC_E_SERVERCALL_RETRYLATER, "busy", (None, None, None, None, None))
+
+    def test_retryable_error_then_success(self, monkeypatch):
+        """A retryable COMError on the first root-build attempt is retried; the
+        window is traversed on the second attempt and elements are collected."""
+        monkeypatch.setattr(time, "sleep", lambda _: None)  # no real backoff in tests
+        root = FakeElement(control_type=PANE, children=[
+            FakeElement(name="OK", control_type=BUTTON),
+        ])
+        # First call raises (busy), second returns the root.
+        client = FakeClient(root, element_side_effects=[self._retryable_comerror()])
+        interactive = []
+        _traverse_window(client, self._win(), [], interactive,
+                         max_depth=15, include_invisible=False,
+                         include_offscreen=False, indent=4, timeout=10.0,
+                         max_elements=0, global_deadline=float("inf"),
+                         cache_request=tree._build_traversal_cache(client))
+        assert [e.name for e in interactive] == ["OK"]
+
+    def test_non_retryable_comerror_not_retried(self, monkeypatch):
+        """A dead-element COMError (window gone) is terminal — no retry, window
+        abandoned. Catches the case where retrying would only waste time."""
+        monkeypatch.setattr(time, "sleep", lambda _: None)
+        calls = {"n": 0}
+
+        class DeadElementIUA:
+            RawViewCondition = object()
+
+            def ElementFromHandleBuildCache(self, handle, cache):
+                calls["n"] += 1
+                # RPC_E_DISCONNECTED — dead element, NOT retryable
+                raise COMError(UIAError.RPC_E_DISCONNECTED, "gone",
+                               (None, None, None, None, None))
+
+            def CreateCacheRequest(self):
+                return FakeCacheRequest()
+
+        class DeadElementClient:
+            def __init__(self):
+                self.IUIAutomation = DeadElementIUA()
+
+        interactive = []
+        _traverse_window(DeadElementClient(), self._win(), [], interactive,
+                         max_depth=15, include_invisible=False,
+                         include_offscreen=False, indent=4, timeout=10.0,
+                         max_elements=0, global_deadline=float("inf"),
+                         cache_request=FakeCacheRequest())
+        assert interactive == []
+        assert calls["n"] == 1  # no retry — dead element is terminal
+
+    def test_non_com_error_not_retried(self, monkeypatch):
+        """A plain RuntimeError (not a COMError) is not retried — only COM
+        busy-signal errors are. Locks the except-branch split."""
+        monkeypatch.setattr(time, "sleep", lambda _: None)
+        root = FakeElement(control_type=PANE, children=[
+            FakeElement(name="OK", control_type=BUTTON),
+        ])
+        client = FakeClient(root, element_side_effects=[RuntimeError("com died")])
+        interactive = []
+        _traverse_window(client, self._win(), [], interactive,
+                         max_depth=15, include_invisible=False,
+                         include_offscreen=False, indent=4, timeout=10.0,
+                         max_elements=0, global_deadline=float("inf"),
+                         cache_request=tree._build_traversal_cache(client))
+        assert interactive == []
+
+    def test_retryable_exhausted_gives_up_gracefully(self, monkeypatch):
+        """When EVERY attempt raises a retryable error, the window is abandoned
+        after _WINDOW_MAX_RETRIES+1 total attempts — no crash, no elements. Locks
+        the exhaustion path (the success/no-retry paths are covered above)."""
+        monkeypatch.setattr(time, "sleep", lambda _: None)
+        calls = {"n": 0}
+
+        class AlwaysBusyIUA:
+            RawViewCondition = object()
+
+            def ElementFromHandleBuildCache(self, handle, cache):
+                calls["n"] += 1
+                raise COMError(UIAError.RPC_E_SERVERCALL_RETRYLATER, "busy",
+                               (None, None, None, None, None))
+
+            def CreateCacheRequest(self):
+                return FakeCacheRequest()
+
+        class AlwaysBusyClient:
+            def __init__(self):
+                self.IUIAutomation = AlwaysBusyIUA()
+
+        interactive = []
+        _traverse_window(AlwaysBusyClient(), self._win(), [], interactive,
+                         max_depth=15, include_invisible=False,
+                         include_offscreen=False, indent=4, timeout=10.0,
+                         max_elements=0, global_deadline=float("inf"),
+                         cache_request=FakeCacheRequest())
+        assert interactive == []
+        # 1 initial + _WINDOW_MAX_RETRIES retries = 4 total attempts.
+        assert calls["n"] == tree._WINDOW_MAX_RETRIES + 1
+
+    def test_backoff_aborts_when_exceeding_global_deadline(self, monkeypatch):
+        """Retry backoff must not eat the global wall-clock budget: if the next
+        sleep would blow global_deadline, the window is given up rather than
+        sleeping past the budget meant for the remaining windows."""
+        sleeps = []
+        monkeypatch.setattr(time, "sleep", lambda s: sleeps.append(s))
+        calls = {"n": 0}
+
+        class AlwaysBusyIUA:
+            RawViewCondition = object()
+
+            def ElementFromHandleBuildCache(self, handle, cache):
+                calls["n"] += 1
+                raise COMError(UIAError.RPC_E_SERVERCALL_RETRYLATER, "busy",
+                               (None, None, None, None, None))
+
+            def CreateCacheRequest(self):
+                return FakeCacheRequest()
+
+        class AlwaysBusyClient:
+            def __init__(self):
+                self.IUIAutomation = AlwaysBusyIUA()
+
+        interactive = []
+        # global_deadline is NOW: the first 0.5s backoff would exceed it, so the
+        # window is abandoned immediately without sleeping.
+        _traverse_window(AlwaysBusyClient(), self._win(), [], interactive,
+                         max_depth=15, include_invisible=False,
+                         include_offscreen=False, indent=4, timeout=10.0,
+                         max_elements=0, global_deadline=time.time(),
+                         cache_request=FakeCacheRequest())
+        assert interactive == []
+        assert calls["n"] == 1  # only the initial attempt; no retry sleep taken
+        assert sleeps == []      # backoff was skipped — deadline protected
+
+
+# ── desktop (Progman) window subtree skip (PERF3-06) ────────────────
+
+
+class TestProgmanSkip:
+    def _win(self, *, class_name, title="Win", handle=1):
+        return WindowInfo(title=title, process_name="p.exe", handle=handle,
+                          bbox=BoundingBox(0, 0, 800, 600), class_name=class_name)
+
+    def test_progman_window_subtree_skipped(self):
+        """_should_skip_subtree returns True for the desktop window (class
+        'Progman') — its icon-list subtree adds noise and is skipped. The skip is
+        keyed on the locale-invariant class name, not the title."""
+        assert tree._should_skip_subtree(self._win(class_name="Progman")) is True
+
+    def test_normal_window_not_skipped(self):
+        """A regular application window (any non-Progman class) is traversed."""
+        assert tree._should_skip_subtree(self._win(class_name="AppFrame")) is False
+        assert tree._should_skip_subtree(self._win(class_name="")) is False
+
+    def test_skip_independent_of_localized_title(self):
+        """The Progman window's title localizes (e.g. '桌面' on zh-CN); the skip
+        must not depend on it, only on the stable class name."""
+        win = self._win(class_name="Progman", title="桌面")
+        assert tree._should_skip_subtree(win) is True
+
+
+# ── modal dialog marking + promotion (PERF3-06) ─────────────────────
+
+
+class TestModalMarking:
+    def test_modal_subtree_elements_marked_and_promoted(self):
+        """A WindowControl with WindowIsModal=True marks every interactive element
+        in its subtree is_modal=True. _promote_modal_elements (the production
+        sort used by traverse_tree) promotes them to the front. Non-modal
+        siblings keep their order and are NOT dropped."""
+        # root(Pane) -> [normalBtn, modalWindow(OK btn)]
+        normal_btn = FakeElement(name="normalBtn", control_type=BUTTON)
+        modal_btn = FakeElement(name="dialogOK", control_type=BUTTON)
+        modal_window = FakeElement(name="Confirm", control_type=WINDOW,
+                                   is_modal=True, children=[modal_btn])
+        root = FakeElement(control_type=PANE, children=[normal_btn, modal_window])
+
+        _, interactive = traverse(FakeClient(root), root)
+        # Collection order: normalBtn first, then dialogOK (traversal order).
+        assert [e.name for e in interactive] == ["normalBtn", "dialogOK"]
+        # Marking: only the modal-subtree element is flagged.
+        by_name = {e.name: e for e in interactive}
+        assert by_name["dialogOK"].is_modal is True
+        assert by_name["normalBtn"].is_modal is False
+
+        # Call the PRODUCTION promotion function (not a copy of its logic) so a
+        # logic change in tree.py would fail this test.
+        tree._promote_modal_elements(interactive)
+        assert [e.name for e in interactive] == ["dialogOK", "normalBtn"]
+
+    def test_promote_modal_is_stable(self):
+        """_promote_modal_elements is a STABLE sort: within the modal group and
+        within the non-modal group, original order is preserved."""
+        a = ElementInfo(name="a", control_type="ButtonControl", bbox=None, is_modal=False)
+        b = ElementInfo(name="b", control_type="ButtonControl", bbox=None, is_modal=True)
+        c = ElementInfo(name="c", control_type="ButtonControl", bbox=None, is_modal=False)
+        d = ElementInfo(name="d", control_type="ButtonControl", bbox=None, is_modal=True)
+        elements = [a, b, c, d]
+        tree._promote_modal_elements(elements)
+        assert [e.name for e in elements] == ["b", "d", "a", "c"]
+
+    def test_non_modal_window_not_marked(self):
+        """A WindowControl that is NOT modal does not mark its subtree."""
+        win_btn = FakeElement(name="winBtn", control_type=BUTTON)
+        non_modal_window = FakeElement(name="NormalWin", control_type=WINDOW,
+                                       is_modal=False, children=[win_btn])
+        root = FakeElement(control_type=PANE, children=[non_modal_window])
+        _, interactive = traverse(FakeClient(root), root)
+        assert all(not e.is_modal for e in interactive)
+
+    def test_render_shows_modal_label_and_state(self):
+        """The semantic tree tags a modal Window node with [modal], and the
+        interactive-elements table shows 'modal' in the State column."""
+        modal_btn = FakeElement(name="dialogOK", control_type=BUTTON)
+        modal_window = FakeElement(name="Confirm", control_type=WINDOW,
+                                   is_modal=True, children=[modal_btn])
+        root = FakeElement(control_type=PANE, children=[modal_window])
+        lines, interactive = traverse(FakeClient(root), root)
+        # Tree line for the modal window carries [modal].
+        tree_text = "\n".join(lines)
+        assert "[modal]" in tree_text
+        # Promote + render; the modal element's State column shows 'modal'.
+        interactive.sort(key=lambda el: 0 if el.is_modal else 1)
+        rendered = render_snapshot({
+            "cursor": (0, 0), "resolution": (1920, 1080), "displays": 1,
+            "active_window": None, "windows": [], "semantic_tree": tree_text,
+            "interactive_elements": interactive,
+        })
+        assert "| modal |" in rendered
