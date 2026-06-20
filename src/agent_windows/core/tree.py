@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from agent_windows.utils.win32 import get_process_name
-from agent_windows.uia.enums import PropertyId
+from agent_windows.uia.enums import PropertyId, TreeScope
 
 logger = logging.getLogger(__name__)
 
@@ -347,11 +347,24 @@ def _build_traversal_cache(client):
     """Build a UIA CacheRequest for the properties read per node. (M-25)
 
     Elements fetched through this request (``ElementFromHandleBuildCache`` and
-    the tree walker's ``*BuildCache`` overloads) arrive with these properties
-    already cached, so reading them via ``GetCachedPropertyValue`` is a local
-    lookup rather than a live cross-process COM round-trip.
+    ``_get_cached_children``) arrive with these properties already cached, so
+    reading them via ``GetCachedPropertyValue`` is a local lookup rather than a
+    live cross-process COM round-trip.
     ``AutomationElementMode`` is left at its default (Full) so cached elements
     stay navigable for the recursive walk.
+
+    The scope includes ``Element | Children`` so a cached element exposes its
+    children via ``GetCachedChildren`` after a ``BuildUpdatedCache`` — this is
+    what ``_get_cached_children`` relies on to fetch all siblings in one COM
+    round-trip instead of one per child (PERF3-05).
+
+    ``TreeFilter`` is pinned to ``RawViewCondition`` to match the
+    ``RawViewWalker`` the old per-child walk used. A CacheRequest's default
+    TreeFilter is NULL, which lets ``BuildUpdatedCache`` descend into subtrees
+    the Raw view prunes (notably ``DocumentControl`` web content in browsers),
+    inflating the tree ~4x and changing traversal semantics. Setting it to the
+    walker's own condition keeps the bulk path's node set identical to the old
+    walker path's (PERF3-05).
     """
     cache = client.IUIAutomation.CreateCacheRequest()
     cache.AddProperty(PropertyId.NameProperty)
@@ -360,7 +373,42 @@ def _build_traversal_cache(client):
     cache.AddProperty(PropertyId.IsOffscreenProperty)
     cache.AddProperty(PropertyId.BoundingRectangleProperty)
     cache.AddProperty(PropertyId.HasKeyboardFocusProperty)
+    cache.TreeScope = TreeScope.TreeScope_Element | TreeScope.TreeScope_Children
+    cache.TreeFilter = client.IUIAutomation.RawViewCondition
     return cache
+
+
+def _get_cached_children(node, cache_request):
+    """Return a node's children with their properties already cached. (PERF3-05)
+
+    Instead of ``walker.GetFirstChildElementBuildCache`` /
+    ``GetNextSiblingElementBuildCache`` — one cross-process COM round-trip per
+    child — clone the request, narrow its scope to ``Children`` only, and call
+    ``BuildUpdatedCache`` once: UIA then returns *all* children pre-cached via
+    ``GetCachedChildren`` in a single round-trip. On large windows (browsers,
+    IDEs) this collapses N round-trips into 1.
+
+    Adapted from Windows-MCP's ``CachedControlHelper.get_cached_children``
+    (``tree/cache_utils.py``), but operates on the raw comtypes element that
+    ``tree.py`` uses throughout rather than the high-level ``Control`` wrapper.
+
+    On failure returns ``[]`` — i.e. prunes this subtree — matching the old
+    walker loop's behavior of silently stopping the iteration. No walker
+    fallback: it shares the same COM plumbing as the bulk path, so it would
+    fail under the same conditions (dead element, target process unreachable).
+    """
+    try:
+        children_req = cache_request.Clone()
+        children_req.TreeScope = TreeScope.TreeScope_Children
+        updated = node.BuildUpdatedCache(children_req)
+        element_array = updated.GetCachedChildren()
+        if not element_array:
+            return []
+        length = element_array.Length
+        return [element_array.GetElement(i) for i in range(length)]
+    except Exception:
+        logger.debug("get_cached_children failed; pruning subtree", exc_info=True)
+        return []
 
 
 def _traverse_node(
@@ -487,20 +535,24 @@ def _traverse_node(
                     is_offscreen=is_offscreen,
                 ))
 
-        # Recurse into children — each child is fetched through the cache request
-        # so it arrives with its properties already cached (M-25).
+        # Recurse into children. PERF3-05: fetch all children pre-cached in one
+        # COM round-trip (``BuildUpdatedCache`` + ``GetCachedChildren``) instead
+        # of one ``GetNextSiblingElementBuildCache`` call per child.
         try:
-            walker = client.ViewWalker
-            child = walker.GetFirstChildElementBuildCache(node, cache_request)
-            while child:
+            for child in _get_cached_children(node, cache_request):
                 _traverse_node(
                     client, child, tree_lines, interactive,
                     window, max_depth, include_invisible, include_offscreen,
                     indent, depth + 1, start_time, timeout,
                     max_elements, global_deadline, cache_request,
                 )
-                child = walker.GetNextSiblingElementBuildCache(child, cache_request)
+                if max_elements > 0 and len(interactive) >= max_elements:
+                    break
         except Exception as e:
+            # Backstop: _get_cached_children and _traverse_node swallow their own
+            # errors, so this only fires on something escaping both (e.g. a
+            # comtypes marshalling fault mid-iteration). Keeps a single bad node
+            # from aborting the whole subtree's siblings.
             logger.debug("Error iterating children at depth %d: %s", depth, e)
 
     except Exception as e:

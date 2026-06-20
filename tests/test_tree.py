@@ -10,11 +10,13 @@ deterministic. Each test targets a logic branch the mocks hide.
 The fake surface is tiny and verified against the actual code:
 - node.GetCachedPropertyValue(prop_id) for 6 property IDs (name, control-type
   int, is_enabled, is_offscreen, bounding-rect (l,t,w,h)-tuple, has_keyboard_focus)
-- client.ViewWalker.GetFirstChildElementBuildCache(parent, cache) → first child
-- client.ViewWalker.GetNextSiblingElementBuildCache(child, cache) → next sibling
+- node.BuildUpdatedCache(children_req) → a wrapper whose GetCachedChildren()
+  returns the node's children as an element array (PERF3-05 bulk path)
 - client.IUIAutomation.ElementFromHandleBuildCache(handle, cache) → root (only
   _traverse_window uses this)
-The cache_request arg is passed through opaquely and ignored by the fakes.
+The cache_request arg is passed through opaquely and ignored by the fakes;
+_get_cached_children calls cache_request.Clone() (returns self) and sets
+TreeScope on the clone, both no-ops on the fake.
 (TEST3-01)
 """
 import time
@@ -48,11 +50,11 @@ RECT_ZERO_AREA = (5, 5, 0, 0)
 
 class FakeElement:
     """A fake UIA element. GetCachedPropertyValue returns per-property values;
-    children drive the FakeWalker."""
+    BuildUpdatedCache exposes the element's children for the bulk path."""
 
     def __init__(self, *, name="", control_type=TEXT, is_enabled=True,
                  is_offscreen=False, rect=RECT_ONSCREEN, has_keyboard_focus=False,
-                 children=None, raise_on=None):
+                 children=None, raise_on=None, raise_on_build_updated=False):
         self._name = name
         self._control_type = control_type
         self._is_enabled = is_enabled
@@ -62,6 +64,8 @@ class FakeElement:
         self.children = list(children) if children else []
         # If set, GetCachedPropertyValue raises for this property id (QUAL-02 test)
         self._raise_on = raise_on
+        # If True, BuildUpdatedCache raises (PERF3-05 child-fetch failure test)
+        self._raise_on_build_updated = raise_on_build_updated
 
     def GetCachedPropertyValue(self, prop_id):
         if self._raise_on == prop_id:
@@ -80,47 +84,79 @@ class FakeElement:
             return self._has_focus
         return None
 
+    def BuildUpdatedCache(self, children_req):
+        """Bulk-fetch entry point (PERF3-05). Returns a wrapper whose
+        GetCachedChildren() yields this element's children as an array."""
+        if self._raise_on_build_updated:
+            raise RuntimeError("BuildUpdatedCache exploded")
+        return _UpdatedElement(self.children)
 
-class FakeWalker:
-    """Walks a FakeElement's children list. GetNextSiblingElementBuildCache is
-    called with the just-visited CHILD, so we look up the child's next sibling
-    by identity — robust under recursion."""
 
-    def GetFirstChildElementBuildCache(self, parent, cache):
-        children = getattr(parent, "children", [])
-        return children[0] if children else None
+class _UpdatedElement:
+    """Wraps the result of BuildUpdatedCache; GetCachedChildren returns the
+    parent's children in the IUIAutomationElementArray shape (.Length / .GetElement)."""
 
-    def GetNextSiblingElementBuildCache(self, child, cache):
-        # Find child's position in its parent's children list, return the next.
-        # The FakeElement carries no parent backref, so the caller is responsible
-        # for ordering: we store a sibling chain on each element at build time.
-        return getattr(child, "_next_sibling", None)
+    def __init__(self, children):
+        self._children = children
+
+    def GetCachedChildren(self):
+        return FakeElementArray(self._children) if self._children else None
+
+
+class FakeElementArray:
+    """Minimal IUIAutomationElementArray stand-in."""
+
+    def __init__(self, elements):
+        self._elements = list(elements)
+
+    @property
+    def Length(self):
+        return len(self._elements)
+
+    def GetElement(self, index):
+        return self._elements[index]
+
+
+class FakeCacheRequest:
+    """Opaque cache object. Clone() returns itself; TreeScope/TreeFilter/AddProperty
+    are accepted as no-ops — the real traversal only needs Clone() to succeed and
+    TreeScope to be assignable on the clone."""
+
+    def __init__(self):
+        self.TreeScope = 0
+        self.TreeFilter = None
+
+    def AddProperty(self, *_):
+        pass
+
+    def AddPattern(self, *_):
+        pass
+
+    def Clone(self):
+        return FakeCacheRequest()
 
 
 class FakeIUIAutomation:
     def __init__(self, root):
         self._root = root
+        self.RawViewCondition = object()  # opaque; traversal just forwards it
 
     def ElementFromHandleBuildCache(self, handle, cache):
         return self._root
 
     def CreateCacheRequest(self):
-        # Opaque cache object; traversal only forwards it.
-        c = MagicMock()
-        c.AddProperty = lambda *_: None
-        return c
+        return FakeCacheRequest()
 
 
 class FakeClient:
     def __init__(self, root):
         self.IUIAutomation = FakeIUIAutomation(root)
-        self.ViewWalker = FakeWalker()
 
 
 def _link_siblings(elements):
-    """Set _next_sibling on each FakeElement so the walker can chain forward."""
-    for i, el in enumerate(elements):
-        el._next_sibling = elements[i + 1] if i + 1 < len(elements) else None
+    """No-op since PERF3-05: the bulk path reads children via BuildUpdatedCache,
+    not a sibling-chaining walker. Kept so existing tests that wire up deep trees
+    still read clearly; the sibling chain itself is unused."""
     return elements
 
 
@@ -132,13 +168,16 @@ def traverse(client, root, *, max_depth=15, include_invisible=False,
     interactive = []
     win = WindowInfo(title="FakeWin", process_name="fake", handle=1,
                      bbox=BoundingBox(0, 0, 800, 600), is_active=True)
+    # Build a real FakeCacheRequest via the production helper so _get_cached_children
+    # can Clone() it and read TreeScope (PERF3-05 bulk path needs a non-None request).
+    cache_request = tree._build_traversal_cache(client)
     _traverse_node(client, root, lines, interactive, win,
                    max_depth=max_depth, include_invisible=include_invisible,
                    include_offscreen=include_offscreen, indent=4, depth=0,
                    start_time=start_time if start_time is not None else time.time(),
                    timeout=timeout,
                    max_elements=max_elements, global_deadline=global_deadline,
-                   cache_request=None)
+                   cache_request=cache_request)
     return lines, interactive
 
 
@@ -400,7 +439,7 @@ class TestTraverseWindow:
                          max_depth=15, include_invisible=False,
                          include_offscreen=False, indent=4, timeout=10.0,
                          max_elements=0, global_deadline=float("inf"),
-                         cache_request=None)
+                         cache_request=tree._build_traversal_cache(client))
         assert len(interactive) == 1
         assert interactive[0].name == "OK"
 
@@ -420,7 +459,6 @@ class TestTraverseWindow:
         """A COM failure building the root is swallowed (tree.py:332-334)."""
         class BoomClient:
             IUIAutomation = MagicMock()
-            ViewWalker = FakeWalker()
         BoomClient.IUIAutomation.ElementFromHandleBuildCache.side_effect = \
             RuntimeError("com died")
         client = BoomClient()
@@ -488,36 +526,20 @@ class TestResolveElementParsing:
 
 
 class TestChildIterationSwallow:
-    def test_walker_failure_parent_still_processed(self):
-        """If the ViewWalker raises while iterating an element's children, the
-        element itself is STILL collected (it was processed before recursion),
-        and the traversal does not crash. This locks QUAL-02's "parent still
-        processed" guarantee — the previous assertion (interactive == []) could
-        not distinguish this from a full-node abort."""
-        # The walker must raise only when iterating the BUTTON's children, not
-        # the root's — otherwise the button is never reached. So we target the
-        # raise on the button's handle.
-        target = {"id": None}  # set after the button is built
-
-        class BoomWalker:
-            def GetFirstChildElementBuildCache(self, parent, cache):
-                if parent is target["id"]:
-                    raise RuntimeError("walker exploded")
-                kids = getattr(parent, "children", [])
-                return kids[0] if kids else None
-            def GetNextSiblingElementBuildCache(self, child, cache):
-                return getattr(child, "_next_sibling", None)
+    def test_child_fetch_failure_parent_still_processed(self):
+        """If _get_cached_children fails while fetching an element's children
+        (BuildUpdatedCache raises), the element itself is STILL collected (it
+        was processed before recursion), and the traversal does not crash.
+        This locks the PERF3-05 "parent still processed, subtree pruned"
+        guarantee — the previous assertion (interactive == []) could not
+        distinguish this from a full-node abort."""
         # root(Pane) -> child(Button, interactive, has its own grandchild).
-        # The Button is collected BEFORE its children are walked; the walker
-        # raises when iterating the Button's children, but the Button must
-        # still appear in `interactive`.
+        # The Button is collected BEFORE its children are fetched; making the
+        # Button's BuildUpdatedCache raise prunes the grandchild, but the Button
+        # must still appear in `interactive`.
         grandchild = FakeElement(name="gc", control_type=BUTTON, children=[])
-        child = FakeElement(name="parent-btn", control_type=BUTTON, children=[grandchild])
-        target["id"] = child
-        _link_siblings([grandchild])
+        child = FakeElement(name="parent-btn", control_type=BUTTON,
+                            children=[grandchild], raise_on_build_updated=True)
         root = FakeElement(control_type=PANE, children=[child])
-        _link_siblings(root.children)
-        client = FakeClient(root)
-        client.ViewWalker = BoomWalker()
-        _, interactive = traverse(client, root)
+        _, interactive = traverse(FakeClient(root), root)
         assert [e.name for e in interactive] == ["parent-btn"]
