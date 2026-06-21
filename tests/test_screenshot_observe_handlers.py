@@ -115,7 +115,8 @@ class TestScreenshotHandler:
         assert r["width"] == 50 and r["height"] == 40  # from the scaled image
 
     def test_scale_failure_swallowed(self, mock_config):
-        """A scaling exception is logged+swallowed; the unscaled image is saved."""
+        """A scaling exception is logged+swallowed; the unscaled image is saved.
+        coord_scale is 1.0 (no downscale happened)."""
         img = _fake_image(64, 48)
         with patch("agent_windows.core.screenshot.capture_screenshot", return_value=img), \
              patch("agent_windows.core.screenshot.save_and_cleanup", return_value="p") as m_save, \
@@ -124,6 +125,7 @@ class TestScreenshotHandler:
         # the ORIGINAL image flows into save_and_cleanup (not None / not lost)
         assert m_save.call_args.args[0] is img
         assert r["width"] == 64  # fell back to original image
+        assert r["coord_scale"] == 1.0  # no downscale → no coordinate scaling
 
     def test_scale_config_defaults_when_keys_absent(self, mock_config):
         """Bare mock_config has no max_width/max_height keys → scale_screenshot
@@ -144,6 +146,116 @@ class TestScreenshotHandler:
              patch("agent_windows.core.filesystem.validate_write_path", return_value="/safe/o.png") as m_vw:
             HANDLERS["screenshot"]({"output": "o.png"})
         m_vw.assert_called_once_with("o.png")
+
+
+# ── screenshot handler metadata: coord_scale / backend / region (TODO #3) ──
+
+
+class TestScreenshotMetadata:
+    """The handler now reports coordinate scale, capture backend, and the
+    screen-coordinate region the capture covered, plus a human-readable
+    Coordinate Scale hint when the image was downscaled."""
+
+    def test_coord_scale_1_when_no_downscale(self, mock_config):
+        """Unscaled capture → coord_scale exactly 1.0, no hint in output."""
+        img = _fake_image(320, 200)
+        with patch("agent_windows.core.screenshot.capture_screenshot", return_value=img), \
+             patch("agent_windows.core.screenshot.save_and_cleanup", return_value="p"), \
+             patch("agent_windows.core.screenshot.scale_screenshot", side_effect=lambda im, **k: im), \
+             patch("agent_windows.core.screenshot.get_capture_backend", return_value="mss"):
+            r = HANDLERS["screenshot"]({})
+        assert r["coord_scale"] == 1.0
+        assert "Coordinate Scale" not in r["output"]
+
+    def test_coord_scale_2_when_halved(self, mock_config):
+        """640×400 → 320×200 downscale → coord_scale 2.0 and a hint line."""
+        big = _fake_image(640, 400)
+        small = _fake_image(320, 200)
+        with patch("agent_windows.core.screenshot.capture_screenshot", return_value=big), \
+             patch("agent_windows.core.screenshot.save_and_cleanup", return_value="p"), \
+             patch("agent_windows.core.screenshot.scale_screenshot", return_value=small), \
+             patch("agent_windows.core.screenshot.get_capture_backend", return_value="dxcam"):
+            r = HANDLERS["screenshot"]({})
+        assert r["coord_scale"] == 2.0
+        assert "Coordinate Scale: 2" in r["output"]
+        assert "multiply image pixel coords by 2" in r["output"]
+
+    def test_backend_field_reported(self, mock_config):
+        img = _fake_image()
+        with patch("agent_windows.core.screenshot.capture_screenshot", return_value=img), \
+             patch("agent_windows.core.screenshot.save_and_cleanup", return_value="p"), \
+             patch("agent_windows.core.screenshot.scale_screenshot", side_effect=lambda im, **k: im), \
+             patch("agent_windows.core.screenshot.get_capture_backend", return_value="dxcam"):
+            r = HANDLERS["screenshot"]({})
+        assert r["backend"] == "dxcam"
+        assert "Backend: dxcam" in r["output"]
+
+    def test_region_from_explicit_bbox(self, mock_config):
+        """An explicit bbox surfaces verbatim as the region (edge form)."""
+        img = _fake_image()
+        with patch("agent_windows.core.screenshot.capture_screenshot", return_value=img), \
+             patch("agent_windows.core.screenshot.save_and_cleanup", return_value="p"), \
+             patch("agent_windows.core.screenshot.scale_screenshot", side_effect=lambda im, **k: im), \
+             patch("agent_windows.core.screenshot.get_capture_backend", return_value="mss"):
+            r = HANDLERS["screenshot"]({"bbox": [10, 20, 30, 40]})
+        assert r["region"] == [10, 20, 30, 40]
+        assert "Region: 10, 20, 30, 40" in r["output"]
+
+    def test_region_from_monitor_index(self, mock_config):
+        """monitor>=0 → region via _monitor_bbox."""
+        img = _fake_image()
+        with patch("agent_windows.core.screenshot.capture_screenshot", return_value=img), \
+             patch("agent_windows.core.screenshot.save_and_cleanup", return_value="p"), \
+             patch("agent_windows.core.screenshot.scale_screenshot", side_effect=lambda im, **k: im), \
+             patch("agent_windows.core.screenshot.get_capture_backend", return_value="mss"), \
+             patch("agent_windows.core.screenshot._monitor_bbox", return_value=(0, 0, 1920, 1080)):
+            r = HANDLERS["screenshot"]({"monitor": 1})
+        assert r["region"] == [0, 0, 1920, 1080]
+
+    def test_region_full_virtual_screen_as_edges(self, mock_config):
+        """No bbox/monitor → region is the virtual screen converted to edges."""
+        img = _fake_image()
+        with patch("agent_windows.core.screenshot.capture_screenshot", return_value=img), \
+             patch("agent_windows.core.screenshot.save_and_cleanup", return_value="p"), \
+             patch("agent_windows.core.screenshot.scale_screenshot", side_effect=lambda im, **k: im), \
+             patch("agent_windows.core.screenshot.get_capture_backend", return_value="mss"), \
+             patch("agent_windows.core.screenshot.get_virtual_screen_rect",
+                   return_value=(-1920, 0, 3840, 1080)):
+            r = HANDLERS["screenshot"]({})
+        # (-1920, 0, width=3840, height=1080) → edges (-1920, 0, 1920, 1080)
+        assert r["region"] == [-1920, 0, 1920, 1080]
+
+    def test_dxcam_full_screen_region_is_primary_monitor(self, mock_config):
+        """No bbox/monitor + backend=dxcam → region is the PRIMARY monitor, NOT
+        the full virtual screen. dxcam is created with output_idx=0
+        (core/screenshot.py) so a no-region grab captures monitor 0 only."""
+        img = _fake_image()
+        with patch("agent_windows.core.screenshot.capture_screenshot", return_value=img), \
+             patch("agent_windows.core.screenshot.save_and_cleanup", return_value="p"), \
+             patch("agent_windows.core.screenshot.scale_screenshot", side_effect=lambda im, **k: im), \
+             patch("agent_windows.core.screenshot.get_capture_backend", return_value="dxcam"), \
+             patch("agent_windows.core.screenshot.get_virtual_screen_rect",
+                   return_value=(-1920, 0, 3840, 1080)) as m_vs, \
+             patch("agent_windows.core.screenshot._monitor_bbox",
+                   return_value=(0, 0, 1920, 1080)) as m_mbox:
+            r = HANDLERS["screenshot"]({})
+        assert r["region"] == [0, 0, 1920, 1080]  # primary, not virtual screen
+        m_mbox.assert_called_once_with(0)
+        # The virtual-screen rect must NOT be consulted on the dxcam path.
+        m_vs.assert_not_called()
+
+    def test_mss_full_screen_region_is_virtual_screen(self, mock_config):
+        """No bbox/monitor + backend=mss → region is the full virtual screen
+        (mss.monitors[0] is the virtual screen)."""
+        img = _fake_image()
+        with patch("agent_windows.core.screenshot.capture_screenshot", return_value=img), \
+             patch("agent_windows.core.screenshot.save_and_cleanup", return_value="p"), \
+             patch("agent_windows.core.screenshot.scale_screenshot", side_effect=lambda im, **k: im), \
+             patch("agent_windows.core.screenshot.get_capture_backend", return_value="mss"), \
+             patch("agent_windows.core.screenshot.get_virtual_screen_rect",
+                   return_value=(-1920, 0, 3840, 1080)):
+            r = HANDLERS["screenshot"]({})
+        assert r["region"] == [-1920, 0, 1920, 1080]  # full virtual screen edges
 
 
 # ── highlight handler ────────────────────────────────────────────────

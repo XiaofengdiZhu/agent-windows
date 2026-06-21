@@ -241,7 +241,9 @@ def traverse_tree(
 
     Returns a dict with:
         - cursor: (x, y) mouse position
-        - resolution: (width, height) virtual screen
+        - resolution: (width, height) of the primary monitor
+        - virtual_screen: (left, top, width, height) spanning all monitors
+        - dpi_scale: system DPI as a multiplier of 96 (1.0 / 1.25 / 1.5 / …)
         - displays: count
         - active_window: WindowInfo
         - windows: list of WindowInfo
@@ -261,6 +263,11 @@ def traverse_tree(
     primary_w = ctypes.windll.user32.GetSystemMetrics(SM_CXSCREEN)
     primary_h = ctypes.windll.user32.GetSystemMetrics(SM_CYSCREEN)
     monitor_count = ctypes.windll.user32.GetSystemMetrics(80)
+
+    # Virtual screen + DPI scale (informational metadata; TODO #3).
+    from agent_windows.core.screenshot import get_virtual_screen_rect, get_dpi_scale
+    virtual_screen = get_virtual_screen_rect()
+    dpi_scale = get_dpi_scale()
 
     # Enumerate windows
     all_windows = enumerate_windows()
@@ -320,6 +327,8 @@ def traverse_tree(
     return {
         "cursor": cursor,
         "resolution": (primary_w, primary_h),
+        "virtual_screen": virtual_screen,
+        "dpi_scale": dpi_scale,
         "displays": monitor_count,
         "active_window": active_window,
         "windows": all_windows,
@@ -732,6 +741,20 @@ def render_snapshot(data: dict[str, Any]) -> str:
     parts.append(f"Cursor: ({cursor[0]}, {cursor[1]})")
     parts.append(f"Resolution: {res[0]}x{res[1]}")
     parts.append(f"Displays: {displays}")
+    # Virtual screen + DPI scale + coordinate space (TODO #3). Appended after
+    # the existing lines so nothing depending on the original header order
+    # shifts. virtual_screen may be absent on older snapshots (defensive .get).
+    vscreen = data.get("virtual_screen")
+    if vscreen is not None:
+        parts.append(f"Virtual Screen: ({vscreen[0]}, {vscreen[1]}, {vscreen[2]}, {vscreen[3]})")
+    dpi_scale = data.get("dpi_scale")
+    if dpi_scale is not None:
+        dpi = round(dpi_scale * 96)
+        parts.append(f"DPI Scale: {dpi_scale:g} ({dpi} dpi)")
+    # The daemon is PerMonitorDpiAware, so all coordinates here are physical
+    # pixels in the virtual-desktop space — state that explicitly so the agent
+    # doesn't try to apply DPI correction to click coords.
+    parts.append("Coordinate Space: Virtual desktop coordinates (physical pixels)")
     if active:
         parts.append(f'Active Window: "{active.title}" ({active.process_name})')
     parts.append("")

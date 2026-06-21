@@ -88,6 +88,29 @@ def get_monitor_count() -> int:
     return ctypes.windll.user32.GetSystemMetrics(80)  # SM_CMONITORS
 
 
+def get_dpi_scale() -> float:
+    """Return the system DPI as a multiplier of 96 (1.0 / 1.25 / 1.5 / …).
+
+    Informational only: the daemon is PerMonitorDpiAware, so UIA/Win32
+    coordinates are physical pixels and DPI does NOT change click math.
+    GetDpiForSystem (Win10 1607+) failing returns 1.0. (TODO #3)
+    """
+    import ctypes
+
+    try:
+        dpi = ctypes.windll.user32.GetDpiForSystem()
+        if dpi and dpi > 0:
+            return round(dpi / 96.0, 6)
+    except Exception:
+        logger.debug("GetDpiForSystem failed; DPI scale unknown", exc_info=True)
+    return 1.0
+
+
+def get_capture_backend() -> str | None:
+    """Name of the backend used by the most recent capture, or None."""
+    return _last_successful_backend
+
+
 # ── Backend capture functions ─────────────────────────────────────
 
 
@@ -199,12 +222,15 @@ def capture_screenshot(
             except Exception as e:
                 logger.debug("Backend %s failed: %s, trying next", name, e)
                 continue
-        # Hard fallback to Pillow
+        # Hard fallback: record truthfully (TODO #3).
+        _last_successful_backend = "pillow"
         return _capture_pillow(bbox)
     else:
-        # Specific backend requested
+        # Specific backend requested — record it too so a pinned-backend
+        # config doesn't leak a stale name from a prior auto-chain capture.
         for name, capture_fn in BACKEND_CHAIN:
             if name == backend_config:
+                _last_successful_backend = name
                 return capture_fn(bbox)
         raise ValueError(f"Unknown screenshot backend: {backend_config}")
 

@@ -166,3 +166,60 @@ class TestGrabFailure:
         _wire_camera(fake_dxcam, grab_return=None)
         with pytest.raises(RuntimeError, match="no frame"):
             ss._capture_dxcam(bbox=None)
+
+
+# ── capture_screenshot backend recording (TODO #3) ──────────────────────
+
+
+@pytest.fixture
+def reset_backend():
+    """Reset _last_successful_backend for the test, restore it after (module
+    global; without this a prior test's capture would leak in)."""
+    ss = _mod()
+    saved = ss._last_successful_backend
+    ss._last_successful_backend = None
+    yield ss
+    ss._last_successful_backend = saved
+
+
+class TestCaptureBackendRecording:
+    """get_capture_backend() reports the backend that served the most recent
+    capture. Drives the real capture_screenshot (patching BACKEND_CHAIN, which
+    binds the _capture_* fns at import time)."""
+
+    def test_explicit_backend_is_recorded(self, reset_backend):
+        ss = reset_backend
+        fake_chain = [("dxcam", MagicMock(side_effect=RuntimeError)),
+                      ("mss", MagicMock(return_value=MagicMock())),
+                      ("pillow", MagicMock(return_value=MagicMock()))]
+        with patch("agent_windows.utils.config.load_config") as m_cfg, \
+             patch.object(ss, "BACKEND_CHAIN", fake_chain):
+            m_cfg.return_value = {"screenshot": {"backend": "mss"}}
+            ss.capture_screenshot()
+        assert ss.get_capture_backend() == "mss"
+
+    def test_auto_chain_records_successful_backend(self, reset_backend):
+        ss = reset_backend
+        fake_chain = [("dxcam", MagicMock(return_value=MagicMock())),
+                      ("mss", MagicMock(return_value=MagicMock())),
+                      ("pillow", MagicMock(return_value=MagicMock()))]
+        with patch("agent_windows.utils.config.load_config") as m_cfg, \
+             patch.object(ss, "BACKEND_CHAIN", fake_chain):
+            m_cfg.return_value = {"screenshot": {"backend": "auto"}}
+            ss.capture_screenshot()
+        assert ss.get_capture_backend() == "dxcam"
+
+    def test_hard_fallback_to_pillow_is_recorded(self, reset_backend):
+        """auto-chain with ALL backends failing → hard Pillow fallback runs and
+        is recorded as "pillow" (not left stale on a failed backend). Patches
+        _capture_pillow directly since the fallback calls it by name."""
+        ss = reset_backend
+        fake_chain = [("dxcam", MagicMock(side_effect=RuntimeError)),
+                      ("mss", MagicMock(side_effect=RuntimeError)),
+                      ("pillow", MagicMock(side_effect=RuntimeError))]
+        with patch("agent_windows.utils.config.load_config") as m_cfg, \
+             patch.object(ss, "BACKEND_CHAIN", fake_chain), \
+             patch.object(ss, "_capture_pillow", return_value=MagicMock()):
+            m_cfg.return_value = {"screenshot": {"backend": "auto"}}
+            ss.capture_screenshot()
+        assert ss.get_capture_backend() == "pillow"

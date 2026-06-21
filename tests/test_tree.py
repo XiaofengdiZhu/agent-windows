@@ -801,3 +801,115 @@ class TestModalMarking:
             "interactive_elements": interactive,
         })
         assert "| modal |" in rendered
+
+
+# ── snapshot metadata: virtual screen / dpi scale / coordinate space (TODO #3)
+
+
+def _render_meta(**overrides):
+    """Minimal render_snapshot input with the new metadata fields, overridable."""
+    base = {
+        "cursor": (100, 200),
+        "resolution": (1920, 1080),
+        "virtual_screen": (-1920, 0, 3840, 1080),
+        "dpi_scale": 1.5,
+        "displays": 2,
+        "active_window": None,
+        "windows": [],
+        "semantic_tree": "",
+        "interactive_elements": [],
+    }
+    base.update(overrides)
+    return render_snapshot(base)
+
+
+class TestSnapshotMetadataRender:
+    def test_virtual_screen_line_rendered(self):
+        rendered = _render_meta()
+        assert "Virtual Screen: (-1920, 0, 3840, 1080)" in rendered
+
+    @pytest.mark.parametrize("scale, dpi", [(1.5, 144), (1.25, 120), (1.0, 96)])
+    def test_dpi_scale_line_with_computed_dpi(self, scale, dpi):
+        assert f"DPI Scale: {scale:g} ({dpi} dpi)" in _render_meta(dpi_scale=scale)
+
+    def test_coordinate_space_line_always_present(self):
+        rendered = _render_meta()
+        assert "Coordinate Space: Virtual desktop coordinates (physical pixels)" in rendered
+
+    def test_metadata_after_basic_lines_before_active_window(self):
+        """Virtual Screen / DPI / Coordinate Space appear in the Desktop State
+        block; existing Cursor/Resolution/Displays lines are unchanged and still
+        precede the new metadata."""
+        rendered = _render_meta(active_window=WindowInfo(
+            title="App", process_name="app", handle=1,
+            bbox=BoundingBox(0, 0, 10, 10), is_active=True))
+        i_cursor = rendered.index("Cursor:")
+        i_res = rendered.index("Resolution:")
+        i_disp = rendered.index("Displays:")
+        i_vs = rendered.index("Virtual Screen:")
+        i_dpi = rendered.index("DPI Scale:")
+        i_cs = rendered.index("Coordinate Space:")
+        i_active = rendered.index("Active Window:")
+        # Order: cursor < resolution < displays < vscreen < dpi < coord-space < active
+        assert i_cursor < i_res < i_disp < i_vs < i_dpi < i_cs < i_active
+
+    def test_legacy_snapshot_without_new_fields_does_not_crash(self):
+        """render_snapshot must tolerate a dict missing virtual_screen/dpi_scale
+        (e.g. a cached snapshot from before this change) — the new lines are
+        skipped, not raised on."""
+        rendered = render_snapshot({
+            "cursor": (0, 0), "resolution": (1920, 1080), "displays": 1,
+            "active_window": None, "windows": [], "semantic_tree": "",
+            "interactive_elements": [],
+        })
+        assert "Coordinate Space:" in rendered  # always-present line still shows
+        assert "Virtual Screen:" not in rendered  # field absent → line absent
+        assert "DPI Scale:" not in rendered
+
+
+class TestTraverseTreeMetadata:
+    """traverse_tree must plumb virtual_screen/dpi_scale into its return dict.
+    Drives the real function with its Win32 / UIA entry points patched so no
+    real desktop access happens."""
+
+    def _patched_traverse(self):
+        # timeout=0.0 → global_deadline is already past, so the per-window
+        # traversal loop body never runs and no real UIA work happens.
+        # enumerate_windows is separately patched to return [] so no windows are
+        # even listed.
+        return traverse_tree(
+            max_depth=1, include_invisible=False, include_offscreen=False,
+            max_elements=0, timeout=0.0,
+        )
+
+    def test_return_dict_has_virtual_screen_and_dpi_scale(self):
+        # tree.py imports get_virtual_screen_rect / get_dpi_scale lazily INSIDE
+        # traverse_tree (`from agent_windows.core.screenshot import ...`), so
+        # patching the canonical module attribute is what the function sees at
+        # call time. _AutomationClient is likewise imported lazily inside the
+        # function, so patch at its source module.
+        with patch("agent_windows.uia.core._AutomationClient"), \
+             patch("agent_windows.core.tree.enumerate_windows", return_value=[]), \
+             patch("agent_windows.core.screenshot.get_virtual_screen_rect",
+                   return_value=(-1920, 0, 3840, 1080)) as m_vs, \
+             patch("agent_windows.core.screenshot.get_dpi_scale",
+                   return_value=1.5) as m_dpi:
+            data = self._patched_traverse()
+        assert data["virtual_screen"] == (-1920, 0, 3840, 1080)
+        assert data["dpi_scale"] == 1.5
+        m_vs.assert_called_once()
+        m_dpi.assert_called_once()
+
+    def test_existing_fields_still_present(self):
+        """Adding metadata did not drop cursor/resolution/displays/etc."""
+        with patch("agent_windows.uia.core._AutomationClient"), \
+             patch("agent_windows.core.tree.enumerate_windows", return_value=[]), \
+             patch("agent_windows.core.screenshot.get_virtual_screen_rect",
+                   return_value=(0, 0, 1920, 1080)), \
+             patch("agent_windows.core.screenshot.get_dpi_scale",
+                   return_value=1.0):
+            data = self._patched_traverse()
+        for key in ("cursor", "resolution", "displays", "active_window",
+                    "windows", "semantic_tree", "interactive_elements"):
+            assert key in data, f"{key} dropped from traverse_tree return"
+

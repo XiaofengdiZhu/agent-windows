@@ -11,7 +11,14 @@ logger = logging.getLogger(__name__)
 @handler("screenshot")
 def _screenshot(params: dict) -> dict[str, Any]:
     """Capture and save a screenshot."""
-    from agent_windows.core.screenshot import capture_screenshot, save_and_cleanup, scale_screenshot
+    from agent_windows.core.screenshot import (
+        capture_screenshot,
+        save_and_cleanup,
+        scale_screenshot,
+        get_capture_backend,
+        get_virtual_screen_rect,
+        _monitor_bbox,
+    )
 
     output = params.get("output", "")
     monitor = params.get("monitor", -1)
@@ -42,6 +49,7 @@ def _screenshot(params: dict) -> dict[str, Any]:
         monitor=monitor,
         bbox=tuple(bbox) if bbox else None,
     )
+    pre_scale_size = image.size  # to derive coord_scale below
 
     # Scale if configured
     try:
@@ -54,12 +62,62 @@ def _screenshot(params: dict) -> dict[str, Any]:
     except Exception:
         logger.debug("Screenshot scaling skipped", exc_info=True)
 
+    # coord_scale: multiplier from image pixels to screen coords. Only != 1.0
+    # when scale_screenshot actually downscaled (scale_screenshot aspect-
+    # preserves, so width ratio == height ratio).
+    if image.size != pre_scale_size and image.width > 0:
+        coord_scale = round(pre_scale_size[0] / image.width, 6)
+    else:
+        coord_scale = 1.0
+
+    backend = get_capture_backend()
+
+    # Region the capture covered, as (left, top, right, bottom) screen edges.
+    if bbox:
+        region = tuple(int(v) for v in bbox)
+    elif monitor >= 0:
+        try:
+            region = _monitor_bbox(monitor)
+        except Exception:
+            region = None
+    elif backend == "dxcam":
+        # dxcam grabs the primary monitor only (output_idx=0); mirror that,
+        # not the full virtual screen, which would mislead the agent.
+        try:
+            region = _monitor_bbox(0)
+        except Exception:
+            region = None
+    else:
+        # mss / pillow / unknown: full virtual screen. get_virtual_screen_rect
+        # returns (left, top, width, height) — convert to edges.
+        l, t, w, h = get_virtual_screen_rect()
+        region = (l, t, l + w, t + h)
+
     path = save_and_cleanup(image, output_path=output if output else None)
+
+    lines = [
+        "## Screenshot",
+        f"Path: {path}",
+        f"Size: {image.width}x{image.height}{selector_warn}",
+    ]
+    if coord_scale != 1.0:
+        lines.append(
+            f"Coordinate Scale: {coord_scale:g} — multiply image pixel coords "
+            f"by {coord_scale:g} before Click/Move/Scroll"
+        )
+    if region is not None:
+        lines.append(f"Region: {region[0]}, {region[1]}, {region[2]}, {region[3]}")
+    if backend:
+        lines.append(f"Backend: {backend}")
+
     return {
-        "output": f"## Screenshot\nPath: {path}\nSize: {image.width}x{image.height}{selector_warn}",
+        "output": "\n".join(lines),
         "path": str(path),
         "width": image.width,
         "height": image.height,
+        "coord_scale": coord_scale,
+        "backend": backend,
+        "region": list(region) if region is not None else None,
     }
 
 
