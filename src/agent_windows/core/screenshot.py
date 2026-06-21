@@ -16,7 +16,7 @@ from agent_windows.utils.config import load_config, get_screenshot_save_dir
 
 logger = logging.getLogger(__name__)
 
-_dxcam_camera = None
+_dxcam_cameras: dict[int, object] = {}
 _dxcam_lock = threading.Lock()
 
 _last_successful_backend: str | None = None
@@ -46,7 +46,7 @@ def release_capture_backends() -> None:
     release explicit and prompt rather than waiting for teardown, and keeps
     long-lived runs from accumulating backend state.)
     """
-    global _dxcam_camera, _mss_instance
+    global _mss_instance  # rebound below; _dxcam_cameras is mutated in place
     with _mss_lock:
         if _mss_instance is not None:
             try:
@@ -55,9 +55,10 @@ def release_capture_backends() -> None:
                 logger.debug("mss.close() failed", exc_info=True)
             _mss_instance = None
     with _dxcam_lock:
-        # dxcam's DXCamera exposes no public close(); drop the reference so its
-        # __del__ releases the DXGI resources via GC. Best-effort.
-        _dxcam_camera = None
+        # dxcam's DXCamera exposes no public close(); drop the per-output
+        # references so their __del__ releases the DXGI resources via GC.
+        # Best-effort.
+        _dxcam_cameras.clear()
 
 
 atexit.register(release_capture_backends)
@@ -114,19 +115,91 @@ def get_capture_backend() -> str | None:
 # ── Backend capture functions ─────────────────────────────────────
 
 
-def _capture_dxcam(bbox: tuple[int, int, int, int] | None) -> Image.Image:
-    """Capture via dxcam (DXGI) — fast but single-monitor only."""
-    global _dxcam_camera
+def _resolve_dxcam_region(
+    bbox: tuple[int, int, int, int],
+) -> tuple[int, tuple[int, int, int, int] | None] | None:
+    """Resolve a screen-coord bbox to ``(output_idx, region)`` for dxcam.
+
+    Finds the first monitor (via :func:`GetMonitorsRect`, whose
+    ``EnumDisplayMonitors`` order matches dxcam's ``output_idx``) that FULLY
+    contains ``bbox`` and returns:
+      - ``(output_idx, None)``      — bbox covers the whole monitor (full grab)
+      - ``(output_idx, region)``    — region is bbox translated to the
+        monitor's own origin (dxcam regions are monitor-relative)
+      - ``None``                     — no single monitor contains bbox (it
+        spans monitors or is off-screen); the caller should fall back to a
+        virtual-screen-aware backend (mss/pillow).
+
+    Adapted from Windows-MCP's ``_DxcamBackend._resolve_region``.
+    """
+    from agent_windows.uia.core import GetMonitorsRect
+
+    bbox_left, bbox_top, bbox_right, bbox_bottom = bbox
+    for output_idx, mon in enumerate(GetMonitorsRect()):
+        if not (mon.left <= bbox_left
+                and mon.top <= bbox_top
+                and mon.right >= bbox_right
+                and mon.bottom >= bbox_bottom):
+            continue
+        if (mon.left == bbox_left and mon.top == bbox_top
+                and mon.right == bbox_right and mon.bottom == bbox_bottom):
+            return output_idx, None  # bbox == whole monitor → full grab
+        return output_idx, (
+            bbox_left - mon.left,
+            bbox_top - mon.top,
+            bbox_right - mon.left,
+            bbox_bottom - mon.top,
+        )
+    return None
+
+
+def _get_dxcam_camera(output_idx: int):
+    """Return a cached per-output dxcam camera (creating it on first use).
+
+    Replaces the old single ``output_idx=0`` singleton: each monitor gets its
+    own camera so a secondary-monitor bbox is captured from the correct DXGI
+    output, not mis-grabbed from the primary adapter. (TODO #9-A)
+
+    Caller MUST hold ``_dxcam_lock``: both call sites (``_capture_dxcam``) do,
+    and the cache read-create-write here is not otherwise synchronized — a
+    lock-free caller could double-create a camera for one output.
+    """
     import dxcam
+    camera = _dxcam_cameras.get(output_idx)
+    if camera is None:
+        camera = dxcam.create(output_idx=output_idx, processor_backend="numpy")
+        _dxcam_cameras[output_idx] = camera
+    return camera
+
+
+def _capture_dxcam(bbox: tuple[int, int, int, int] | None) -> Image.Image:
+    """Capture via dxcam (DXGI).
+
+    With a bbox, the bbox is resolved to its owning monitor's output + a
+    monitor-relative region (so secondary monitors capture correctly). With no
+    bbox, dxcam captures the primary monitor only (``output_idx=0``) — a
+    full virtual-screen capture is the job of mss/pillow, which the backend
+    chain falls back to. (TODO #9-A)
+    """
     with _dxcam_lock:
-        if _dxcam_camera is None:
-            _dxcam_camera = dxcam.create(output_idx=0, processor_backend="numpy")
-        if bbox:
-            left, top, width, height = get_virtual_screen_rect()
-            region = (bbox[0] - left, bbox[1] - top, bbox[2] - left, bbox[3] - top)
-            frame = _dxcam_camera.grab(region=region, copy=True)
+        if bbox is None:
+            # No bbox → primary monitor full grab (unchanged behavior). A
+            # full multi-monitor grab is mss/pillow's responsibility.
+            camera = _get_dxcam_camera(0)
+            frame = camera.grab(copy=True)
         else:
-            frame = _dxcam_camera.grab(copy=True)
+            resolved = _resolve_dxcam_region(bbox)
+            if resolved is None:
+                # bbox spans monitors or is off-screen — dxcam can't capture it
+                # from a single output. Raise so capture_screenshot's auto-chain
+                # falls back to mss/pillow (which use virtual-screen coords).
+                raise ValueError(
+                    "DXGI capture supports only regions fully contained "
+                    "within one display")
+            output_idx, region = resolved
+            camera = _get_dxcam_camera(output_idx)
+            frame = camera.grab(region=region, copy=True) if region is not None \
+                else camera.grab(copy=True)
     if frame is None:
         raise RuntimeError("DXGI capture returned no frame")
     return Image.fromarray(frame)

@@ -81,8 +81,10 @@ def _screenshot(params: dict) -> dict[str, Any]:
         except Exception:
             region = None
     elif backend == "dxcam":
-        # dxcam grabs the primary monitor only (output_idx=0); mirror that,
-        # not the full virtual screen, which would mislead the agent.
+        # dxcam grabs the primary monitor only (output_idx=0) when no
+        # bbox/monitor is specified; mirror that, not the full virtual screen,
+        # which would mislead the agent. (A bbox/monitor is reported verbatim
+        # above and now resolves to the correct per-output capture — TODO #9-A.)
         try:
             region = _monitor_bbox(0)
         except Exception:

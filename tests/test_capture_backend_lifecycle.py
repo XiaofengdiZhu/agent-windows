@@ -1,9 +1,10 @@
-"""Tests for capture-backend singleton release (L-29).
+"""Tests for capture-backend release (L-29).
 
-dxcam/mss singletons were never released on exit. release_capture_backends()
-closes mss and drops the dxcam reference, and is registered with atexit so every
-exit path runs it. These tests exercise the function directly (atexit itself is
-exercised by process teardown, not unit-testable here).
+dxcam/mss backends hold DXGI / screen-DC resources that were leaked on exit.
+release_capture_backends() closes mss and drops the per-output dxcam camera
+references, and is registered with atexit so every exit path runs it. These
+tests exercise the function directly (atexit itself is exercised by process
+teardown, not unit-testable here).
 """
 from unittest.mock import MagicMock
 
@@ -26,24 +27,24 @@ def test_release_closes_and_clears_mss():
         ss._mss_instance = saved
 
 
-def test_release_clears_dxcam_ref():
+def test_release_clears_dxcam_cameras():
     ss = _mod()
-    saved_cam = ss._dxcam_camera
-    ss._dxcam_camera = MagicMock()
+    saved_cams = ss._dxcam_cameras
+    ss._dxcam_cameras = {0: MagicMock(), 1: MagicMock()}
     try:
         ss.release_capture_backends()
-        assert ss._dxcam_camera is None
+        assert ss._dxcam_cameras == {}
     finally:
-        ss._dxcam_camera = saved_cam
+        ss._dxcam_cameras = saved_cams
 
 
 def test_release_idempotent():
     ss = _mod()
     ss._mss_instance = None
-    ss._dxcam_camera = None
+    ss._dxcam_cameras = {}
     ss.release_capture_backends()  # already-released state must not error
     assert ss._mss_instance is None
-    assert ss._dxcam_camera is None
+    assert ss._dxcam_cameras == {}
 
 
 def test_release_swallows_mss_close_error():
