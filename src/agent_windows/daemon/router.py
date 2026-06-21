@@ -17,6 +17,7 @@ from agent_windows.ipc.protocol import (
     METHOD_NOT_FOUND,
     INVALID_PARAMS,
     COORDINATE_OUT_OF_RANGE,
+    ELEMENT_NOT_FOUND,
     DAEMON_INTERNAL_ERROR,
     WAIT_TIMEOUT,
     PERMISSION_DENIED,
@@ -94,6 +95,11 @@ def route_request(request: JSONRPCRequest) -> JSONRPCResponse:
         return make_error(COORDINATE_OUT_OF_RANGE, str(e), request.id)
     except (ValueError, IndexError) as e:
         return make_error(INVALID_PARAMS, str(e), request.id)
+    except FileNotFoundError as e:
+        # Missing file/dir (and missing UIA element) → ELEMENT_NOT_FOUND (-1001),
+        # a more specific code than the generic DAEMON_INTERNAL_ERROR and without
+        # the logger.exception log spam a routine "file not found" would cause.
+        return make_error(ELEMENT_NOT_FOUND, str(e), request.id)
     except TimeoutError as e:
         return make_error(WAIT_TIMEOUT, str(e), request.id)
     except PermissionError as e:

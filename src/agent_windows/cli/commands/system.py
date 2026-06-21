@@ -70,9 +70,16 @@ fs_cmd = typer.Typer(help="File system operations")
 def fs_read(
     ctx: typer.Context,
     path: str = typer.Argument(help="File path to read"),
+    offset: int = typer.Option(0, "--offset", help="1-based start line (0 = whole file)"),
+    limit: int = typer.Option(0, "--limit", help="Max lines to read (0 = to EOF)"),
 ) -> None:
-    """Read a file."""
-    _cmd(ctx, "fs_read", path=path)
+    """Read a file. Use --offset/--limit for a line range."""
+    params: dict = {"path": path}
+    if offset:
+        params["offset"] = offset
+    if limit:
+        params["limit"] = limit
+    _cmd(ctx, "fs_read", **params)
 
 
 @fs_cmd.command("write")
@@ -80,18 +87,94 @@ def fs_write(
     ctx: typer.Context,
     path: str = typer.Argument(help="File path to write"),
     content: str = typer.Argument(help="Content to write"),
+    append: bool = typer.Option(False, "--append", help="Append instead of overwriting"),
 ) -> None:
-    """Write to a file."""
-    _cmd(ctx, "fs_write", path=path, content=content)
+    """Write to a file. Use --append to add to an existing file."""
+    params: dict = {"path": path, "content": content}
+    if append:
+        params["append"] = True
+    _cmd(ctx, "fs_write", **params)
 
 
 @fs_cmd.command("list")
 def fs_list(
     ctx: typer.Context,
     path: str = typer.Argument(help="Directory path to list"),
+    pattern: str = typer.Option("", "--pattern", help="Name filter (glob)"),
+    recursive: bool = typer.Option(False, "--recursive", help="Walk subdirectories"),
+    show_hidden: bool = typer.Option(False, "--show-hidden", help="Include dotfiles"),
 ) -> None:
     """List directory contents."""
-    _cmd(ctx, "fs_list", path=path)
+    params: dict = {"path": path}
+    if pattern:
+        params["pattern"] = pattern
+    if recursive:
+        params["recursive"] = True
+    if show_hidden:
+        params["show_hidden"] = True
+    _cmd(ctx, "fs_list", **params)
+
+
+@fs_cmd.command("copy")
+def fs_copy(
+    ctx: typer.Context,
+    path: str = typer.Argument(help="Source path"),
+    destination: str = typer.Argument(help="Destination path"),
+    overwrite: bool = typer.Option(False, "--overwrite", help="Replace existing destination"),
+) -> None:
+    """Copy a file or directory."""
+    params: dict = {"path": path, "destination": destination}
+    if overwrite:
+        params["overwrite"] = True
+    _cmd(ctx, "fs_copy", **params)
+
+
+@fs_cmd.command("move")
+def fs_move(
+    ctx: typer.Context,
+    path: str = typer.Argument(help="Source path"),
+    destination: str = typer.Argument(help="Destination path"),
+    overwrite: bool = typer.Option(False, "--overwrite", help="Replace existing destination"),
+) -> None:
+    """Move or rename a file or directory."""
+    params: dict = {"path": path, "destination": destination}
+    if overwrite:
+        params["overwrite"] = True
+    _cmd(ctx, "fs_move", **params)
+
+
+@fs_cmd.command("delete")
+def fs_delete(
+    ctx: typer.Context,
+    path: str = typer.Argument(help="Path to delete"),
+    recursive: bool = typer.Option(False, "--recursive", help="Delete non-empty directories"),
+) -> None:
+    """Delete a file or directory."""
+    params: dict = {"path": path}
+    if recursive:
+        params["recursive"] = True
+    _cmd(ctx, "fs_delete", **params)
+
+
+@fs_cmd.command("search")
+def fs_search(
+    ctx: typer.Context,
+    path: str = typer.Argument(help="Directory to search in"),
+    pattern: str = typer.Argument(help="Glob pattern (e.g. *.py)"),
+    no_recursive: bool = typer.Option(False, "--no-recursive", help="Search top level only"),
+) -> None:
+    """Find files/dirs matching a glob pattern."""
+    params: dict = {"path": path, "pattern": pattern, "recursive": not no_recursive}
+    _cmd(ctx, "fs_search", **params)
+
+
+@fs_cmd.command("info")
+def fs_info(
+    ctx: typer.Context,
+    path: str = typer.Argument(help="File or directory path"),
+) -> None:
+    """Get metadata about a file or directory."""
+    _cmd(ctx, "fs_info", path=path)
 
 
 # ── clipboard ─────────────────────────────────────────────────────

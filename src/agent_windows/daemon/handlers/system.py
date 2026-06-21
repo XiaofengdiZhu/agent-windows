@@ -70,23 +70,90 @@ def _shell(params: dict) -> dict[str, Any]:
 
 @handler("fs_read")
 def _fs_read(params: dict) -> dict[str, Any]:
-    """Read a file."""
+    """Read a file. ``offset``/``limit`` select a 1-based line range."""
     from agent_windows.core.filesystem import read_file
-    return read_file(require(params, "path", str))
+    return read_file(
+        require(params, "path", str),
+        offset=params.get("offset"),
+        limit=params.get("limit"),
+    )
 
 
 @handler("fs_write")
 def _fs_write(params: dict) -> dict[str, Any]:
-    """Write to a file."""
+    """Write to a file. ``append=True`` appends instead of overwriting."""
     from agent_windows.core.filesystem import write_file
-    return write_file(require(params, "path", str), require(params, "content", str))
+    return write_file(
+        require(params, "path", str),
+        require(params, "content", str),
+        append=params.get("append", False),
+    )
 
 
 @handler("fs_list")
 def _fs_list(params: dict) -> dict[str, Any]:
-    """List directory contents."""
+    """List directory contents.
+
+    ``pattern`` filters names, ``recursive=True`` walks subdirs, ``show_hidden``
+    keeps dotfiles. All optional — bare ``fs_list`` behaves as before.
+    """
     from agent_windows.core.filesystem import list_dir
-    return list_dir(require(params, "path", str))
+    return list_dir(
+        require(params, "path", str),
+        pattern=params.get("pattern"),
+        recursive=params.get("recursive", False),
+        show_hidden=params.get("show_hidden", False),
+    )
+
+
+@handler("fs_copy")
+def _fs_copy(params: dict) -> dict[str, Any]:
+    """Copy a file or directory. ``overwrite=True`` replaces an existing target."""
+    from agent_windows.core.filesystem import copy_path
+    return copy_path(
+        require(params, "path", str),
+        require(params, "destination", str),
+        overwrite=params.get("overwrite", False),
+    )
+
+
+@handler("fs_move")
+def _fs_move(params: dict) -> dict[str, Any]:
+    """Move/rename a file or directory. ``overwrite=True`` replaces an existing target."""
+    from agent_windows.core.filesystem import move_path
+    return move_path(
+        require(params, "path", str),
+        require(params, "destination", str),
+        overwrite=params.get("overwrite", False),
+    )
+
+
+@handler("fs_delete")
+def _fs_delete(params: dict) -> dict[str, Any]:
+    """Delete a file or directory. Non-empty dirs require ``recursive=True``."""
+    from agent_windows.core.filesystem import delete_path
+    return delete_path(
+        require(params, "path", str),
+        recursive=params.get("recursive", False),
+    )
+
+
+@handler("fs_search")
+def _fs_search(params: dict) -> dict[str, Any]:
+    """Find files/dirs matching a glob ``pattern`` (recursive by default)."""
+    from agent_windows.core.filesystem import search_files
+    return search_files(
+        require(params, "path", str),
+        require(params, "pattern", str),
+        recursive=params.get("recursive", True),
+    )
+
+
+@handler("fs_info")
+def _fs_info(params: dict) -> dict[str, Any]:
+    """Return metadata about a file or directory."""
+    from agent_windows.core.filesystem import get_file_info
+    return get_file_info(require(params, "path", str))
 
 
 # ── Clipboard ───────────────────────────────────────────────────────

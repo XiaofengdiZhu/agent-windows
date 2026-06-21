@@ -245,12 +245,18 @@ class TestFsHandlers:
     def test_fs_read_forwards_path(self):
         with patch("agent_windows.core.filesystem.read_file", return_value={"output": "c"}) as m:
             HANDLERS["fs_read"]({"path": r"C:\x"})
-        m.assert_called_once_with(r"C:\x")
+        # Bare call forwards offset=None, limit=None (TODO #4 optional params).
+        m.assert_called_once_with(r"C:\x", offset=None, limit=None)
+
+    def test_fs_read_forwards_offset_limit(self):
+        with patch("agent_windows.core.filesystem.read_file", return_value={"output": "c"}) as m:
+            HANDLERS["fs_read"]({"path": r"C:\x", "offset": 5, "limit": 10})
+        m.assert_called_once_with(r"C:\x", offset=5, limit=10)
 
     def test_fs_write_forwards_path_and_content(self):
         with patch("agent_windows.core.filesystem.write_file", return_value={"output": "c"}) as m:
             HANDLERS["fs_write"]({"path": r"C:\x", "content": "hi"})
-        m.assert_called_once_with(r"C:\x", "hi")
+        m.assert_called_once_with(r"C:\x", "hi", append=False)
 
     def test_fs_write_content_must_be_str(self):
         with pytest.raises(ValueError, match="must be str"):
@@ -259,7 +265,7 @@ class TestFsHandlers:
     def test_fs_list_forwards_path(self):
         with patch("agent_windows.core.filesystem.list_dir", return_value={"output": "c"}) as m:
             HANDLERS["fs_list"]({"path": r"C:\x"})
-        m.assert_called_once_with(r"C:\x")
+        m.assert_called_once_with(r"C:\x", pattern=None, recursive=False, show_hidden=False)
 
 
 class TestClipboardHandlers:

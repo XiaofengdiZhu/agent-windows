@@ -59,6 +59,18 @@ class TestRouteRequest:
             assert resp.error["code"] == PERMISSION_DENIED
             assert "blocked by policy" in resp.error["message"]
 
+    def test_file_not_found_maps_to_element_not_found(self):
+        """A handler raising FileNotFoundError (e.g. fs_read on a missing path)
+        maps to ELEMENT_NOT_FOUND (-1001), not DAEMON_INTERNAL_ERROR (-1999) with
+        log spam. TODO #4 added 6 new raise sites widening this blast radius."""
+        from agent_windows.ipc.protocol import ELEMENT_NOT_FOUND
+        with patch.dict(HANDLERS, {"missing": MagicMock(side_effect=FileNotFoundError("gone"))}):
+            req = JSONRPCRequest(id=1, method="missing")
+            resp = route_request(req)
+            assert resp.error is not None
+            assert resp.error["code"] == ELEMENT_NOT_FOUND
+            assert "gone" in resp.error["message"]
+
 
 class TestRequire:
     def test_missing_and_none_raise(self):
@@ -84,6 +96,7 @@ class TestRequire:
                     "click", "type", "scroll", "shortcut", "batch",
                     "ground", "detect", "ask-vision",
                     "shell", "fs_read", "fs_write", "fs_list",
+                    "fs_copy", "fs_move", "fs_delete", "fs_search", "fs_info",
                     "clipboard_get", "clipboard_set",
                     "process_list", "process_kill",
                     "app_launch", "app_switch", "app_list",

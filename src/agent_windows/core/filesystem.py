@@ -1,7 +1,10 @@
-"""File system operations: read, write, list."""
+"""File system operations: read, write, list, copy, move, delete, search, info."""
 
-import os
+import fnmatch
 import logging
+import os
+import shutil
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +17,7 @@ logger = logging.getLogger(__name__)
 # (SEC3-03)
 MAX_READ_BYTES = 5 * 1024 * 1024  # 5 MiB
 MAX_LIST_ENTRIES = 5000
+MAX_SEARCH_RESULTS = 1000
 
 # Path blacklist: match by path component to deny access to sensitive
 # directories and files. Each entry is a tuple: (match pattern, description)
@@ -46,6 +50,42 @@ _BLOCKED_PART_PREFIXES: tuple[tuple[tuple[str, ...], str], ...] = (
 _CREDENTIAL_DIRS = frozenset({
     ".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker",
 })
+
+
+# Relative paths in fs_* operations resolve against the user's Desktop, so an
+# agent can say "report.txt" instead of an absolute path. Win32 SHGetFolderPathW
+# is the same call platformdirs.user_desktop_dir() bottoms out at; resolving it
+# here avoids adding platformdirs as a dependency. (TODO #4)
+def _desktop_dir() -> Path:
+    import ctypes
+
+    CSIDL_DESKTOP = 0
+    buf = ctypes.create_unicode_buffer(260)
+    try:
+        if ctypes.windll.shell32.SHGetFolderPathW(0, CSIDL_DESKTOP, 0, 0, buf) == 0:
+            return Path(buf.value)
+    except Exception:
+        logger.debug("SHGetFolderPathW failed; falling back to ~/Desktop", exc_info=True)
+    return Path.home() / "Desktop"
+
+
+def _resolve_user_path(path: str) -> str:
+    """Anchor a relative path against the Desktop; pass absolutes through.
+
+    Pure string normalization — NOT a security check. Each operation still runs
+    the result through ``_validate_path`` / ``_validate_write_path`` so the
+    blacklist and reparse-point defenses apply to the resolved path.
+    """
+    if os.path.isabs(path):
+        return path
+    return str(_desktop_dir() / path)
+
+
+def _as_bool(value: Any) -> bool:
+    """Tolerate bool-or-string truthiness for JSON-RPC params (some clients
+    send "true"/"false" strings). True bools pass through; the JSON-RPC layer
+    normally delivers real bools, so this is defensive. (TODO #4)"""
+    return value is True or (isinstance(value, str) and value.lower() == "true")
 
 
 def _validate_path(path: str) -> Path:
@@ -195,19 +235,55 @@ def validate_executable_path(path: str) -> None:
         )
 
 
-def read_file(path: str) -> dict[str, Any]:
+def read_file(path: str, offset: int | None = None, limit: int | None = None) -> dict[str, Any]:
     """Read a file and return its contents.
+
+    ``offset`` / ``limit`` (1-based line numbers) select a line range instead
+    of the whole file — for large files that would otherwise hit the 5 MiB
+    cap. When omitted, the whole file is read (capped at ``MAX_READ_BYTES``).
 
     Capped at ``MAX_READ_BYTES`` (5 MiB) to bound daemon memory — a larger file
     is truncated with a notice rather than read whole. (SEC3-03)
     """
-    p = _validate_path(path)
+    p = _validate_path(_resolve_user_path(path))
     if not p.exists():
         raise FileNotFoundError(f"File not found: {path}")
     if p.is_dir():
         raise ValueError(f"Path is a directory, not a file: {path}")
 
     size = p.stat().st_size
+
+    # Line-range mode (TODO #4): read by lines and slice. The cap still applies
+    # to the returned content; offset/limit let callers avoid reading a huge
+    # file whole by selecting the slice they want.
+    if offset is not None or limit is not None:
+        try:
+            with p.open("r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+        except UnicodeDecodeError:
+            return {
+                "output": f"## File Read\nPath: {p}\n[Binary file, cannot read by lines]",
+                "content": "",
+                "size": size,
+                "truncated": False,
+            }
+        total = len(lines)
+        start = max(0, (offset or 1) - 1)  # 1-based → 0-based
+        end = start + limit if limit else total
+        selected = lines[start:end]
+        content = "".join(selected)
+        if len(content) > MAX_READ_BYTES:
+            content = content[:MAX_READ_BYTES]
+        note = f"\n\n[Showing lines {start + 1}-{min(end, total)} of {total}]"
+        return {
+            "output": f"## File Read\nPath: {p}\nSize: {size} bytes\n---\n{content}{note}",
+            "content": content,
+            "size": size,
+            "truncated": False,
+            "lines_total": total,
+            "lines_shown": f"{start + 1}-{min(end, total)}",
+        }
+
     truncated = size > MAX_READ_BYTES
 
     try:
@@ -232,44 +308,265 @@ def read_file(path: str) -> dict[str, Any]:
     }
 
 
-def write_file(path: str, content: str) -> dict[str, Any]:
-    """Write content to a file."""
-    p = _validate_write_path(path)
+def write_file(path: str, content: str, append: bool = False) -> dict[str, Any]:
+    """Write content to a file, or append when ``append=True`` (TODO #4)."""
+    p = _validate_write_path(_resolve_user_path(path))
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(content, encoding="utf-8")
-    return {"output": f"## File Write\nPath: {p}\nSize: {len(content)} bytes"}
+    mode = "a" if _as_bool(append) else "w"
+    with p.open(mode, encoding="utf-8") as f:
+        f.write(content)
+    action = "Appended to" if mode == "a" else "Written to"
+    return {"output": f"## File {action.title()}\nPath: {p}\nSize: {p.stat().st_size} bytes"}
 
 
-def list_dir(path: str) -> dict[str, Any]:
+def list_dir(path: str, pattern: str | None = None, recursive: bool = False, show_hidden: bool = False) -> dict[str, Any]:
     """List directory contents.
+
+    ``pattern`` filters entry names via ``fnmatch`` (non-recursive) or the glob
+    itself (recursive). ``recursive=True`` walks subdirectories via ``rglob``.
+    ``show_hidden`` keeps dotfile entries (skipped by default). (TODO #4)
 
     Capped at ``MAX_LIST_ENTRIES`` so a directory with millions of entries can't
     exhaust daemon memory. (SEC3-03)
     """
-    p = _validate_path(path)
+    p = _validate_path(_resolve_user_path(path))
     if not p.exists():
         raise FileNotFoundError(f"Directory not found: {path}")
     if not p.is_dir():
         raise ValueError(f"Path is not a directory: {path}")
 
+    recursive = _as_bool(recursive)
+    show_hidden = _as_bool(show_hidden)
+
+    # In recursive mode the pattern is the glob itself (rglob(pattern)); in
+    # non-recursive mode it's a post-filter on each name via fnmatch.
+    if recursive:
+        iterator = p.rglob(pattern or "*")
+    else:
+        iterator = p.iterdir()
+
     entries = []
     total = 0
     truncated = False
-    for entry in sorted(p.iterdir()):
+    for entry in sorted(iterator, key=lambda e: (not e.is_dir(), e.name.lower())):
+        if not show_hidden and entry.name.startswith("."):
+            continue
+        if pattern and not recursive and not fnmatch.fnmatch(entry.name, pattern):
+            continue
         total += 1
         if len(entries) >= MAX_LIST_ENTRIES:
             truncated = True
             continue  # keep counting for the total, but stop formatting
-        if entry.is_dir():
+        try:
+            is_dir = entry.is_dir()
+        except OSError:
+            is_dir = False
+        if is_dir:
             entries.append(f"  {entry.name}/")
         else:
-            size = entry.stat().st_size
+            try:
+                size = entry.stat().st_size
+            except OSError:
+                size = 0
             entries.append(f"  {entry.name} ({size} bytes)")
 
     listing = "\n".join(entries) if entries else "(empty)"
     note = f"\n\n[Truncated: directory has {total} entries, showed first {MAX_LIST_ENTRIES}]" if truncated else ""
+    header = f"## Directory Listing\nPath: {p}"
+    if pattern:
+        header += f"\nFilter: {pattern}"
     return {
-        "output": f"## Directory Listing\nPath: {p}\n---\n{listing}{note}",
+        "output": f"{header}\n---\n{listing}{note}",
         "count": total,
         "truncated": truncated,
     }
+
+
+def _check_overwrite_shape(src: Path, dst: Path) -> None:
+    """Reject a cross-type overwrite (file↔dir) BEFORE any destructive op.
+
+    Without this, ``move(file, nonempty_dir, overwrite=True)`` would rmtree the
+    destination first and THEN fail (NotADirectoryError) — destroying unrelated
+    files and leaving nothing usable. (review B3) Raises ValueError on mismatch.
+    """
+    if dst.is_dir() and not src.is_dir():
+        raise ValueError(f"Cannot overwrite a directory with a file: {dst}")
+    if dst.is_file() and src.is_dir():
+        raise ValueError(f"Cannot overwrite a file with a directory: {dst}")
+
+
+def copy_path(source: str, destination: str, overwrite: bool = False) -> dict[str, Any]:
+    """Copy a file or directory to ``destination`` (TODO #4).
+
+    Source is read-validated, destination write-validated (so a copy can't
+    land inside the agent's install/data tree or a blacklisted dir). Refuses
+    to overwrite an existing destination unless ``overwrite=True``.
+    """
+    overwrite = _as_bool(overwrite)
+    src = _validate_path(_resolve_user_path(source))
+    dst = _validate_write_path(_resolve_user_path(destination))
+    if not src.exists():
+        raise FileNotFoundError(f"Source not found: {source}")
+    if dst.exists() and not overwrite:
+        raise ValueError(f"Destination already exists: {destination}. Set overwrite=True to replace.")
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if src.is_file():
+        if dst.exists() and overwrite:
+            _check_overwrite_shape(src, dst)
+            shutil.rmtree(dst) if dst.is_dir() else dst.unlink()
+        shutil.copy2(src, dst)
+        kind = "file"
+    elif src.is_dir():
+        if dst.exists() and overwrite:
+            _check_overwrite_shape(src, dst)
+            shutil.rmtree(dst)
+        shutil.copytree(src, dst)
+        kind = "directory"
+    else:
+        raise ValueError(f"Unsupported source type: {source}")
+    return {"output": f"## File Copy\nCopied {kind}: {src} -> {dst}"}
+
+
+def move_path(source: str, destination: str, overwrite: bool = False) -> dict[str, Any]:
+    """Move/rename a file or directory (TODO #4).
+
+    The source is write-validated (not read-validated like copy): moving
+    REMOVES the file from the source path, so it's a write to that location —
+    the agent's install/data tree and blacklist must protect it, exactly as
+    they do for delete_path. (review B2)
+    """
+    overwrite = _as_bool(overwrite)
+    src = _validate_write_path(_resolve_user_path(source))
+    dst = _validate_write_path(_resolve_user_path(destination))
+    if not src.exists():
+        raise FileNotFoundError(f"Source not found: {source}")
+    if dst.exists() and not overwrite:
+        raise ValueError(f"Destination already exists: {destination}. Set overwrite=True to replace.")
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if dst.exists() and overwrite:
+        _check_overwrite_shape(src, dst)
+        shutil.rmtree(dst) if dst.is_dir() else dst.unlink()
+    shutil.move(src, dst)
+    return {"output": f"## File Move\nMoved: {src} -> {dst}"}
+
+
+def delete_path(path: str, recursive: bool = False) -> dict[str, Any]:
+    """Delete a file or directory (TODO #4).
+
+    The target is write-validated (treated as a write — so the blacklist AND
+    the agent's install/data-tree protection both apply: a prompt-injected
+    delete can't remove the agent's own source, config, or blacklisted files).
+    A non-empty directory requires ``recursive=True``; otherwise it's refused.
+    """
+    recursive = _as_bool(recursive)
+    p = _validate_write_path(_resolve_user_path(path))
+    if not p.exists():
+        raise FileNotFoundError(f"Path not found: {path}")
+    if p.is_file() or p.is_symlink():
+        p.unlink()
+        return {"output": f"## File Delete\nDeleted file: {p}"}
+    if p.is_dir():
+        if not recursive and any(p.iterdir()):
+            raise ValueError(f"Directory is not empty: {path}. Set recursive=True to delete non-empty directories.")
+        shutil.rmtree(p)
+        return {"output": f"## File Delete\nDeleted directory: {p}"}
+    raise ValueError(f"Unsupported file type: {path}")
+
+
+def search_files(path: str, pattern: str, recursive: bool = True) -> dict[str, Any]:
+    """Find files/dirs matching a glob ``pattern`` under ``path`` (TODO #4).
+
+    ``recursive=True`` (default) walks the whole subtree via ``rglob``;
+    ``recursive=False`` checks only the top level via ``glob``. Capped at
+    ``MAX_SEARCH_RESULTS`` to bound daemon memory on huge trees.
+    """
+    recursive = _as_bool(recursive)
+    p = _validate_path(_resolve_user_path(path))
+    if not p.exists():
+        raise FileNotFoundError(f"Search path not found: {path}")
+    if not p.is_dir():
+        raise ValueError(f"Search path is not a directory: {path}")
+
+    iterator = p.rglob(pattern) if recursive else p.glob(pattern)
+    results = []
+    count = 0
+    truncated = False
+    for match in sorted(iterator, key=lambda e: e.name.lower()):
+        count += 1
+        if len(results) >= MAX_SEARCH_RESULTS:
+            truncated = True
+            break
+        try:
+            size = match.stat().st_size if match.is_file() else 0
+        except OSError:
+            size = 0
+        rel = match.relative_to(p)
+        tag = "DIR " if match.is_dir() else "FILE"
+        results.append(f"  [{tag}] {rel}  ({size} bytes)" if match.is_file() else f"  [{tag}] {rel}")
+
+    if not results:
+        return {"output": f'## File Search\nNo matches for "{pattern}" in {p}', "count": 0}
+    listing = "\n".join(results)
+    note = f"\n\n[Truncated: {MAX_SEARCH_RESULTS}+ matches]" if truncated else ""
+    return {
+        "output": f'## File Search\nPattern: "{pattern}" in {p} ({min(count, MAX_SEARCH_RESULTS)} matches)\n{listing}{note}',
+        "count": count,
+        "truncated": truncated,
+    }
+
+
+def get_file_info(path: str) -> dict[str, Any]:
+    """Return metadata about a file or directory (TODO #4)."""
+    p = _validate_path(_resolve_user_path(path))
+    if not p.exists() and not p.is_symlink():
+        raise FileNotFoundError(f"Path not found: {path}")
+    # lstat (not stat): stat() follows the link target and raises on a dangling
+    # symlink, but an "info" tool should report the link itself. lstat stats the
+    # link entry, succeeding on broken links. (review M1)
+    stat = p.lstat()
+    if p.is_dir():
+        file_type = "Directory"
+    elif p.is_file():
+        file_type = "File"
+    elif p.is_symlink():
+        file_type = "Symlink"
+    else:
+        file_type = "Other"
+
+    lines = [
+        f"## File Info",
+        f"Path: {p}",
+        f"Type: {file_type}",
+        f"Size: {stat.st_size} bytes",
+        f"Created: {datetime.fromtimestamp(stat.st_ctime).strftime('%Y-%m-%d %H:%M:%S')}",
+        f"Modified: {datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')}",
+        f"Accessed: {datetime.fromtimestamp(stat.st_atime).strftime('%Y-%m-%d %H:%M:%S')}",
+        f"Read-only: {not os.access(p, os.W_OK)}",
+    ]
+    result: dict[str, Any] = {
+        "output": "\n".join(lines),
+        "path": str(p),
+        "type": file_type,
+        "size": stat.st_size,
+        "created": stat.st_ctime,
+        "modified": stat.st_mtime,
+        "accessed": stat.st_atime,
+        "read_only": not os.access(p, os.W_OK),
+    }
+    if p.is_dir():
+        try:
+            items = list(p.iterdir())
+            result["contents_dirs"] = sum(1 for i in items if i.is_dir())
+            result["contents_files"] = sum(1 for i in items if i.is_file())
+            result["output"] += f"\nContents: {result['contents_files']} files, {result['contents_dirs']} directories"
+        except PermissionError:
+            pass
+    if p.is_file():
+        ext = p.suffix or "(none)"
+        result["extension"] = ext
+        result["output"] += f"\nExtension: {ext}"
+    if p.is_symlink():
+        target = str(os.readlink(p))
+        result["link_target"] = target
+        result["output"] += f"\nLink target: {target}"
+    return result
