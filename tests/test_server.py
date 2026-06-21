@@ -361,8 +361,10 @@ class TestMainPipeLoop:
         assert resp["error"]["code"] == -32600  # INVALID_REQUEST
 
     def test_shutdown_command_triggers_request_shutdown(self):
-        """A 'shutdown' method routes the response, writes it, then calls
-        request_shutdown and breaks the loop."""
+        """A 'shutdown' method routes the response, calls request_shutdown, and
+        breaks the loop. (request_shutdown is invoked BEFORE the reply write so
+        a fire-and-forget client that closes before reading — e.g. the
+        launcher's `daemon stop` — can't skip shutdown via a write failure.)"""
         state = self._make_state()
         written = self._run_one_request(
             json.dumps({"jsonrpc": "2.0", "id": 1, "method": "shutdown"}), state=state)
@@ -370,6 +372,54 @@ class TestMainPipeLoop:
         assert resp["result"]["status"] == "ok"
         assert resp["result"]["action"] == "shutting_down"
         assert state["shutdown_event"].is_set()
+
+    def test_shutdown_triggers_request_shutdown_even_if_write_fails(self):
+        """The launcher's `daemon stop` uses a fire-and-forget client (write the
+        shutdown request, close the handle without reading the reply). With the
+        client end already closed, write_pipe raises ERROR_NO_DATA (232).
+        request_shutdown() must still fire — otherwise the daemon never stops
+        and `daemon stop` always reports a graceful-shutdown timeout.
+
+        Regression for the bug where request_shutdown sat AFTER write_pipe in
+        the shutdown branch: the raised exception skipped it entirely and the
+        outer `except Exception` just logged + continued the loop.
+        """
+        from agent_windows.daemon import server as srv
+
+        state = self._make_state()
+        # Drive one shutdown request, then stop the loop on the next create.
+        request_str = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "shutdown"})
+        reads = {"n": 0}
+
+        def fake_read(_pipe):
+            reads["n"] += 1
+            return request_str if reads["n"] == 1 else ""
+
+        creates = {"n": 0}
+
+        def fake_create():
+            creates["n"] += 1
+            if creates["n"] >= 2:
+                state["shutdown_event"].set()
+            return "fake_pipe"
+
+        def write_raises(_pipe, _msg):
+            raise OSError(232, "ERROR_NO_DATA: pipe is closing")
+
+        with patch.object(srv, "create_pipe_server", side_effect=fake_create), \
+             patch.object(srv.win32pipe, "ConnectNamedPipe"), \
+             patch.object(srv.win32event, "CreateEvent", return_value="evt"), \
+             patch.object(srv.win32event, "WaitForSingleObject", return_value=0), \
+             patch.object(srv.win32api, "CloseHandle"), \
+             patch.object(srv, "read_pipe", side_effect=fake_read), \
+             patch.object(srv, "disconnect_pipe"), \
+             patch.object(srv, "write_pipe", side_effect=write_raises), \
+             patch.object(srv.pywintypes, "OVERLAPPED", return_value=MagicMock(hEvent="evt")):
+            srv._main_pipe_loop(state)
+
+        # The real contract under test: shutdown fired despite the write failure.
+        assert state["shutdown_event"].is_set(), \
+            "request_shutdown must fire even when the shutdown reply write fails"
 
     def test_normal_command_dispatched_to_sta_worker(self):
         """A normal command is submitted to sta_thread.submit and the response

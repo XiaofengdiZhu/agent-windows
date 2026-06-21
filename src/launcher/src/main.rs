@@ -168,14 +168,24 @@ fn strip_global_flags(argv: &[String]) -> (GlobalFlags, Vec<String>) {
     }
 
     // Phase 2: everything from the command name onward is the command's argv.
-    // We do NOT keep stripping global flags here (--no-daemon/--format/--debug
-    // past the command belong to the command, per the Typer contract). The one
-    // exception is `--help`/`-h`, which Typer makes reachable from any slot —
-    // so we scan the tail for it, drop it from its position, and hoist it to
-    // the front (below) where `parse` recognizes it.
+    // We do NOT keep stripping global flags here (--format/--debug past the
+    // command belong to the command, per the Typer contract). Two exceptions:
+    //
+    //   - `--help`/`-h`: Typer makes it reachable from any slot, so we hoist it
+    //     to the front where `parse` recognizes it.
+    //   - `--no-daemon`: the launcher doesn't support no-daemon mode at all, so
+    //     the correct response is the same "use the Python CLI" error regardless
+    //     of where the flag appears. Without this, a flag placed after the
+    //     command (e.g. `screenshot --no-daemon`) was silently swallowed by
+    //     ParsedArgs as an unknown boolean option and the command ran via the
+    //     daemon — looking like it worked while ignoring the flag. `--format`/
+    //     `--debug` are intentionally NOT collected here: past the command they
+    //     belong to the command (a Python-CLI parity contract locked by the
+    //     `global_flag_after_command_is_passed_through` test).
     for a in &argv[i..] {
         match a.as_str() {
             "--help" | "-h" => help_seen = true,
+            "--no-daemon" => g.no_daemon = true,
             other => rest.push(other.into()),
         }
     }
@@ -684,11 +694,30 @@ mod tests {
         assert!(!g.format_json, "--format after the command must not set json mode");
         assert_eq!(rest, argv(&["click", "10", "20", "--format", "json"]));
 
-        // Same for --debug / --no-daemon after the command.
-        let (g, rest) = strip_global_flags(&argv(&["type", "--debug", "--no-daemon"]));
+        // Same for --debug after the command: belongs to the command, not a
+        // global (Python-CLI parity).
+        let (g, rest) = strip_global_flags(&argv(&["type", "--debug"]));
         assert!(!g.debug);
-        assert!(!g.no_daemon);
-        assert_eq!(rest, argv(&["type", "--debug", "--no-daemon"]));
+        assert_eq!(rest, argv(&["type", "--debug"]));
+    }
+
+    #[test]
+    fn no_daemon_after_command_is_collected_not_silently_swallowed() {
+        // `--no-daemon` after the command must be recognized so run_call can
+        // route the user to the Python CLI with the standard error. Without
+        // this, `screenshot --no-daemon` silently dropped the flag (ParsedArgs
+        // treated it as an unknown boolean option) and the command ran via the
+        // daemon — looking like it worked while ignoring the flag. The flag is
+        // pulled out of `rest` so it can't confuse ParsedArgs either.
+        let (g, rest) = strip_global_flags(&argv(&["screenshot", "--no-daemon"]));
+        assert!(g.no_daemon, "--no-daemon after command must set no_daemon");
+        assert!(!rest.contains(&"--no-daemon".to_string()));
+        assert_eq!(rest, argv(&["screenshot"]));
+
+        // Mid-tail position is also collected.
+        let (g, rest) = strip_global_flags(&argv(&["screenshot", "--no-daemon", "--output", "x.png"]));
+        assert!(g.no_daemon);
+        assert_eq!(rest, argv(&["screenshot", "--output", "x.png"]));
     }
 
     #[test]

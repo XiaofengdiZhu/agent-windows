@@ -413,9 +413,26 @@ def _main_pipe_loop(state):
                 # Check for shutdown command
                 if request.method == "shutdown":
                     resp = route_request(request)
-                    write_pipe(pipe, resp.to_json())
-                    disconnect_pipe(pipe)
+                    # Act on shutdown BEFORE writing the reply. The launcher's
+                    # `daemon stop` uses a fire-and-forget client (send_no_wait:
+                    # write the request, close the handle without reading the
+                    # response) so it can't block on a busy daemon. With the
+                    # client's end already closed, write_pipe below would raise
+                    # ERROR_NO_DATA (232) — if request_shutdown() sat after it,
+                    # the exception skipped shutdown entirely and the daemon
+                    # stayed alive (observed: `daemon stop` always timed out).
+                    # Ordering shutdown first honors the documented contract: the
+                    # daemon acts on shutdown regardless of whether the client
+                    # reads the reply. The reply write/disconnect is best-effort.
                     request_shutdown()
+                    try:
+                        write_pipe(pipe, resp.to_json())
+                        disconnect_pipe(pipe)
+                    except Exception:
+                        logger.debug(
+                            "Shutdown reply write failed (client may have closed first)",
+                            exc_info=True,
+                        )
                     break
 
                 # Submit to STA thread and wait for result
