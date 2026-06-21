@@ -462,6 +462,84 @@ class TestMainPipeLoop:
         # request_shutdown was invoked (sets the shutdown_event) and loop broke
         assert state["shutdown_event"].is_set()
 
+    def test_loser_daemon_never_writes_pid_file(self):
+        """A losing daemon (FIRST_PIPE_INSTANCE → DaemonStartupError on first
+        create_pipe_server) must NOT write the PID/version files. The deferral
+        to after first successful pipe creation guarantees the PID file always
+        names the pipe owner — a loser that overwrote it would point
+        _daemon_process_alive at a process that's about to exit, wedging the
+        system. This locks the state_files_written guard in _main_pipe_loop."""
+        from agent_windows.daemon import server as srv
+        from agent_windows.ipc.pipe import DaemonStartupError
+
+        state = self._make_state()
+        pid_writes = []
+        version_writes = []
+        with patch.object(srv, "create_pipe_server",
+                          side_effect=DaemonStartupError("duplicate instance")), \
+             patch.object(srv, "read_pipe"), \
+             patch.object(srv, "disconnect_pipe"), \
+             patch.object(srv, "write_pipe"), \
+             patch.object(srv, "write_pid_file",
+                          side_effect=lambda *a: pid_writes.append(1)), \
+             patch.object(srv, "write_version_file",
+                          side_effect=lambda *a: version_writes.append(1)):
+            srv._main_pipe_loop(state)
+        assert pid_writes == [], "loser wrote the PID file (would overwrite winner's)"
+        assert version_writes == [], "loser wrote the version file"
+        assert state["shutdown_event"].is_set()
+
+    def test_winner_writes_pid_file_exactly_once(self):
+        """The winning daemon writes PID/version files exactly once — after the
+        first successful create_pipe_server. Across multiple client connections
+        (multiple loop iterations), the files must not be re-written. Locks the
+        state_files_written once-only guard in _main_pipe_loop."""
+        from agent_windows.daemon import server as srv
+
+        state = self._make_state()
+        pid_writes = []
+        version_writes = []
+        # Feed two requests then stop, so the loop iterates at least twice
+        # past the first create_pipe_server.
+        reads = {"n": 0}
+
+        def fake_read(_pipe):
+            reads["n"] += 1
+            # Two real requests, then '' to end.
+            if reads["n"] <= 2:
+                return json.dumps({"jsonrpc": "2.0", "id": reads["n"], "method": "ping"})
+            return ""
+
+        creates = {"n": 0}
+
+        def fake_create():
+            creates["n"] += 1
+            if creates["n"] >= 4:  # let it serve both, then stop
+                state["shutdown_event"].set()
+            return "fake_pipe"
+
+        with patch.object(srv, "create_pipe_server", side_effect=fake_create), \
+             patch.object(srv.win32pipe, "ConnectNamedPipe"), \
+             patch.object(srv.win32event, "CreateEvent", return_value="evt"), \
+             patch.object(srv.win32event, "WaitForSingleObject", return_value=0), \
+             patch.object(srv.win32api, "CloseHandle"), \
+             patch.object(srv, "read_pipe", side_effect=fake_read), \
+             patch.object(srv, "disconnect_pipe"), \
+             patch.object(srv, "write_pipe"), \
+             patch.object(srv, "write_pid_file",
+                          side_effect=lambda *a: pid_writes.append(1)), \
+             patch.object(srv, "write_version_file",
+                          side_effect=lambda *a: version_writes.append(1)), \
+             patch.object(srv.pywintypes, "OVERLAPPED",
+                          return_value=MagicMock(hEvent="evt")):
+            srv._main_pipe_loop(state)
+
+        assert len(pid_writes) == 1, (
+            f"PID file written {len(pid_writes)} times — must be exactly once "
+            "(state_files_written guard is broken)"
+        )
+        assert len(version_writes) == 1
+
     def test_command_timeout_writes_error_and_disconnects(self):
         """A TimeoutError from sta_thread.submit → write a -1003 (WAIT_TIMEOUT)
         error response, then disconnect the pipe (no busy-spin)."""

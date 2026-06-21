@@ -520,6 +520,11 @@ fn daemon_spawn_and_wait(python: &str, debug: bool) -> Result<String, String> {
         return Ok("Daemon already running".into());
     }
     match daemon::spawn_and_wait_for_pipe(python, debug) {
+        // pid == 0 is the in-lock early return: another spawner won the race
+        // while we held the spawn lock. Surface the same "already running"
+        // message as the top-of-function fast path — NOT "PID 0" (no process
+        // has PID 0, and this invocation did not start the daemon).
+        Ok(0) => Ok("Daemon already running".into()),
         Ok(pid) => Ok(format!("Daemon started (PID {})", pid)),
         Err(e) => Err(e),
     }
