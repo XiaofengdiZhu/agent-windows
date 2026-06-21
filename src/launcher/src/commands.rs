@@ -230,6 +230,13 @@ pub struct GlobalFlags {
     pub no_daemon: bool,
     pub format_json: bool,
     pub debug: bool,
+    /// `--no-daemon` appeared AFTER the command name (tail position). The
+    /// launcher only honors --no-daemon in the prefix (where it triggers
+    /// Python-CLI delegation); in the tail it's a usage error — the Python CLI
+    /// rejects a post-command --no-daemon as "No such option", and silently
+    /// running via the daemon would ignore the user's intent. `main()` checks
+    /// this and emits a clear error.
+    pub no_daemon_in_tail: bool,
 }
 
 // ── Helpers: tiny option parser ─────────────────────────────────────────────

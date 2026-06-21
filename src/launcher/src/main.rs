@@ -26,6 +26,23 @@ fn main() -> ExitCode {
     // ── Parse global flags (consumed before the command name) ──────────────
     let (global, cmd_argv) = strip_global_flags(&argv);
 
+    // `--no-daemon` after the command name is a usage error. The Python Typer
+    // CLI only accepts global options in the prefix, so a post-command
+    // --no-daemon would be rejected there too ("No such option"). Without this
+    // check the launcher would silently run via the daemon, ignoring the user's
+    // intent. We surface a clear error pointing at the correct placement
+    // instead. Checked before the config/no-daemon delegation so a misplaced
+    // flag is reported even when it accompanies an otherwise-delegated command.
+    if global.no_daemon_in_tail && !global.no_daemon {
+        report_error(
+            "--no-daemon must appear before the command name, not after it. \
+             Try: agent-windows --no-daemon <command> [args...]",
+            "usage",
+            &global,
+        );
+        return ExitCode::from(1);
+    }
+
     // `config` is delegated to the Python CLI (`agent-windows-python`). It
     // touches only the local config file (no daemon, no COM/UIA), but porting
     // it to Rust would mean duplicating DEFAULT_CONFIG, DPAPI encryption, the
@@ -42,6 +59,23 @@ fn main() -> ExitCode {
     // command is delegated; `config` appearing as an argument to another
     // command can't reach here (cmd_argv[0] is the command name).
     if cmd_argv.first().is_some_and(|c| c == "config") {
+        return run_python_cli(&argv, &global);
+    }
+
+    // `--no-daemon` is delegated to the Python CLI the same way `config` is.
+    // The launcher is a thin pipe-forwarder with no in-process Python handlers,
+    // so no-daemon mode (direct execution via route_request in the same process)
+    // must run inside a Python process. We forward the full original argv
+    // verbatim — the Python Typer CLI re-parses --no-daemon/--format/--debug and
+    // the command itself, exactly as if the user had typed
+    // `agent-windows-python --no-daemon ...` directly. Placed AFTER the config
+    // intercept so `--no-daemon config show` still takes the config branch
+    // (both reach Python; order is just defensive).
+    //
+    // This runs before the USERPROFILE check: no-daemon execution only needs a
+    // Python interpreter, not the daemon state dir, so a missing USERPROFILE
+    // shouldn't block it (matches the config path).
+    if global.no_daemon {
         return run_python_cli(&argv, &global);
     }
 
@@ -104,9 +138,10 @@ fn main() -> ExitCode {
 /// **Runtime errors** — something went wrong executing a valid command;
 ///   - `daemon`  — daemon lifecycle/startup failure or a JSON-RPC error reply
 ///   - `ipc`     — named-pipe transport failure (connect/send/recv)
-///   - `usage`   — `--no-daemon` unsupported by the launcher
-///   - `launch`  — a delegated subprocess (e.g. `config` → agent-windows-python)
-///                  could not be started (missing exe, permission denied, …)
+///   - `usage`   — a usage-contract violation (e.g. USERPROFILE not set)
+///   - `launch`  — a delegated subprocess (e.g. `config`/`--no-daemon`
+///                  → agent-windows-python) could not be started (missing exe,
+///                  permission denied, …)
 ///   - `timeout` — a `wait` probe exceeded its timeout
 fn report_error(msg: &str, error_type: &str, global: &GlobalFlags) {
     if global.format_json {
@@ -168,27 +203,26 @@ fn strip_global_flags(argv: &[String]) -> (GlobalFlags, Vec<String>) {
     }
 
     // Phase 2: everything from the command name onward is the command's argv.
-    // We do NOT keep stripping global flags here (--format/--debug past the
-    // command belong to the command, per the Typer contract). Two exceptions:
+    // We do NOT keep stripping global flags here (--no-daemon/--format/--debug
+    // past the command belong to the command, per the Typer contract). The one
+    // exception is `--help`/`-h`, which Typer makes reachable from any slot —
+    // so we scan the tail for it, drop it from its position, and hoist it to
+    // the front (below) where `parse` recognizes it.
     //
-    //   - `--help`/`-h`: Typer makes it reachable from any slot, so we hoist it
-    //     to the front where `parse` recognizes it.
-    //   - `--no-daemon`: the launcher doesn't support no-daemon mode at all, so
-    //     the correct response is the same "use the Python CLI" error regardless
-    //     of where the flag appears. Without this, a flag placed after the
-    //     command (e.g. `screenshot --no-daemon`) was silently swallowed by
-    //     ParsedArgs as an unknown boolean option and the command ran via the
-    //     daemon — looking like it worked while ignoring the flag. `--format`/
-    //     `--debug` are intentionally NOT collected here: past the command they
-    //     belong to the command (a Python-CLI parity contract locked by the
-    //     `global_flag_after_command_is_passed_through` test).
+    // `--no-daemon` in the tail is flagged (not collected) so the caller can
+    // emit a clear error rather than silently running via the daemon (the
+    // Python CLI rejects a post-command --no-daemon as "No such option"; we
+    // mirror that contract). The prefix-position --no-daemon is the only form
+    // that triggers Python-CLI delegation.
+    let mut no_daemon_in_tail = false;
     for a in &argv[i..] {
         match a.as_str() {
             "--help" | "-h" => help_seen = true,
-            "--no-daemon" => g.no_daemon = true,
+            "--no-daemon" => no_daemon_in_tail = true,
             other => rest.push(other.into()),
         }
     }
+    g.no_daemon_in_tail = no_daemon_in_tail;
 
     // `--help`/`-h` is reachable from any position (Typer special-cases it).
     // If it appeared anywhere, surface it at the front of `rest` so `parse`
@@ -202,18 +236,8 @@ fn strip_global_flags(argv: &[String]) -> (GlobalFlags, Vec<String>) {
 
 /// Run a daemon call: ensure daemon up → build request → IPC → print.
 fn run_call(method: &str, params: &serde_json::Value, global: &GlobalFlags) -> ExitCode {
-    // --no-daemon isn't supported by the launcher (it needs the in-process
-    // Python handlers). Route the user to the Python CLI.
-    if global.no_daemon {
-        report_error(
-            "--no-daemon is not supported by the native launcher. \
-             Use the Python CLI: agent-windows-python --no-daemon ...",
-            "usage",
-            global,
-        );
-        return ExitCode::from(1);
-    }
-
+    // NOTE: --no-daemon is intercepted in main() before parse() runs, so it
+    // can never reach here. This function always goes through the daemon.
     let python = resolve_python_exe();
 
     if let Err(e) = daemon::ensure_daemon_running(&python, global.debug) {
@@ -257,16 +281,8 @@ fn run_call(method: &str, params: &serde_json::Value, global: &GlobalFlags) -> E
 /// cli/commands/wait.py: repeatedly probe `wait_check` with local sleeps in
 /// between, so the daemon's STA worker is never blocked for the wait duration.
 fn run_wait(spec: WaitSpec, global: &GlobalFlags) -> ExitCode {
-    if global.no_daemon {
-        report_error(
-            "--no-daemon is not supported by the native launcher. \
-             Use the Python CLI: agent-windows-python --no-daemon ...",
-            "usage",
-            global,
-        );
-        return ExitCode::from(1);
-    }
-
+    // NOTE: --no-daemon is intercepted in main() before parse() runs, so it
+    // can never reach here. This function always goes through the daemon.
     let python = resolve_python_exe();
     if let Err(e) = daemon::ensure_daemon_running(&python, global.debug) {
         report_error(&e, "daemon", global);
@@ -360,9 +376,10 @@ fn run_wait(spec: WaitSpec, global: &GlobalFlags) -> ExitCode {
 }
 
 /// Delegate to the Python CLI (`agent-windows-python`), forwarding the full
-/// original argv verbatim. Used for `config` (and any future command not yet
-/// ported to the launcher). Stdio is inherited so output/exit-code/global-flag
-/// behavior is identical to calling `agent-windows-python` directly.
+/// original argv verbatim. Used for `config` (a command not ported to the
+/// launcher) and `--no-daemon` (which needs the in-process Python handlers
+/// the launcher doesn't have). Stdio is inherited so output/exit-code/global-
+/// flag behavior is identical to calling `agent-windows-python` directly.
 ///
 /// The sibling executable is located next to this launcher: `uv tool install`
 /// places both `agent-windows.exe` and `agent-windows-python.exe` in the same
@@ -566,7 +583,7 @@ fn print_help() {
 Usage: agent-windows [OPTIONS] <COMMAND>
 
 Global options (before the command):
-  --no-daemon   Not supported by the launcher (use agent-windows-python)
+  --no-daemon   Direct execution (delegated to the Python CLI, no daemon)
   --format json JSON output instead of text
   --debug       Verbose (only affects daemon spawn logging)
 
@@ -601,8 +618,8 @@ Commands:
   config init/show/set/doctor      Configuration (delegated to the Python CLI)
   ping                             Daemon health check (round-trip)
 
-Native launcher (fast startup). For --no-daemon mode, use agent-windows-python
-(the Python CLI) directly.
+Native launcher (fast startup). --no-daemon and config are delegated to
+agent-windows-python (the Python CLI).
 "#;
     output::print_text(help);
 }
@@ -702,21 +719,27 @@ mod tests {
     }
 
     #[test]
-    fn no_daemon_after_command_is_collected_not_silently_swallowed() {
-        // `--no-daemon` after the command must be recognized so run_call can
-        // route the user to the Python CLI with the standard error. Without
-        // this, `screenshot --no-daemon` silently dropped the flag (ParsedArgs
-        // treated it as an unknown boolean option) and the command ran via the
-        // daemon — looking like it worked while ignoring the flag. The flag is
-        // pulled out of `rest` so it can't confuse ParsedArgs either.
+    fn no_daemon_after_command_is_flagged_not_silently_swallowed() {
+        // `--no-daemon` after the command is a usage error (Python Typer CLI
+        // only accepts global options in the prefix). strip_global_flags must
+        // NOT set g.no_daemon for a tail-position flag (that would trigger
+        // Python-CLI delegation, then the Python CLI would reject the
+        // post-command --no-daemon as "No such option" — confusing). Instead it
+        // sets no_daemon_in_tail so main() can emit a clear placement error.
+        //
+        // Critically, the flag is pulled OUT of `rest` so ParsedArgs can't
+        // silently swallow it as an unknown boolean option and run via the
+        // daemon (the original bug this test guards against).
         let (g, rest) = strip_global_flags(&argv(&["screenshot", "--no-daemon"]));
-        assert!(g.no_daemon, "--no-daemon after command must set no_daemon");
+        assert!(!g.no_daemon, "tail --no-daemon must NOT set no_daemon");
+        assert!(g.no_daemon_in_tail, "tail --no-daemon must set no_daemon_in_tail");
         assert!(!rest.contains(&"--no-daemon".to_string()));
         assert_eq!(rest, argv(&["screenshot"]));
 
-        // Mid-tail position is also collected.
+        // Mid-tail position is also flagged, and surrounding options pass through.
         let (g, rest) = strip_global_flags(&argv(&["screenshot", "--no-daemon", "--output", "x.png"]));
-        assert!(g.no_daemon);
+        assert!(!g.no_daemon);
+        assert!(g.no_daemon_in_tail);
         assert_eq!(rest, argv(&["screenshot", "--output", "x.png"]));
     }
 
