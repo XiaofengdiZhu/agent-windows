@@ -514,6 +514,41 @@ Three modes:
 
 Raises error code `-1003` (WAIT_TIMEOUT) on timeout.
 
+### wait-for
+
+Wait until a multi-condition UI predicate is satisfied. Polls the accessibility tree until the condition matches or the timeout elapses.
+
+```bash
+agent-windows wait-for text_exists --text "完成"              # any visible text
+agent-windows wait-for active_window --window "Notepad"       # active window title
+agent-windows wait-for element_exists --text OK --timeout 10  # an element exists
+agent-windows wait-for element_enabled --text Submit           # ...and is enabled
+agent-windows wait-for focused_element --text "Search"         # ...and has focus
+agent-windows wait-for enabled --text OK --interval 0.2        # short alias + custom poll
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `condition` | str | **required** | One of: `text_exists`, `active_window`, `element_exists`, `element_enabled`, `focused_element` (short aliases `text`/`window`/`element`/`enabled`/`focused` also accepted) |
+| `--text` | str | `""` | Case-sensitive substring. Matched against element name/control_type/metadata values, or window titles depending on the condition |
+| `--window` | str | `""` | Case-sensitive substring to scope element matching to a window title |
+| `--timeout` / `-t` | float | `30` | Max seconds to wait (capped at 300s) |
+| `--interval` | float | `0` | Poll interval (0 = use config default 0.5s) |
+
+Conditions:
+
+| Condition | Matches when |
+|-----------|--------------|
+| `text_exists` | Any visible text — active window title, any window title, or any interactive element's name/control_type/window_name/metadata — contains `--text` |
+| `active_window` | The active window's title contains `--text` (or `--window`) |
+| `element_exists` | An interactive element matches `--text` and (if given) `--window` |
+| `element_enabled` | As `element_exists`, and the element is enabled |
+| `focused_element` | As `element_exists`, and the element has keyboard focus |
+
+**Matching is case-sensitive substring** (e.g. `--text OK` matches `"OK Button"` but not `"ok button"`). This differs from some other tools' case-insensitive matching — match the exact case shown in `snapshot` output, or use a substring that is case-stable (e.g. a control type like `Button`).
+
+Like `wait`, the CLI polls the daemon with short non-blocking probes so the daemon's worker is never blocked for the wait duration. Raises error code `-1003` (WAIT_TIMEOUT) on timeout, `-32602` (INVALID_PARAMS) for an unknown/invalid condition.
+
 ### batch
 
 Execute multiple commands in one call.

@@ -101,6 +101,7 @@ class TestRequire:
                     "process_list", "process_kill",
                     "app_launch", "app_switch", "app_list",
                     "get_text", "element_state", "wait", "wait_check",
+                    "wait_for", "wait_for_check",
                     "highlight", "diff", "cleanup_screenshots",
                     "move", "drag", "hover", "dblclick",
                     "mouse_down", "mouse_up", "app_resize"}

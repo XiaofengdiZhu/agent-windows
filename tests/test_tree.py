@@ -247,6 +247,57 @@ class TestInteractivity:
         assert interactive[0].control_type == "EditControl"
 
 
+# ── window_name plumbing (TODO #7 prerequisite) ─────────────────────
+
+
+class TestElementWindowName:
+    """_traverse_node must stamp each ElementInfo with the owning window's
+    title (free — the WindowInfo is already a parameter), and render_snapshot
+    must surface it as a Window column so WaitFor's window_name condition has
+    data to match against."""
+
+    def test_traverse_stamps_owning_window_title(self):
+        root = FakeElement(control_type=PANE, children=[
+            FakeElement(name="OK", control_type=BUTTON),
+            FakeElement(name="Cancel", control_type=BUTTON),
+        ])
+        _link_siblings(root.children)
+        _, interactive = traverse(FakeClient(root), root)
+        assert len(interactive) == 2
+        # The `traverse` helper builds WindowInfo(title="FakeWin", ...), so both
+        # collected elements inherit that title.
+        assert all(el.window_name == "FakeWin" for el in interactive)
+
+    def test_default_window_name_empty_for_back_compat(self):
+        """ElementInfo constructed without window_name defaults to "" so
+        existing constructors (and the make_element fixture) stay compatible."""
+        el = ElementInfo(name="x", control_type="ButtonControl", bbox=None)
+        assert el.window_name == ""
+
+    def test_render_snapshot_shows_window_column(self):
+        el = ElementInfo(
+            name="OK", control_type="ButtonControl",
+            bbox=BoundingBox(0, 0, 10, 10), window_name="Settings")
+        rendered = render_snapshot({
+            "cursor": (0, 0), "resolution": (1920, 1080), "displays": 1,
+            "active_window": None, "windows": [], "semantic_tree": "",
+            "interactive_elements": [el],
+        })
+        assert "| Window |" in rendered  # header includes the new column
+        assert "Settings" in rendered     # the element's owning window title
+
+    def test_render_snapshot_empty_window_name_blank(self):
+        """An element with no owning window renders an empty Window cell, not
+        'None' or a crash — guards legacy ElementInfo without window_name."""
+        el = ElementInfo(name="OK", control_type="ButtonControl", bbox=None)
+        rendered = render_snapshot({
+            "cursor": (0, 0), "resolution": (1920, 1080), "displays": 1,
+            "active_window": None, "windows": [], "semantic_tree": "",
+            "interactive_elements": [el],
+        })
+        assert "| Window |" in rendered
+
+
 # ── depth limit ──────────────────────────────────────────────────────
 
 

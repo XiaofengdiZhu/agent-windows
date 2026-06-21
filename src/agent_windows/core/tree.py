@@ -138,6 +138,13 @@ class ElementInfo:
     # these to the front of the interactive-elements list so the agent sees the
     # blocking dialog first, but does NOT drop other windows' elements.
     is_modal: bool = False
+    # Title of the top-level WindowInfo this element belongs to. Filled during
+    # traversal from the owning window's ``title`` (no extra COM cost — the
+    # window is already an _traverse_node parameter). Enables WaitFor conditions
+    # like element_exists + window_name to scope a match to a specific window.
+    # ``str`` (not Optional) with a "" default so existing constructors and the
+    # make_element test fixture stay backward-compatible without changes.
+    window_name: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -667,6 +674,7 @@ def _traverse_node(
                     is_enabled=is_enabled,
                     is_offscreen=is_offscreen,
                     is_modal=this_in_modal,
+                    window_name=window.title,
                 ))
 
         # Recurse into children. PERF3-05: fetch all children pre-cached in one
@@ -784,12 +792,16 @@ def render_snapshot(data: dict[str, Any]) -> str:
     elements = data.get("interactive_elements", [])
     if elements:
         parts.append("## Interactive Elements")
-        parts.append("| Ref | Type | Name | Position | State |")
-        parts.append("|-----|------|------|----------|-------|")
+        parts.append("| Ref | Type | Name | Window | Position | State |")
+        parts.append("|-----|------|------|---------|----------|-------|")
         for i, el in enumerate(elements, 1):
             ref = f"@e{i}"
             type_name = el.control_type.replace("Control", "")
             name = el.name[:40] if el.name else ""
+            # Truncate the owning window title like the Windows table does, so a
+            # long title doesn't blow out the row width. Empty when the element
+            # has no owning window (legacy/constructed ElementInfo).
+            window_name = el.window_name[:30] if el.window_name else ""
             pos = str(el.bbox) if el.bbox else "N/A"
             states = []
             if el.is_modal:
@@ -799,7 +811,7 @@ def render_snapshot(data: dict[str, Any]) -> str:
             if not el.is_enabled:
                 states.append("disabled")
             state_str = ", ".join(states)
-            parts.append(f"| {ref} | {type_name} | {name} | {pos} | {state_str} |")
+            parts.append(f"| {ref} | {type_name} | {name} | {window_name} | {pos} | {state_str} |")
         parts.append("")
 
     return "\n".join(parts)

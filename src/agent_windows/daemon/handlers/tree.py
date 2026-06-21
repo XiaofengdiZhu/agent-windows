@@ -195,3 +195,119 @@ def _wait_check(params: dict) -> dict[str, Any]:
     cfg = load_config().get("tree", {})
     found, payload = _wait_check_once(selector, text, cfg)
     return {"found": found, **payload}
+
+
+# ── WaitFor: multi-condition polling (TODO #7) ──────────────────────
+
+
+def _wait_for_once(
+    condition: str, text: str, window_name: str, cfg: dict
+) -> tuple[bool, dict[str, Any]]:
+    """One non-blocking WaitFor probe — is the condition satisfied right now?
+
+    No sleep, no loop. Shared by the blocking ``wait_for`` handler (loops it
+    server-side for ``batch``) and the non-blocking ``wait_for_check`` handler
+    (polled client-side by the CLI, same M-28 rationale as ``wait_check``).
+    Returns ``(matched, payload)``.
+    """
+    from agent_windows.core.tree import get_tree_snapshot
+    from agent_windows.core.wait_for import matches_condition
+
+    snapshot = get_tree_snapshot(
+        max_depth=cfg.get("max_depth", 15),
+        include_invisible=cfg.get("include_invisible", False),
+        include_offscreen=cfg.get("include_offscreen", False),
+        max_elements=cfg.get("max_elements", 200),
+        timeout=cfg.get("timeout", 10),
+    )
+    matched, detail = matches_condition(snapshot, condition, text, window_name)
+    return matched, {"condition": condition, "detail": detail}
+
+
+@handler("wait_for")
+def _wait_for(params: dict) -> dict[str, Any]:
+    """Wait until a multi-condition UI predicate is satisfied (TODO #7).
+
+    Conditions: text_exists / active_window / element_exists /
+    element_enabled / focused_element. Polls the UIA tree server-side until the
+    condition matches or ``timeout`` elapses. Retained for ``batch`` (whose IPC
+    round-trip is inherently sequential); interactive CLI use polls
+    ``wait_for_check`` client-side (M-28).
+
+    ``text`` and ``window_name`` are case-sensitive substring filters. The
+    match semantics are documented in ``skills/.../commands.md``.
+    """
+    from agent_windows.core.wait_for import validate_wait_for
+    from agent_windows.utils.config import load_config
+
+    condition = params.get("condition", "")
+    text = params.get("text", "")
+    window_name = params.get("window_name", "")
+    timeout = float(params.get("timeout", 30))
+    interval = float(params.get("interval", 0))
+
+    # Normalize + validate. interval=0 means "use config fallback", which is
+    # resolved below — validate with None here so the bounds check is skipped,
+    # then re-check after the fallback resolves (a bad config value must still
+    # surface as INVALID_PARAMS rather than a tight busy-loop).
+    condition = validate_wait_for(
+        condition, text, window_name, timeout=timeout, interval=None,
+        max_timeout=MAX_WAIT_SECONDS,
+    )
+
+    poll_interval = interval or (
+        load_config().get("wait", {}).get("poll_interval", 0.5)
+    )
+    if poll_interval <= 0 or poll_interval > 5:
+        raise ValueError("interval must be greater than 0 and at most 5 seconds")
+
+    cfg = load_config().get("tree", {})
+    start = time.time()
+
+    while True:
+        matched, payload = _wait_for_once(condition, text, window_name, cfg)
+        if matched:
+            elapsed = time.time() - start
+            return {
+                "output": (
+                    f"## WaitFor\nCondition {condition} satisfied after "
+                    f"{elapsed:.1f}s: {payload['detail']}"
+                ),
+                "condition": condition,
+                "elapsed": round(elapsed, 1),
+                **payload,
+            }
+        if time.time() - start >= timeout:
+            raise TimeoutError(
+                f"WaitFor condition {condition} not satisfied within "
+                f"{timeout}s: {payload['detail']}"
+            )
+        time.sleep(poll_interval)
+
+
+@handler("wait_for_check")
+def _wait_for_check(params: dict) -> dict[str, Any]:
+    """Single non-blocking WaitFor probe: is the condition satisfied right now?
+
+    Returns ``{"found": bool, condition, detail}`` with no looping or sleeping.
+    The CLI ``wait-for`` command polls this client-side so the daemon's single
+    STA worker is never tied up for the wait duration (M-28).
+    """
+    from agent_windows.core.wait_for import validate_wait_for
+    from agent_windows.utils.config import load_config
+
+    condition = params.get("condition", "")
+    text = params.get("text", "")
+    window_name = params.get("window_name", "")
+
+    # Normalize + validate the condition (bad condition → INVALID_PARAMS). Skip
+    # the interval check (None) — a single probe has no poll interval — and use
+    # a nominal in-range timeout so the timeout bounds check passes.
+    condition = validate_wait_for(
+        condition, text, window_name, timeout=1.0, interval=None,
+        max_timeout=MAX_WAIT_SECONDS,
+    )
+
+    cfg = load_config().get("tree", {})
+    found, payload = _wait_for_once(condition, text, window_name, cfg)
+    return {"found": found, **payload}

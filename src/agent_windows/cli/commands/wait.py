@@ -109,3 +109,101 @@ def wait(
                 )
             raise typer.Exit(1)
         time.sleep(poll_interval)
+
+
+def wait_for(
+    ctx: typer.Context,
+    condition: str = typer.Argument(
+        ...,
+        help="Condition: text_exists|active_window|element_exists|"
+             "element_enabled|focused_element (short aliases ok: "
+             "text/window/element/enabled/focused)",
+    ),
+    text: str = typer.Option(
+        "",
+        "--text",
+        help="Case-sensitive substring to match in element name/control_type/"
+             "metadata, or window title",
+    ),
+    window: str = typer.Option(
+        "",
+        "--window",
+        help="Case-sensitive substring to scope matching to a window title",
+    ),
+    timeout: float = typer.Option(
+        30,
+        "--timeout",
+        "-t",
+        help="Max seconds to wait (capped at 300s by the daemon)",
+    ),
+    interval: float = typer.Option(
+        0,
+        "--interval",
+        help="Poll interval in seconds (default: from config, usually 0.5)",
+    ),
+) -> None:
+    """Wait until a multi-condition UI predicate is satisfied (TODO #7).
+
+    \b
+    Conditions (text/window filters are case-sensitive substring):
+      text_exists      -- any visible text contains --text
+      active_window    -- the active window title contains --text or --window
+      element_exists   -- an element matches --text (and --window if given)
+      element_enabled  -- a matching element that is enabled
+      focused_element  -- a matching element that has keyboard focus
+
+    \b
+    Examples:
+      agent-windows wait-for text_exists --text "完成"
+      agent-windows wait-for active_window --window "Notepad"
+      agent-windows wait-for element_exists --text OK --timeout 10
+      agent-windows wait-for enabled --text Submit --interval 0.2
+    """
+    from agent_windows.utils.config import load_config
+    from agent_windows.core.wait_for import normalize_condition
+
+    # Validate the condition client-side so a typo fails fast (one clear error)
+    # instead of busy-polling the daemon with an INVALID_PARAMS request every
+    # interval for the whole timeout window. normalize_condition raises
+    # ValueError on an unknown condition.
+    try:
+        normalize_condition(condition)
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+
+    poll_interval = interval or (
+        load_config().get("wait", {}).get("poll_interval", 0.5)
+    )
+
+    probe = {"condition": condition, "text": text, "window_name": window}
+
+    # Poll client-side: each probe is one short wait_for_check request, the CLI
+    # sleeps between probes so the daemon's STA worker is never blocked for the
+    # wait duration (M-28, same pattern as `wait`).
+    start = time.time()
+    while True:
+        result = dispatch("wait_for_check", probe, ctx)
+        if result.get("found"):
+            elapsed = time.time() - start
+            detail = result.get("detail", "")
+            cond = result.get("condition", condition)
+            print_result({
+                "output": (
+                    f"## WaitFor\nCondition {cond} satisfied after "
+                    f"{elapsed:.1f}s: {detail}"
+                ),
+                "condition": cond,
+                "elapsed": round(elapsed, 1),
+                "detail": detail,
+            }, ctx)
+            return
+        if time.time() - start >= timeout:
+            detail = result.get("detail", "")
+            typer.echo(
+                f"Error: WaitFor condition {condition!r} not satisfied within "
+                f"{timeout}s: {detail}",
+                err=True,
+            )
+            raise typer.Exit(1)
+        time.sleep(poll_interval)
