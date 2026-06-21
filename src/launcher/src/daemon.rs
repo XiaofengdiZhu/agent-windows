@@ -10,7 +10,14 @@ use std::time::{Duration, Instant};
 
 use crate::ipc::{daemon_pipe_exists, send_no_wait};
 use crate::win32::{is_process_alive, poll_process, read_stderr_to_string, spawn_daemon, truncate_for_error_msg};
-use windows_sys::Win32::Foundation::HANDLE;
+use windows_sys::Win32::{
+    Foundation::{CloseHandle, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE},
+    Storage::FileSystem::{
+        CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        LOCKFILE_EXCLUSIVE_LOCK, LockFileEx, OPEN_ALWAYS, UnlockFileEx,
+    },
+    System::IO::OVERLAPPED,
+};
 
 /// Max retries × interval while waiting for a freshly-spawned daemon to create
 /// its pipe (matches Python's MAX_CONNECT_RETRIES × RETRY_INTERVAL_S).
@@ -37,6 +44,92 @@ pub fn version_file_path() -> PathBuf {
     p.push(".agent-windows");
     p.push("daemon.version");
     p
+}
+
+/// `~/.agent-windows/daemon.lock` — the cross-process lock file that
+/// serializes daemon spawns. Mirrors `get_lock_path` in utils/config.py. Both
+/// the launcher (Rust, `LockFileEx`) and the Python client
+/// (`win32file.LockFileEx`) lock this same path, so a Rust spawner and a
+/// Python spawner correctly exclude each other — the lock is kernel-level and
+/// keyed by file path, language-agnostic.
+pub fn lock_file_path() -> PathBuf {
+    let mut p = home_dir();
+    p.push(".agent-windows");
+    p.push("daemon.lock");
+    p
+}
+
+/// RAII cross-process exclusive lock on `daemon.lock`, acquired via
+/// `LockFileEx`. Held across the check-then-spawn critical section so
+/// concurrent spawners can't each decide the daemon is down and spawn a rival.
+///
+/// Mirrors `DaemonSpawnLock` in `ipc/lock.py` — same file, same flags, same
+/// 0xFFFF0000 lock length, so Rust and Python lock holders correctly exclude
+/// each other. Blocks in the kernel (no CPU spin) until the lock is acquired;
+/// on spawn-failure (the caller proceeds without the lock rather than wedging
+/// every command if the file is inaccessible — orphaned daemons are a resource
+/// leak, not a correctness issue).
+struct DaemonSpawnLock {
+    handle: HANDLE,
+    overlapped: OVERLAPPED,
+    acquired: bool,
+}
+
+impl DaemonSpawnLock {
+    /// Acquire the exclusive lock, blocking until it's available. On failure
+    /// (file inaccessible, permissions, …) returns a lock with `acquired =
+    /// false` so the caller can proceed without serialization rather than
+    /// failing the whole command.
+    fn acquire() -> Self {
+        let path_w = crate::ipc::widen(&lock_file_path().to_string_lossy());
+        let handle = unsafe {
+            CreateFileW(
+                path_w.as_ptr(),
+                GENERIC_READ | GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                std::ptr::null(),
+                OPEN_ALWAYS, // create if absent
+                FILE_ATTRIBUTE_NORMAL,
+                std::ptr::null_mut(),
+            )
+        };
+        if handle == INVALID_HANDLE_VALUE {
+            // Couldn't open the lock file — proceed unlocked (fail-open).
+            return Self { handle: std::ptr::null_mut(), overlapped: unsafe { std::mem::zeroed() }, acquired: false };
+        }
+        let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
+        // Lock byte range [0, 0xFFFF0000) — matches the Python side. A 1-byte
+        // range would suffice for mutual exclusion, but 0xFFFF0000 is the
+        // conventional "whole file" length used by Windows samples.
+        let rc = unsafe {
+            LockFileEx(
+                handle,
+                LOCKFILE_EXCLUSIVE_LOCK,
+                0,
+                0xFFFF0000,
+                0,
+                &mut overlapped,
+            )
+        };
+        if rc == 0 {
+            // LockFileEx failure — close the handle and proceed unlocked.
+            unsafe { CloseHandle(handle) };
+            return Self { handle: std::ptr::null_mut(), overlapped: unsafe { std::mem::zeroed() }, acquired: false };
+        }
+        Self { handle, overlapped, acquired: true }
+    }
+}
+
+impl Drop for DaemonSpawnLock {
+    fn drop(&mut self) {
+        if !self.acquired {
+            return;
+        }
+        unsafe {
+            UnlockFileEx(self.handle, 0, 0xFFFF0000, 0, &mut self.overlapped);
+            CloseHandle(self.handle);
+        }
+    }
 }
 
 /// Equivalent of `ensure_daemon_running(debug)`:
@@ -90,6 +183,26 @@ pub fn ensure_daemon_running(python_exe: &str, debug: bool) -> Result<(), String
 /// holds on the success path — here we close them internally since both callers
 /// (`ensure_daemon_running`, `daemon start`) only want the pid-or-error.
 pub(crate) fn spawn_and_wait_for_pipe(python_exe: &str, debug: bool) -> Result<u32, String> {
+    // Serialize the spawn across processes: hold DaemonSpawnLock for the whole
+    // check-then-spawn-then-wait window so a concurrent spawner (another
+    // launcher invocation, or a Python ensure_daemon_running) can't race in
+    // and start a rival daemon. The lock is kernel-level (LockFileEx) and
+    // shared with the Python client, so Rust and Python spawners correctly
+    // exclude each other.
+    //
+    // If the lock can't be acquired (file inaccessible), `_lock.acquired` is
+    // false and we proceed anyway — fail-open, since an orphaned daemon is a
+    // resource leak, not a correctness issue, and the command must stay
+    // responsive. FIRST_PIPE_INSTANCE on the pipe is the hard backstop: even
+    // if two spawners slip through, the loser daemon exits cleanly.
+    let _lock = DaemonSpawnLock::acquire();
+
+    // Double-check inside the lock: while we waited, another spawner may have
+    // brought the daemon up. Skip our spawn if so.
+    if daemon_pipe_exists() || daemon_process_alive() {
+        return Ok(0);
+    }
+
     // `stderr_read` is the read end of an anonymous pipe wired to the daemon's
     // stderr, so if it exits early we can surface the real traceback (import
     // failure, etc.) instead of a generic "check the logs" message (#9).

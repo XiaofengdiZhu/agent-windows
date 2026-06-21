@@ -61,19 +61,29 @@ class TestEnsureDaemonRunning:
             lambda debug=False: SimpleNamespace(poll=lambda: 42),
         )
         monkeypatch.setattr(client.time, "sleep", lambda _: None)
+        # DaemonSpawnLock is also acquired inside ensure_daemon_running (around
+        # the spawn). Use a no-op stub so the test doesn't touch the real lock
+        # file — we're testing the fail-fast path, not the lock.
+        from contextlib import nullcontext
+        monkeypatch.setattr(
+            "agent_windows.ipc.lock.DaemonSpawnLock", lambda *a, **k: nullcontext()
+        )
         with pytest.raises(ConnectionError, match="code 42"):
             client.ensure_daemon_running()
-        # Fail-fast: one top fast-path check + one loop iteration (where poll
-        # detected the exit) — NOT the full 25-iteration window (26 calls).
-        assert pipe_calls["n"] == 2
+        # Fail-fast: top fast-path check + one in-lock double-check + one loop
+        # iteration (where poll detected the exit) — NOT the full 25-iteration
+        # window. The in-lock check is new (spawn serialization); it doesn't
+        # change the fail-fast guarantee.
+        assert pipe_calls["n"] == 3
 
     def test_ready_after_spawn_when_daemon_alive(self, monkeypatch):
         import agent_windows.ipc.client as client
 
-        # Top fast-path False (so we spawn), False once in the loop (daemon
+        # Top fast-path False (so we spawn), then one in-lock double-check
+        # (also False — daemon starting), then False once in the loop (daemon
         # alive but the pipe isn't up yet), then True — exercises the loop body
         # and confirms the alive poll() (None) does NOT trigger fail-fast.
-        seq = [False, False, True]
+        seq = [False, False, False, True]
         monkeypatch.setattr(client, "pipe_exists", lambda: seq.pop(0) if seq else True)
         monkeypatch.setattr(
             client,
@@ -81,6 +91,11 @@ class TestEnsureDaemonRunning:
             lambda debug=False: SimpleNamespace(poll=lambda: None),
         )
         monkeypatch.setattr(client.time, "sleep", lambda _: None)
+        # DaemonSpawnLock stubbed out — see test_fail_fast_when_daemon_exits...
+        from contextlib import nullcontext
+        monkeypatch.setattr(
+            "agent_windows.ipc.lock.DaemonSpawnLock", lambda *a, **k: nullcontext()
+        )
         client.ensure_daemon_running()  # must not raise
 
     def test_full_window_timeout_when_daemon_hangs_alive(self, monkeypatch):
@@ -95,6 +110,10 @@ class TestEnsureDaemonRunning:
             lambda debug=False: SimpleNamespace(poll=lambda: None),
         )
         monkeypatch.setattr(client.time, "sleep", lambda _: None)
+        from contextlib import nullcontext
+        monkeypatch.setattr(
+            "agent_windows.ipc.lock.DaemonSpawnLock", lambda *a, **k: nullcontext()
+        )
         with pytest.raises(ConnectionError, match="did not become ready"):
             client.ensure_daemon_running()
 

@@ -110,6 +110,14 @@ def ensure_daemon_running(debug: bool = False) -> None:
     loop — fail fast with its exit code rather than waiting out the full retry
     window: a broken install would otherwise hang every CLI command ~5s on an
     opaque "did not become ready". (M-31)
+
+    The spawn decision is serialized across processes by a ``LockFileEx``-based
+    lock (``DaemonSpawnLock``). Without it, two concurrent CLI calls could each
+    observe "daemon down" during the pipe-recreate gap and both spawn a daemon;
+    the loser exits cleanly now (FIRST_PIPE_INSTANCE), but the waste + spurious
+    "exited during startup" error still degrade the experience. The lock is
+    acquired only around the check-then-spawn critical section, not the whole
+    command, so a stuck spawn can't wedge unrelated commands for long.
     """
     if pipe_exists():
         # Fast path: daemon already running and pipe is connectable
@@ -123,32 +131,41 @@ def ensure_daemon_running(debug: bool = False) -> None:
         return
 
     logger.info("Daemon not running, starting...")
-    proc = _start_daemon_process(debug=debug)
+    from agent_windows.ipc.lock import DaemonSpawnLock
 
-    # Retry connection
-    for i in range(MAX_CONNECT_RETRIES):
-        time.sleep(RETRY_INTERVAL_S)
-        if pipe_exists():
-            logger.info("Daemon ready (attempt %d)", i + 1)
+    with DaemonSpawnLock():
+        # Double-check inside the lock: another spawner may have just brought
+        # the daemon up while we waited for the lock. Skip spawning if so.
+        if pipe_exists() or _daemon_process_alive():
+            logger.debug("Daemon came up while waiting for spawn lock")
             return
-        # Spawned, but the pipe still isn't there — if the process has already
-        # exited it failed during startup (a healthy daemon blocks in its main
-        # loop after creating the pipe and never exits). Abort now with the
-        # exit code instead of burning the rest of the window. (M-31)
-        rc = proc.poll()
-        if rc is not None:
-            raise ConnectionError(
-                f"Daemon process exited during startup (code {rc}) — likely a "
-                "configuration or environment error. Check the daemon log at "
-                "~/.agent-windows/logs/daemon.log, or run "
-                f"`{sys.executable} -m agent_windows --daemon --debug` for "
-                "console output."
-            )
 
-    raise ConnectionError(
-        f"Daemon did not become ready after {MAX_CONNECT_RETRIES} retries "
-        f"({MAX_CONNECT_RETRIES * RETRY_INTERVAL_S:.1f}s)"
-    )
+        proc = _start_daemon_process(debug=debug)
+
+        # Retry connection
+        for i in range(MAX_CONNECT_RETRIES):
+            time.sleep(RETRY_INTERVAL_S)
+            if pipe_exists():
+                logger.info("Daemon ready (attempt %d)", i + 1)
+                return
+            # Spawned, but the pipe still isn't there — if the process has already
+            # exited it failed during startup (a healthy daemon blocks in its main
+            # loop after creating the pipe and never exits). Abort now with the
+            # exit code instead of burning the rest of the window. (M-31)
+            rc = proc.poll()
+            if rc is not None:
+                raise ConnectionError(
+                    f"Daemon process exited during startup (code {rc}) — likely a "
+                    "configuration or environment error. Check the daemon log at "
+                    "~/.agent-windows/logs/daemon.log, or run "
+                    f"`{sys.executable} -m agent_windows --daemon --debug` for "
+                    "console output."
+                )
+
+        raise ConnectionError(
+            f"Daemon did not become ready after {MAX_CONNECT_RETRIES} retries "
+            f"({MAX_CONNECT_RETRIES * RETRY_INTERVAL_S:.1f}s)"
+        )
 
 
 def _start_daemon_process(debug: bool = False) -> subprocess.Popen:

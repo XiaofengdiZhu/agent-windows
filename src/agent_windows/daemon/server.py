@@ -266,8 +266,16 @@ def _init_daemon_state():
     # Write version before PID: launchers (native + Python) treat a live PID
     # whose version file is absent as a stale/mismatched daemon and will kill
     # it. Writing version first closes that startup window.
-    write_version_file(version_path, __version__)
-    write_pid_file(pid_path)
+    #
+    # NOTE: the actual write is deferred until _main_pipe_loop successfully
+    # creates the named pipe (see _write_state_files / the `first_iter` flag in
+    # _main_pipe_loop). Writing here — before create_pipe_server — would let a
+    # losing daemon (one that raced another for the single-instance pipe and is
+    # about to hit FIRST_PIPE_INSTANCE) overwrite the winner's PID file. By
+    # writing only after the pipe is held, we guarantee the PID file always
+    # names the process that actually owns the pipe. cleanup_stale_daemon above
+    # already cleared any stale file, and the spawn-wait loops key on pipe
+    # existence (not the PID file), so the deferral is safe.
 
     # Clean old screenshots
     try:
@@ -319,10 +327,9 @@ def _start_workers(state):
     state["idle_monitor"] = idle_monitor
     state["request_shutdown"] = request_shutdown
 
-    # Re-write version/PID (after threads confirmed healthy). Version first,
-    # same ordering as the initial write above.
-    write_version_file(state["version_path"], __version__)
-    write_pid_file(state["pid_path"])
+    # PID/version file write is deferred to _main_pipe_loop (after the pipe is
+    # successfully created), so a losing daemon can't overwrite the winner's
+    # state files. See the note in _init_daemon_state.
 
     logger.info("Daemon ready, listening on %s", PIPE_NAME)
 
@@ -345,12 +352,25 @@ def _main_pipe_loop(state):
     idle_monitor = state["idle_monitor"]
     request_shutdown = state["request_shutdown"]
 
+    # Write PID/version files only after the pipe is successfully held, and
+    # only once. A losing daemon (FIRST_PIPE_INSTANCE failure) exits before
+    # this runs, so it can never overwrite the winner's state files.
+    state_files_written = False
+
     try:
         while not shutdown_event.is_set():
             pipe = None
             overlapped_event = None
             try:
                 pipe = create_pipe_server()
+
+                # First successful pipe creation → we won the single-instance
+                # race. Now it's safe to publish our PID/version. Deferred from
+                # _init_daemon_state so losers can't overwrite these.
+                if not state_files_written:
+                    write_version_file(state["version_path"], __version__)
+                    write_pid_file(state["pid_path"])
+                    state_files_written = True
 
                 # Use overlapped I/O so ConnectNamedPipe can be interrupted on shutdown
                 overlapped = pywintypes.OVERLAPPED()

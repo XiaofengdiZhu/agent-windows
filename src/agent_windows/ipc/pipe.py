@@ -75,10 +75,21 @@ def create_pipe_server(pipe_name: str = PIPE_NAME, buffer_size: int = BUFFER_SIZ
     falling back to the Windows default (which grants read access to Everyone
     and the anonymous account) — a security control must fail closed (M-02).
 
+    FILE_FLAG_FIRST_PIPE_INSTANCE makes CreateNamedPipe fail fast (winerror 5,
+    ERROR_ACCESS_DENIED) if another process already created a pipe with this
+    name. Combined with mapping that error to DaemonStartupError, this makes a
+    losing daemon (one that raced another for the single-instance pipe) exit
+    cleanly instead of busy-spinning forever on the failed bind — the root cause
+    of orphaned ``python.exe --daemon`` processes accumulating under concurrent
+    invocations. The winner recreates its own pipe between client connections
+    without issue: after disconnect the instance is released, so re-creation is
+    a legitimate "first instance" again.
+
     Returns a pipe handle that can be used with connect_pipe_client().
     """
     import win32pipe
     import win32file
+    import pywintypes
 
     sa = _create_pipe_security_attributes()
     if sa is None:
@@ -90,16 +101,33 @@ def create_pipe_server(pipe_name: str = PIPE_NAME, buffer_size: int = BUFFER_SIZ
             "(world-readable) pipe security. See the preceding warning."
         )
 
-    pipe = win32pipe.CreateNamedPipe(
-        pipe_name,
-        win32pipe.PIPE_ACCESS_DUPLEX,
-        win32pipe.PIPE_TYPE_BYTE | win32pipe.PIPE_READMODE_BYTE | win32pipe.PIPE_WAIT,
-        1,  # max instances (serial: one client at a time)
-        buffer_size,
-        buffer_size,
-        0,  # default timeout
-        sa,  # security attributes (restricted to current user)
-    )
+    # 0x00080000 = FILE_FLAG_FIRST_PIPE_INSTANCE. Not exposed by pywin32 as a
+    # named constant, so defined inline. winerror 5 (ERROR_ACCESS_DENIED) when
+    # the name is already taken; winerror 231 (ERROR_PIPE_BUSY) is the
+    # historical fallback on some builds.
+    FILE_FLAG_FIRST_PIPE_INSTANCE = 0x00080000
+    try:
+        pipe = win32pipe.CreateNamedPipe(
+            pipe_name,
+            win32pipe.PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
+            win32pipe.PIPE_TYPE_BYTE | win32pipe.PIPE_READMODE_BYTE | win32pipe.PIPE_WAIT,
+            1,  # max instances (serial: one client at a time)
+            buffer_size,
+            buffer_size,
+            0,  # default timeout
+            sa,  # security attributes (restricted to current user)
+        )
+    except pywintypes.error as e:
+        if e.winerror in (5, 231):
+            # Another daemon instance already owns this pipe. This process is a
+            # duplicate (lost the spawn race) — raise DaemonStartupError so
+            # _main_pipe_loop's except-DaemonStartupError arm exits cleanly
+            # instead of the generic handler busy-spinning on the failure.
+            raise DaemonStartupError(
+                f"Another daemon instance already owns the named pipe "
+                f"(winerror {e.winerror}). This process is a duplicate and will exit."
+            ) from e
+        raise
     logger.debug("Named Pipe created: %s", pipe_name)
     return pipe
 

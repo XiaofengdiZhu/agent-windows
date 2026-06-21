@@ -14,25 +14,33 @@ app = typer.Typer(help="Daemon management")
 def daemon_start() -> None:
     """Start the daemon process."""
     import subprocess
+    from agent_windows.ipc.lock import DaemonSpawnLock
+    from agent_windows.ipc.pipe import pipe_exists
 
-    pid_path = get_pid_path()
+    # Serialize the check-then-spawn with the same cross-process lock the
+    # launcher and ensure_daemon_running use, so two concurrent `daemon start`
+    # invocations can't each pass the liveness check and spawn a rival.
+    with DaemonSpawnLock():
+        # Double-check inside the lock: another starter may have brought the
+        # daemon up while we waited.
+        if pipe_exists():
+            typer.echo("Daemon already running")
+            return
+        info = read_pid_file(get_pid_path())
+        if info and is_process_alive(info[0]):
+            typer.echo(f"Daemon already running (PID={info[0]})")
+            return
 
-    # Check if already running
-    info = read_pid_file(pid_path)
-    if info and is_process_alive(info[0]):
-        typer.echo(f"Daemon already running (PID={info[0]})")
-        return
-
-    # Start daemon subprocess
-    cmd = [sys.executable, "-m", "agent_windows", "--daemon"]
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        stdin=subprocess.DEVNULL,
-        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS,
-    )
-    typer.echo(f"Daemon started (PID={proc.pid})")
+        # Start daemon subprocess
+        cmd = [sys.executable, "-m", "agent_windows", "--daemon"]
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS,
+        )
+        typer.echo(f"Daemon started (PID={proc.pid})")
 
 
 @app.command("stop")

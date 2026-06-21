@@ -44,6 +44,17 @@ def get_version_path() -> Path:
     return get_data_dir() / "daemon.version"
 
 
+def get_lock_path() -> Path:
+    """Path to the cross-process lock file used to serialize daemon spawns.
+
+    Both the Python client and the Rust launcher LockFileEx this file across the
+    check-then-spawn critical section, so concurrent invocations can't each
+    decide the daemon is down and spawn a rival. The lock is kernel-level and
+    language-agnostic (LockFileEx on the same path).
+    """
+    return get_data_dir() / "daemon.lock"
+
+
 _logs_dir_lock = threading.Lock()
 _logs_dir_secured = False
 

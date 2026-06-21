@@ -425,3 +425,28 @@ class TestPipeServerSecurity:
             f"loop retried create_pipe_server {call_count['n']} times — busy-spin"
         )
         assert shutdown_event.is_set(), "request_shutdown() was not called on abort"
+
+    def test_create_pipe_maps_duplicate_instance_to_DaemonStartupError(self):
+        """FIRST_PIPE_INSTANCE: when CreateNamedPipe fails because another
+        daemon already owns the pipe (winerror 5 ACCESS_DENIED, or the
+        historical 231 PIPE_BUSY), create_pipe_server must raise
+        DaemonStartupError — not a bare pywintypes.error. That's what makes a
+        losing daemon exit cleanly via _main_pipe_loop's
+        except-DaemonStartupError arm instead of busy-spinning on the failure.
+        Locks the mapping added to fix orphaned-daemon accumulation."""
+        from agent_windows.ipc import pipe as pipe_mod
+        from agent_windows.ipc.pipe import DaemonStartupError
+        import pywintypes
+
+        # winerror 5 (ACCESS_DENIED) is what FIRST_PIPE_INSTANCE yields when the
+        # name is taken; 231 is the historical alternative. Both must map.
+        for winerror in (5, 231):
+            with patch("win32pipe.CreateNamedPipe",
+                       side_effect=pywintypes.error(winerror, "CreateNamedPipe", "taken")):
+                with patch("agent_windows.ipc.pipe._create_pipe_security_attributes",
+                           return_value="fake_sa"):
+                    with pytest.raises(DaemonStartupError) as exc_info:
+                        pipe_mod.create_pipe_server(r"\\.\pipe\aw-test-dup")
+                    assert "duplicate" in str(exc_info.value).lower(), (
+                        f"winerror {winerror}: message should say this is a duplicate"
+                    )

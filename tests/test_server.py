@@ -303,6 +303,7 @@ class TestMainPipeLoop:
             "idle_monitor": MagicMock(),
             "request_shutdown": MagicMock(side_effect=shutdown_event.set),
             "pid_path": MagicMock(),
+            "version_path": MagicMock(),
         }
 
     def _run_one_request(self, request_str, *, state):
@@ -339,6 +340,8 @@ class TestMainPipeLoop:
              patch.object(srv, "read_pipe", side_effect=fake_read), \
              patch.object(srv, "disconnect_pipe"), \
              patch.object(srv, "write_pipe", side_effect=lambda _p, msg: written.append(msg)), \
+             patch.object(srv, "write_version_file"), \
+             patch.object(srv, "write_pid_file"), \
              patch.object(srv.pywintypes, "OVERLAPPED", return_value=MagicMock(hEvent="evt")):
             srv._main_pipe_loop(state)
         return written
@@ -414,6 +417,8 @@ class TestMainPipeLoop:
              patch.object(srv, "read_pipe", side_effect=fake_read), \
              patch.object(srv, "disconnect_pipe"), \
              patch.object(srv, "write_pipe", side_effect=write_raises), \
+             patch.object(srv, "write_version_file"), \
+             patch.object(srv, "write_pid_file"), \
              patch.object(srv.pywintypes, "OVERLAPPED", return_value=MagicMock(hEvent="evt")):
             srv._main_pipe_loop(state)
 
