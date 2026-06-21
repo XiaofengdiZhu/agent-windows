@@ -746,7 +746,12 @@ def render_snapshot(data: dict[str, Any]) -> str:
     active = data.get("active_window")
 
     parts.append("## Desktop State")
-    parts.append(f"Cursor: ({cursor[0]}, {cursor[1]})")
+    # Cursor: nulled by display filtering when the pointer is off the selected
+    # display(s) (TODO #9-B); show N/A so the agent doesn't use stale coords.
+    if cursor is None:
+        parts.append("Cursor: N/A (off selected display)")
+    else:
+        parts.append(f"Cursor: ({cursor[0]}, {cursor[1]})")
     parts.append(f"Resolution: {res[0]}x{res[1]}")
     parts.append(f"Displays: {displays}")
     # Virtual screen + DPI scale + coordinate space (TODO #3). Appended after
@@ -779,8 +784,20 @@ def render_snapshot(data: dict[str, Any]) -> str:
             parts.append(f"| {i} | {w.title[:40]} | {w.process_name} | {status} | {pos} |")
         parts.append("")
 
-    # Semantic tree
+    # Semantic tree. NOTE: the tree text is NOT display-filtered (TODO #9-B) —
+    # it is a pre-rendered free-text string with no per-line bbox, so clipping
+    # it to a display region is not reliable. When a display filter is active,
+    # surface that here so the agent knows the tree still shows the full desktop
+    # while windows/elements/cursor above are scoped to the selected display(s).
+    display_filter = data.get("display_filter")
     tree = data.get("semantic_tree", "")
+    if display_filter and tree:
+        parts.append(
+            f"[Accessibility Tree not filtered — shows full desktop. "
+            f"Windows/elements/cursor filtered to display(s) "
+            f"{','.join(str(i) for i in display_filter)}]"
+        )
+        parts.append("")
     if tree:
         parts.append("## Accessibility Tree")
         parts.append(tree)
@@ -789,13 +806,20 @@ def render_snapshot(data: dict[str, Any]) -> str:
     # Interactive elements table. The list itself is already ordered with modal
     # elements first (see traverse_tree), so @eN refs here match the indices
     # resolve_element uses against interactive_elements (PERF3-06).
+    #
+    # Display filtering (TODO #9-B) stashes each survivor's ORIGINAL 1-based
+    # index in metadata["_orig_idx"]; emit that so refs stay valid against the
+    # UNFILTERED snapshot resolve_element resolves against (non-contiguous
+    # @e1, @e3, @e7 …). Without it, renumbering from 1 would silently point
+    # every @eN at the wrong element.
     elements = data.get("interactive_elements", [])
     if elements:
         parts.append("## Interactive Elements")
         parts.append("| Ref | Type | Name | Window | Position | State |")
         parts.append("|-----|------|------|---------|----------|-------|")
         for i, el in enumerate(elements, 1):
-            ref = f"@e{i}"
+            orig_idx = el.metadata.get("_orig_idx") if el.metadata else None
+            ref = f"@e{orig_idx}" if orig_idx else f"@e{i}"
             type_name = el.control_type.replace("Control", "")
             name = el.name[:40] if el.name else ""
             # Truncate the owning window title like the Windows table does, so a

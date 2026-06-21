@@ -43,17 +43,43 @@ def _observe(params: dict) -> dict[str, Any]:
         want_snapshot = True
         want_screenshot = True
 
+    # Optional multi-display filter (TODO #9-B): forward to the snapshot sub-
+    # call (which clips windows/elements/cursor) and crop the screenshot to the
+    # selected displays' union bbox. parse_display_selection raises ValueError
+    # on a bad selection (→ INVALID_PARAMS). No display param → no filtering.
+    from agent_windows.core.display import (
+        parse_display_selection, get_display_union_bbox,
+    )
+    display = parse_display_selection(params.get("display"))
+    screenshot_params: dict = {}
+    snapshot_params: dict = {}
+    if display is not None:
+        snapshot_params["display"] = display
+        union = get_display_union_bbox(display)
+        screenshot_params["bbox"] = [
+            union.left, union.top, union.right, union.bottom
+        ]
+
     if want_snapshot:
-        parts.append(_run_sub("snapshot", {}))
+        parts.append(_run_sub("snapshot", snapshot_params))
 
     if want_screenshot:
         if parts:
             parts.append("---\n")
-        parts.append(_run_sub("screenshot", {}))
+        parts.append(_run_sub("screenshot", screenshot_params))
 
     if ground_desc:
         if parts:
             parts.append("---\n")
+        # NOTE: ground operates on the FULL desktop (ground_element has no bbox
+        # scope yet), so its coordinates may fall outside the selected display(s)
+        # when `display` is set. Surface that inline so the agent doesn't trust
+        # a grounding hit that's off the scoped screenshot/snapshot. (B-2)
+        if display is not None:
+            parts.append(
+                "[grounding performed against the full desktop; display filter "
+                "applies only to snapshot/screenshot above]\n---\n"
+            )
         parts.append(_run_sub("ground", {"description": ground_desc}))
 
     return {"output": "\n".join(parts)}

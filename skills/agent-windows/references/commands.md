@@ -16,6 +16,7 @@ Combined observation: snapshot + screenshot + optional visual grounding.
 
 ```bash
 agent-windows observe [--snapshot] [--screenshot] [--ground DESC]
+agent-windows observe -d 0                  # scope everything to display 0
 ```
 
 | Parameter | Type | Default | Description |
@@ -23,8 +24,11 @@ agent-windows observe [--snapshot] [--screenshot] [--ground DESC]
 | `--snapshot` | bool | `false` | Include UIA tree snapshot |
 | `--screenshot` | bool | `false` | Include screenshot |
 | `--ground` | str | `""` | Visual grounding with element description |
+| `--display` / `-d` | list[int] | `[]` | Limit snapshot data to the given display index(es), repeatable; the screenshot is cropped to the selected displays' union. Omit for the full desktop. |
 
 When no flags are given, defaults to `--snapshot --screenshot`.
+
+`--display` scopes the snapshot (windows/elements/cursor, see `snapshot`) and crops the screenshot to the union of the selected display(s).
 
 **Output**: Desktop State (cursor, resolution, active window), Windows table, Accessibility Tree, Interactive Elements table.
 
@@ -34,9 +38,17 @@ UIA accessibility tree traversal. Returns the full structured text view.
 
 ```bash
 agent-windows snapshot
+agent-windows snapshot -d 0            # only the primary display
+agent-windows snapshot -d 0 -d 1       # union of displays 0 and 1
 ```
 
-No parameters. Uses config `tree.max_depth` (default 15), `tree.max_elements` (default 200), `tree.timeout` (default 10s), `tree.include_invisible`, `tree.include_offscreen`.
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `--display` / `-d` | list[int] | `[]` | Limit windows/interactive-elements/cursor to the given display index(es), repeatable (e.g. `-d 0 -d 1`). Omit for the full desktop. |
+
+Uses config `tree.max_depth` (default 15), `tree.max_elements` (default 200), `tree.timeout` (default 10s), `tree.include_invisible`, `tree.include_offscreen`.
+
+**Display filtering**: `-d` clips each window/element bounding box to the selected display(s)' union and drops items that don't overlap (intersect-clip, not "window belongs to one display" — a window spanning two displays is kept, clipped to the selected one). `@eN` refs are renumbered against the filtered list. The cursor is reported as `N/A` when it's off the selected display(s). The Accessibility Tree text block is NOT filtered (it's free text without per-line coordinates); a note is shown when a filter is active.
 
 **Output**: Same as observe but without screenshot file. Contains the Interactive Elements table with `@eN` refs.
 

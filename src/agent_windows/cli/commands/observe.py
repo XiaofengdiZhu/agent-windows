@@ -13,19 +13,33 @@ def observe(
     snapshot: bool = typer.Option(False, "--snapshot", help="Include UIA tree snapshot"),
     screenshot: bool = typer.Option(False, "--screenshot", help="Include screenshot"),
     ground: str = typer.Option("", "--ground", help="Visual grounding with element description"),
+    display: list[int] = typer.Option(
+        None, "--display", "-d",
+        help="Limit to display index(es), e.g. -d 0 -d 1 (repeatable)"),
 ) -> None:
     """Comprehensive observation: combines snapshot, screenshot, and/or grounding."""
     # Default: snapshot + screenshot when no flags specified
     if not snapshot and not screenshot and not ground:
         snapshot = True
         screenshot = True
-    _cmd(ctx, "observe", snapshot=snapshot, screenshot=screenshot, ground=ground)
+    params: dict = {"snapshot": snapshot, "screenshot": screenshot, "ground": ground}
+    if display:
+        params["display"] = display
+    _cmd(ctx, "observe", **params)
 
 
 @app.command()
-def snapshot(ctx: typer.Context) -> None:
+def snapshot(
+    ctx: typer.Context,
+    display: list[int] = typer.Option(
+        None, "--display", "-d",
+        help="Limit to display index(es), e.g. -d 0 -d 1 (repeatable)"),
+) -> None:
     """UIA accessibility tree traversal, returns semantic text."""
-    _cmd(ctx, "snapshot")
+    params: dict = {}
+    if display:
+        params["display"] = display
+    _cmd(ctx, "snapshot", **params)
 
 
 @app.command()

@@ -16,6 +16,9 @@ MAX_WAIT_SECONDS = 300
 def _snapshot(params: dict) -> dict[str, Any]:
     """UIA tree traversal and semantic snapshot."""
     from agent_windows.core.tree import traverse_tree, render_snapshot
+    from agent_windows.core.display import (
+        parse_display_selection, filter_snapshot_to_displays,
+    )
     from agent_windows.utils.config import load_config
 
     cfg = load_config().get("tree", {})
@@ -26,6 +29,15 @@ def _snapshot(params: dict) -> dict[str, Any]:
         max_elements=cfg.get("max_elements", 200),
         timeout=cfg.get("timeout", 10),
     )
+
+    # Optional multi-display filter (TODO #9-B): clip windows/elements/cursor
+    # to the selected display(s). parse_display_selection raises ValueError on
+    # a bad selection (→ INVALID_PARAMS at the router). No display param → no
+    # filtering (backward compatible).
+    display = parse_display_selection(params.get("display"))
+    if display is not None:
+        data = filter_snapshot_to_displays(data, display)
+
     output = render_snapshot(data)
     return {"output": output}
 
