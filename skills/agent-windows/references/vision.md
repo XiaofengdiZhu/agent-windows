@@ -141,9 +141,10 @@ Three ways (priority order: env var > config > interactive):
 
 ```bash
 # Environment variable (recommended for security)
-export AGENT_WINDOWS_VLM_API_KEY="sk-..."
+#   cmd.exe:       set AGENT_WINDOWS_VLM_API_KEY=sk-...
+#   PowerShell:    $env:AGENT_WINDOWS_VLM_API_KEY="sk-..."
 
-# Config file
+# Config file (cross-shell, stored encrypted via Windows DPAPI)
 agent-windows config set vlm.api_key "sk-..."
 
 # Or leave empty and set at runtime

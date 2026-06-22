@@ -142,7 +142,7 @@ agent-windows config doctor                            # verify
 | @e3 | Button  | Cancel   | (520,300,620,340)  |         |
 ```
 
-The State column also surfaces richer attributes when the element exposes them (TODO #15): `toggle_state:on|off|indeterminate`, `value:...`, `expand_collapse_state:expanded|collapsed|partially expanded|leaf`, `min`/`max` (sliders), `is_selected:true|false` (list/radio/tab items), `is_password:true`, `shortcut:Ctrl+S`, `help_text:...`. Use these to disambiguate similar-looking elements and read current state (e.g. a checkbox's on/off) without an extra click.
+The State column also surfaces richer attributes when the element exposes them: `toggle_state:on|off|indeterminate`, `value:...`, `expand_collapse_state:expanded|collapsed|partially expanded|leaf`, `min`/`max` (sliders), `is_selected:true|false` (list/radio/tab items), `is_password:true`, `shortcut:Ctrl+S`, `help_text:...`. Use these to disambiguate similar-looking elements and read current state (e.g. a checkbox's on/off) without an extra click.
 
 ### Commands That Accept @eN Directly
 
@@ -202,8 +202,10 @@ agent-windows mouse-up 500 300             # Release
 ```bash
 agent-windows type "Hello World"                     # Type text (Unicode, bypasses IME)
 agent-windows type "search term" --at 300,200        # Click field first, then type
+agent-windows type "text" --at-selector @e3          # Click element @e3, then type (preferred)
 agent-windows type "text" --enter                    # Press Enter after typing
 agent-windows type "new text" --clear                # Select-all + delete first
+agent-windows type "prefix" --caret end              # Move caret before typing: start|idle|end
 agent-windows shortcut ctrl+c                        # Copy
 agent-windows shortcut ctrl+v                        # Paste
 agent-windows shortcut alt+f4                        # Close window
@@ -211,6 +213,8 @@ agent-windows shortcut win+r                         # Run dialog
 ```
 
 Key notation for `shortcut`: `ctrl`, `alt`, `shift`, `win` as modifiers, joined with `+`. Special keys: `enter`, `escape`, `tab`, `space`, `backspace`, `delete`, `up/down/left/right`, `home`, `end`, `pageup`, `pagedown`, `f1`–`f12`.
+
+`type` options: `--at X,Y` or `--at-selector @eN` (click first; `--at-selector` overrides `--at`), `--enter`, `--clear` (select-all + delete first), `--caret start|idle|end` (move caret before typing — `start` presses Home, `end` presses End, `idle` leaves it; applied before `--clear`).
 
 ### Batch Interaction
 
@@ -306,6 +310,20 @@ agent-windows wait @e5 --interval 0.2 --timeout 10
 ```
 
 On timeout, returns error code `-1003` (WAIT_TIMEOUT).
+
+### wait-for — Condition Polling
+
+`wait-for` waits until a multi-condition UI predicate is satisfied — more expressive than `wait`, which only handles a single selector or text match. Polls the accessibility tree until the condition holds or the timeout elapses.
+
+```bash
+agent-windows wait-for text_exists --text "完成"              # any visible text
+agent-windows wait-for active_window --window "Notepad"       # active window title
+agent-windows wait-for element_exists --text OK --timeout 10  # an element exists
+agent-windows wait-for enabled --text Submit                   # ...and is enabled (alias)
+agent-windows wait-for focused --text "Search"                 # ...and has focus (alias)
+```
+
+Conditions: `text_exists`, `active_window`, `element_exists`, `element_enabled`, `focused_element` (short aliases `text`/`window`/`element`/`enabled`/`focused` also accepted). **Matching is case-sensitive substring** — match the exact case shown in `snapshot` output. Like `wait`, raises `-1003` (WAIT_TIMEOUT) on timeout, `-32602` (INVALID_PARAMS) for an unknown condition. See `references/commands.md` for the full parameter table.
 
 ### Element State
 

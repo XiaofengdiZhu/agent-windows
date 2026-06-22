@@ -52,7 +52,7 @@ Uses config `tree.max_depth` (default 15), `tree.max_elements` (default 200), `t
 
 **Output**: Same as observe but without screenshot file. Contains the Interactive Elements table with `@eN` refs.
 
-**Rich element attributes** (TODO #15): the Interactive Elements table's State column surfaces extra attributes when the element exposes them — `toggle_state:on|off|indeterminate` (checkboxes/toggles), `value:...` (text fields, sliders), `expand_collapse_state:expanded|collapsed|partially expanded|leaf` (combo boxes), `min:..`/`max:..` (sliders), `is_selected:true|false` (list/radio/tab items), `is_password:true`, `shortcut:Ctrl+S`, `help_text:...`. These are read from the cached UIA properties (no extra COM round-trips) and help disambiguate similar-looking elements and read current state without an extra click.
+**Rich element attributes**: the Interactive Elements table's State column surfaces extra attributes when the element exposes them — `toggle_state:on|off|indeterminate` (checkboxes/toggles), `value:...` (text fields, sliders), `expand_collapse_state:expanded|collapsed|partially expanded|leaf` (combo boxes), `min:..`/`max:..` (sliders), `is_selected:true|false` (list/radio/tab items), `is_password:true`, `shortcut:Ctrl+S`, `help_text:...`. These are read from the cached UIA properties (no extra COM round-trips) and help disambiguate similar-looking elements and read current state without an extra click.
 
 ### screenshot
 
@@ -76,7 +76,7 @@ agent-windows screenshot --annotate --grid-w 3 --grid-h 3   # + 3×3 reference g
 
 `--selector` resolves the element's bounding box and crops to it. `--bbox` specifies pixel coordinates directly. If both given, `--selector` takes priority.
 
-`--annotate` (TODO #14) draws a numbered box around each interactive element matching the snapshot's `@eN` refs, so you can visually map a ref to its on-screen location. Add `--grid-w`/`--grid-h` to overlay a reference lattice with percentage labels at each line — useful for estimating coordinates when reasoning about element positions. Annotation requires the full-screen capture (boxes use screen coordinates), so a `--bbox`/`--selector`/`--monitor` is dropped with a warning when `--annotate` is set.
+`--annotate` draws a numbered box around each interactive element matching the snapshot's `@eN` refs, so you can visually map a ref to its on-screen location. Add `--grid-w`/`--grid-h` to overlay a reference lattice with percentage labels at each line — useful for estimating coordinates when reasoning about element positions. Annotation requires the full-screen capture (boxes use screen coordinates), so a `--bbox`/`--selector`/`--monitor` is dropped with a warning when `--annotate` is set.
 
 **Output**: `{output, path, width, height, coord_scale, backend, region}`
 
@@ -736,6 +736,18 @@ agent-windows daemon start     # Start the daemon
 agent-windows daemon stop      # Stop the daemon
 agent-windows daemon status    # Check if running, PID, version
 ```
+
+### ping
+
+Daemon health check (single IPC round-trip). Useful to confirm the daemon is reachable and measure round-trip latency — a fast way to distinguish "daemon down" from "command slow" when diagnosing hangs.
+
+```bash
+agent-windows ping
+```
+
+No parameters.
+
+**Output**: `{status, message}` (`status: "ok"`, `message: "pong"`).
 
 ### config init / show / set / doctor
 

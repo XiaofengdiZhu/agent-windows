@@ -110,7 +110,7 @@ agent-windows observe
 
 **Recovery**:
 1. Check API key: `agent-windows config doctor` (or `config show` and look for the `vlm.api_key` line)
-2. Set the key: `export AGENT_WINDOWS_VLM_API_KEY="sk-..."` or `agent-windows config set vlm.api_key "sk-..."`
+2. Set the key. The cross-shell path is `agent-windows config set vlm.api_key "sk-..."` (stored encrypted). For an env var instead: `set AGENT_WINDOWS_VLM_API_KEY=sk-...` (cmd.exe) or `$env:AGENT_WINDOWS_VLM_API_KEY="sk-..."` (PowerShell).
 3. Test with a simple call: `agent-windows ground "desktop"`
 4. If timeout, increase: `agent-windows config set vlm.timeout 60`
 

@@ -113,7 +113,7 @@ Commands that resolve a selector to coordinates or use it as a target:
 | `is enabled @e3` | Checks if the element is enabled |
 | `wait @e3` | Polls until the element is found in the tree |
 | `screenshot -s @e3` | Crops screenshot to element's bounding box |
-| `click -s @e3` | Clicks the element's bbox center (TODO #13) |
+| `click -s @e3` | Clicks the element's bbox center |
 | `dblclick -s @e3` | Double-click the element center |
 | `hover -s @e3` | Hover the element center |
 | `move -s @e3` | Move to the element center |
