@@ -198,6 +198,24 @@ class TestObserveCommands:
         assert params == {"output": "", "monitor": -1}
 
     @patch("agent_windows.cli.commands.observe._cmd")
+    def test_screenshot_annotate_flag(self, mock_cmd):
+        """--annotate sets use_annotation and forwards grid params (TODO #14)."""
+        runner.invoke(app, ["screenshot", "--annotate", "--grid-w", "2", "--grid-h", "3"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params["use_annotation"] is True
+        assert params["width_reference_line"] == 2
+        assert params["height_reference_line"] == 3
+
+    @patch("agent_windows.cli.commands.observe._cmd")
+    def test_screenshot_annotate_without_grid(self, mock_cmd):
+        """--annotate alone forwards just use_annotation (no grid keys)."""
+        runner.invoke(app, ["screenshot", "--annotate"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params["use_annotation"] is True
+        assert "width_reference_line" not in params
+        assert "height_reference_line" not in params
+
+    @patch("agent_windows.cli.commands.observe._cmd")
     def test_highlight_only_includes_non_default_options(self, mock_cmd):
         """color defaults to 'red' and is omitted unless overridden; others added."""
         runner.invoke(app, ["highlight", "0", "0", "10", "10", "--label", "L", "--color", "blue"])

@@ -49,6 +49,16 @@ def screenshot(
     monitor: int = typer.Option(-1, "--monitor", help="Monitor index (-1 for all)"),
     selector: str = typer.Option("", "--selector", "-s", help="UIA element ref (e.g. @e3)"),
     bbox: str = typer.Option("", "--bbox", help="Crop region: x1,y1,x2,y2"),
+    annotate: bool = typer.Option(
+        False, "--annotate",
+        help="Overlay numbered detection boxes (@eN) for each interactive element "
+             "(requires full screen; ignores --bbox/--selector/--monitor)"),
+    grid_w: int = typer.Option(
+        0, "--grid-w",
+        help="With --annotate: draw N vertical reference lines (X%% labels)"),
+    grid_h: int = typer.Option(
+        0, "--grid-h",
+        help="With --annotate: draw N horizontal reference lines (Y%% labels)"),
 ) -> None:
     """Capture screen screenshot, optionally cropped to a region or UIA element."""
     params: dict = {"output": output, "monitor": monitor}
@@ -56,6 +66,12 @@ def screenshot(
         params["selector"] = selector
     if bbox:
         params["bbox"] = [int(v) for v in bbox.split(",")]
+    if annotate:
+        params["use_annotation"] = True
+        if grid_w:
+            params["width_reference_line"] = grid_w
+        if grid_h:
+            params["height_reference_line"] = grid_h
     _cmd(ctx, "screenshot", **params)
 
 

@@ -56,10 +56,12 @@ Uses config `tree.max_depth` (default 15), `tree.max_elements` (default 200), `t
 
 ### screenshot
 
-Capture a screenshot, optionally cropped to a region or UIA element.
+Capture a screenshot, optionally cropped to a region or UIA element, or annotated with detection boxes + a reference grid.
 
 ```bash
 agent-windows screenshot [-o PATH] [--monitor N] [-s @eN] [--bbox X1,Y1,X2,Y2]
+agent-windows screenshot --annotate                    # number every element @eN
+agent-windows screenshot --annotate --grid-w 3 --grid-h 3   # + 3×3 reference grid
 ```
 
 | Parameter | Type | Default | Description |
@@ -68,10 +70,15 @@ agent-windows screenshot [-o PATH] [--monitor N] [-s @eN] [--bbox X1,Y1,X2,Y2]
 | `--monitor` | int | `-1` | Monitor index (-1 = all monitors) |
 | `--selector` / `-s` | str | `""` | UIA element ref (e.g. `@e3`) |
 | `--bbox` | str | `""` | Crop region: `x1,y1,x2,y2` |
+| `--annotate` | bool | `false` | Overlay numbered `@eN` detection boxes for each interactive element (requires full screen; ignores `--bbox`/`--selector`/`--monitor`) |
+| `--grid-w` | int | `0` | With `--annotate`: draw N vertical reference lines with X% edge labels |
+| `--grid-h` | int | `0` | With `--annotate`: draw N horizontal reference lines with Y% edge labels |
 
 `--selector` resolves the element's bounding box and crops to it. `--bbox` specifies pixel coordinates directly. If both given, `--selector` takes priority.
 
-**Output**: `{output, path, width, height}`
+`--annotate` (TODO #14) draws a numbered box around each interactive element matching the snapshot's `@eN` refs, so you can visually map a ref to its on-screen location. Add `--grid-w`/`--grid-h` to overlay a reference lattice with percentage labels at each line — useful for estimating coordinates when reasoning about element positions. Annotation requires the full-screen capture (boxes use screen coordinates), so a `--bbox`/`--selector`/`--monitor` is dropped with a warning when `--annotate` is set.
+
+**Output**: `{output, path, width, height, coord_scale, backend, region}`
 
 ### ground
 

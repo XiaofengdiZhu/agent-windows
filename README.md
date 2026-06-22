@@ -110,7 +110,7 @@ Python daemon (persistent, COM STA worker)
 |---------|-------------|
 | `observe [--snapshot] [--screenshot] [--ground DESC]` | Combined observation |
 | `snapshot` | UIA accessibility tree |
-| `screenshot [-o PATH] [-s @eN] [--bbox X1,Y1,X2,Y2]` | Screen capture (optionally cropped to UIA element or region) |
+| `screenshot [-o PATH] [-s @eN] [--bbox X1,Y1,X2,Y2] [--annotate] [--grid-w N] [--grid-h N]` | Screen capture; `--annotate` overlays numbered `@eN` boxes (full-screen) + optional `%` reference grid |
 | `ground DESCRIPTION [--single-pass]` | Visual coordinate grounding (`--single-pass`: 1 API call, ~2x faster, lower precision) |
 | `detect DESCRIPTION [-i IMAGE] [--max-targets N]` | Multi-target bounding box detection |
 | `ask-vision PROMPT [-i IMAGE] [-m MODEL]` | Free-form visual Q&A |

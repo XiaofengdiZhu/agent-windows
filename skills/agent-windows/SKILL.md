@@ -92,7 +92,11 @@ agent-windows screenshot                 # Full screen
 agent-windows screenshot -s @e3          # Crop to UIA element
 agent-windows screenshot --bbox 100,200,500,400  # Crop to region
 agent-windows screenshot -o shot.png     # Save to file
+agent-windows screenshot --annotate      # Overlay numbered @eN boxes on full screen
+agent-windows screenshot --annotate --grid-w 4 --grid-h 4  # Annotated + % reference grid
 ```
+
+> `--annotate` re-captures the **full screen** (all displays) and draws a numbered box per interactive element from a fresh snapshot, so the `@eN` labels line up with the current `snapshot`/`observe` table. `--bbox`/`-s`/`--monitor` are ignored (warned) when annotating. Use `--grid-w N`/`--grid-h N` to draw `N` evenly-spaced reference lines with `X%`/`Y%` labels to sanity-check coordinates.
 
 ### Decision Matrix
 

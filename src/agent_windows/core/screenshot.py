@@ -460,21 +460,14 @@ def highlight_region(
     for r in regions:
         x1, y1, x2, y2 = r["x1"], r["y1"], r["x2"], r["y2"]
         color = r.get("color", "red")
-
         # Draw border (width=3)
         draw.rectangle([(x1, y1), (x2, y2)], outline=color, width=3)
-
-        # Draw label if provided
+        # Draw label if provided. White badge (not the outline color) keeps the
+        # label legible for every outline color, including "black" — the
+        # pre-refactor behavior that _draw_label must preserve. (TODO #14)
         label = r.get("label", "")
         if label:
-            text_pos = (x1 + 3, y1 + 3)
-            text_bbox = draw.textbbox(text_pos, label, font=font)
-            text_bg = [
-                text_bbox[0] - 1, text_bbox[1] - 1,
-                text_bbox[2] + 1, text_bbox[3] + 1,
-            ]
-            draw.rectangle(text_bg, fill="white")
-            draw.text(text_pos, label, fill="black", font=font)
+            _draw_label(draw, label, x1, y1, font, fill="white")
 
     if output_path:
         path = Path(output_path)
@@ -484,6 +477,118 @@ def highlight_region(
         path = save_dir / f"highlight-{timestamp}.png"
 
     return save_and_cleanup(marked, output_path=str(path))
+
+
+def _draw_label(draw, label: str, x: int, y: int, font,
+                fill: str = "yellow", text_color: str = "black") -> None:
+    """Draw a label badge at (x, y) with a solid background for legibility.
+
+    Shared by highlight_region (outline color badge) and annotate_screenshot
+    (numbered badges). (TODO #14)
+    """
+    from PIL import ImageDraw  # noqa: F401 — type hint clarity only
+    text_pos = (x + 3, y + 3)
+    text_bbox = draw.textbbox(text_pos, label, font=font)
+    text_bg = [
+        text_bbox[0] - 1, text_bbox[1] - 1,
+        text_bbox[2] + 1, text_bbox[3] + 1,
+    ]
+    draw.rectangle(text_bg, fill=fill)
+    draw.text(text_pos, label, fill=text_color, font=font)
+
+
+def annotate_screenshot(
+    image: Image.Image,
+    elements: list,
+    grid_lines: tuple[int, int] | None = None,
+    output_path: str | Path | None = None,
+    box_color: str = "yellow",
+    grid_color: str = "cyan",
+) -> Path:
+    """Overlay numbered detection boxes + optional grid on a screenshot. (TODO #14)
+
+    Used by ``screenshot --annotate`` to help spatial reasoning: each
+    interactive element gets a numbered box matching its ``@eN`` ref in the
+    snapshot, and an optional reference grid divides the image into a width×height
+    lattice with edge-percentage labels.
+
+    Args:
+        image: PIL Image (full-screen capture; boxes use screen coords).
+        elements: ElementInfo list (only items with a bbox are drawn). The Nth
+            drawn box is labeled ``@e{N}`` to match the snapshot's refs.
+        grid_lines: ``(width_divisions, height_divisions)`` — draw that many
+            vertical / horizontal lines. None or (0, 0) skips the grid.
+        output_path: Save path. If None, auto-generates.
+        box_color: Detection-box outline color.
+        grid_color: Grid-line color.
+
+    Returns:
+        Path to the saved annotated image.
+    """
+    from PIL import ImageDraw, ImageFont
+
+    marked = image.copy()
+    draw = ImageDraw.Draw(marked)
+    img_w, img_h = image.size
+
+    try:
+        font = ImageFont.load_default(size=14)
+    except TypeError:
+        font = ImageFont.load_default()
+
+    # Numbered detection boxes — 1-based to match snapshot @eN refs. Element
+    # bboxes are virtual-desktop screen coords; on multi-display setups an
+    # element may extend past the captured image edge (or sit partly off-screen
+    # with negative origin). Clamp each box to the image bounds and skip boxes
+    # with no on-image area, so the box + its @eN label are always visible.
+    for i, el in enumerate(elements, 1):
+        if not getattr(el, "bbox", None):
+            continue
+        b = el.bbox
+        x1 = max(0, b.left)
+        y1 = max(0, b.top)
+        x2 = min(img_w, b.right)
+        y2 = min(img_h, b.bottom)
+        if x2 <= x1 or y2 <= y1:
+            continue  # box is entirely outside the captured image
+        draw.rectangle([(x1, y1), (x2 - 1, y2 - 1)], outline=box_color, width=2)
+        # Anchor the label at the clamped top-left so a near-edge element still
+        # shows its @eN badge on-canvas.
+        _draw_label(draw, f"@e{i}", x1, y1, font, fill=box_color)
+
+    # Optional reference grid: N vertical lines divide the width into N+1 bands;
+    # labels at each line show the X (or Y) percentage for coordinate reasoning.
+    # Skip for a degenerate (0-width/-height) image where line coords would go
+    # negative — annotate_screenshot is a public API, so guard the edge case.
+    if grid_lines and (grid_lines[0] > 0 or grid_lines[1] > 0):
+        w, h = image.size
+        wdiv, hdiv = grid_lines
+        if wdiv > 0 and w >= 1:
+            step = w / (wdiv + 1)
+            for k in range(1, wdiv + 1):
+                # Clamp to [0, w-1]: last line rounds up to w, and a 1px-wide
+                # image must not produce a negative x.
+                x = max(0, min(w - 1, int(round(step * k))))
+                pct = round(100 * k / (wdiv + 1))
+                draw.line([(x, 0), (x, h)], fill=grid_color, width=1)
+                _draw_label(draw, f"{pct}%", x, 0, font, fill=grid_color)
+        if hdiv > 0 and h >= 1:
+            step = h / (hdiv + 1)
+            for k in range(1, hdiv + 1):
+                y = max(0, min(h - 1, int(round(step * k))))
+                pct = round(100 * k / (hdiv + 1))
+                draw.line([(0, y), (w, y)], fill=grid_color, width=1)
+                _draw_label(draw, f"{pct}%", 0, y, font, fill=grid_color)
+
+    if output_path:
+        path = Path(output_path)
+    else:
+        save_dir = get_screenshot_save_dir()
+        timestamp = int(time.time() * 1000)
+        path = save_dir / f"annotated-{timestamp}.png"
+
+    return save_and_cleanup(marked, output_path=str(path))
+
 
 
 def diff_images(
