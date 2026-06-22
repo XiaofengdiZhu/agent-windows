@@ -288,3 +288,23 @@ def process_kill(
 ) -> None:
     """Kill a process."""
     _cmd(ctx, "process_kill", pid_or_name=pid_or_name)
+
+
+# ── notify (top-level command) ──────────────────────────────────────
+
+
+def notify(
+    ctx: typer.Context,
+    title: str = typer.Argument(help="Toast title/heading"),
+    message: str = typer.Argument(help="Toast body text"),
+    app_id: str = typer.Option(
+        "",
+        "--app-id",
+        help="AppUserModelID to attribute the toast to (default: PowerShell's AUMID)",
+    ),
+) -> None:
+    """Send a Windows toast notification (title + message)."""
+    params: dict = {"title": title, "message": message}
+    if app_id:
+        params["app_id"] = app_id
+    _cmd(ctx, "notify", **params)

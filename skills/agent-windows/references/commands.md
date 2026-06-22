@@ -593,6 +593,23 @@ agent-windows process kill notepad     # By name
 | `process list` | (none) |
 | `process kill` | `pid_or_name` (str, **required**) |
 
+### notify
+
+Send a Windows toast notification (title + message) via PowerShell WinRT `ToastNotificationManager`.
+
+```bash
+agent-windows notify "Build complete" "All tests passed"
+agent-windows notify "Alert" "Disk 95% full" --app-id my.app
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `title` | str | **required** | Toast heading (max 256 chars) |
+| `message` | str | **required** | Toast body text (max 1024 chars) |
+| `--app-id` | str | PowerShell's AUMID | AppUserModelID to attribute the toast to |
+
+**Output**: `sent` (bool), `exit_code`, `app_id`. Title/message are XML-escaped (safe for any content); `app_id` must not contain a single quote. A custom `--app-id` only displays reliably if a matching Start Menu shortcut is registered.
+
 ---
 
 ## Control

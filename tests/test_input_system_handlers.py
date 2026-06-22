@@ -13,6 +13,7 @@ from unittest.mock import patch
 import pytest
 
 from agent_windows.daemon.router import HANDLERS
+from agent_windows.core import notifier
 
 
 # ── input.py handlers ────────────────────────────────────────────────
@@ -523,3 +524,28 @@ class TestProcessHandlers:
     def test_process_kill_missing_raises(self):
         with pytest.raises(ValueError, match="missing required parameter 'pid_or_name'"):
             HANDLERS["process_kill"]({})
+
+
+# ── notify handler (TODO #10) ────────────────────────────────────────
+
+
+class TestNotifyHandler:
+    def test_notify_forwards_title_message(self):
+        with patch("agent_windows.core.notifier.send_notification",
+                   return_value={"output": "ok", "sent": True}) as m:
+            HANDLERS["notify"]({"title": "T", "message": "M"})
+        m.assert_called_once_with("T", "M", app_id=notifier.DEFAULT_APP_ID)
+
+    def test_notify_forwards_custom_app_id(self):
+        with patch("agent_windows.core.notifier.send_notification",
+                   return_value={"output": "ok", "sent": True}) as m:
+            HANDLERS["notify"]({"title": "T", "message": "M", "app_id": "my.app"})
+        m.assert_called_once_with("T", "M", app_id="my.app")
+
+    def test_notify_missing_title_raises(self):
+        with pytest.raises(ValueError, match="missing required parameter 'title'"):
+            HANDLERS["notify"]({"message": "M"})
+
+    def test_notify_missing_message_raises(self):
+        with pytest.raises(ValueError, match="missing required parameter 'message'"):
+            HANDLERS["notify"]({"title": "T"})

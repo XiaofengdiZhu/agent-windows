@@ -196,3 +196,22 @@ def _process_kill(params: dict) -> dict[str, Any]:
     """Kill a process."""
     from agent_windows.core.process_manager import kill_process
     return kill_process(require(params, "pid_or_name", (str, int)))
+
+
+# ── Notifications ────────────────────────────────────────────────────
+
+
+@handler("notify")
+def _notify(params: dict) -> dict[str, Any]:
+    """Send a Windows toast notification (title + message). (TODO #10)
+
+    ``app_id`` defaults to PowerShell's AppUserModelID (always present, no
+    registration needed); a custom AUMID needs a registered Start Menu shortcut
+    to display reliably.
+    """
+    from agent_windows.core.notifier import send_notification, DEFAULT_APP_ID
+    return send_notification(
+        require(params, "title", str),
+        require(params, "message", str),
+        app_id=params.get("app_id") or DEFAULT_APP_ID,
+    )

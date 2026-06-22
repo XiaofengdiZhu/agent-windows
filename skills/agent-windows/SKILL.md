@@ -329,6 +329,15 @@ agent-windows diff baseline.png -c current.png -t 30        # Pixel diff between
 agent-windows diff baseline.png                             # Diff vs fresh screenshot
 ```
 
+### Notifications
+
+```bash
+agent-windows notify "Build complete" "All tests passed"   # Windows toast (title + body)
+agent-windows notify "Alert" "Disk 95% full" --app-id my.app  # Custom AppUserModelID
+```
+
+Shows a Windows toast via PowerShell WinRT (`ToastNotificationManager`). The default app id is PowerShell's own AUMID (always present, no registration needed); a custom `--app-id` only displays reliably if a matching Start Menu shortcut is registered. Title/message are XML-escaped; `app_id` must not contain a single quote.
+
 ## Batch Execution
 
 Execute multiple commands in one call:

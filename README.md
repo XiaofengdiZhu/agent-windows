@@ -142,6 +142,7 @@ Python daemon (persistent, COM STA worker)
 | `fs read/write/list PATH` | File operations |
 | `clipboard get/set [--keyboard]` | Clipboard access (`--keyboard` simulates Ctrl+C/V) |
 | `process list/kill` | Process management |
+| `notify TITLE MESSAGE [--app-id ID]` | Windows toast notification (defaults to PowerShell's AUMID) |
 | `cleanup` | Clean up old/oversized screenshots |
 | `wait SECONDS|SELECTOR [--text TEXT] [--timeout N] [--interval N]` | Wait for duration, element, or text |
 | `batch JSON/--file PATH [--delay N] [--continue-on-error]` | Execute multiple commands in one IPC round-trip |

@@ -310,6 +310,19 @@ class TestSystemCommands:
         _, params = _cmd_calls(mock_cmd)[0]
         assert params == {"pid_or_name": "notepad"}
 
+    @patch("agent_windows.cli.commands.system._cmd")
+    def test_notify_forwards_title_message(self, mock_cmd):
+        runner.invoke(app, ["notify", "Hello", "World"])
+        method, params = _cmd_calls(mock_cmd)[0]
+        assert method == "notify"
+        assert params == {"title": "Hello", "message": "World"}
+
+    @patch("agent_windows.cli.commands.system._cmd")
+    def test_notify_with_app_id(self, mock_cmd):
+        runner.invoke(app, ["notify", "Hello", "World", "--app-id", "my.app"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params == {"title": "Hello", "message": "World", "app_id": "my.app"}
+
 
 # ── batch command: JSON source resolution + error paths ─────────────
 
