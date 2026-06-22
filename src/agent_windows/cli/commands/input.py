@@ -26,9 +26,13 @@ def type_text(
     at: str = typer.Option("", "--at", help="Click at x,y before typing"),
     enter: bool = typer.Option(False, "--enter", help="Press Enter after typing"),
     clear: bool = typer.Option(False, "--clear", help="Select-all and delete before typing"),
+    caret: str = typer.Option(
+        "idle", "--caret",
+        help="Move caret before typing: start | idle | end",
+    ),
 ) -> None:
     """Type text using Unicode direct input (bypasses IME)."""
-    params = {"text": text, "enter": enter, "clear": clear}
+    params = {"text": text, "enter": enter, "clear": clear, "caret_position": caret}
     if at:
         parts = at.split(",")
         if len(parts) == 2:

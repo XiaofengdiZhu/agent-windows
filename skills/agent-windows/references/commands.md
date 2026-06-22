@@ -334,7 +334,7 @@ agent-windows scroll 500 300 [--direction down] [--amount 3]
 Type text using Unicode direct input (bypasses IME).
 
 ```bash
-agent-windows type "Hello World" [--at X,Y] [--enter] [--clear]
+agent-windows type "Hello World" [--at X,Y] [--enter] [--clear] [--caret idle]
 ```
 
 | Parameter | Type | Default | Description |
@@ -343,6 +343,9 @@ agent-windows type "Hello World" [--at X,Y] [--enter] [--clear]
 | `--at` | str | `""` | Click at `x,y` before typing |
 | `--enter` | bool | `false` | Press Enter after typing |
 | `--clear` | bool | `false` | Select-all (Ctrl+A) and delete before typing |
+| `--caret` | str | `"idle"` | Move caret before typing: `start` (Home), `idle` (leave as-is), or `end` (End) |
+
+`--caret` moves the text caret after the click (or in the already-focused field when `--at` is omitted): `start` presses Home, `end` presses End, `idle` leaves it where the platform placed it. Applied before `--clear`, so `--caret start --clear` selects-from-start semantics still wipe the field. Omitting the flag (or sending `null`) uses `idle`.
 
 **Output**: `{output}`
 

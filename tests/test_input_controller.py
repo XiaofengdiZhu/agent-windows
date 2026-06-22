@@ -443,6 +443,48 @@ class TestInputStructDedup:
         mock_type.assert_called_once_with("hi")
         assert mock_vk.call_args_list[-1].args[0] == ic.VK_RETURN
 
+    # ── caret_position (TODO #16) ──────────────────────────────────────
+
+    def test_move_caret_start_sends_home(self):
+        with patch.object(ic, "_send_vk_key") as m_vk:
+            ic.move_caret("start")
+        m_vk.assert_called_once_with(ic.VK_HOME)
+
+    def test_move_caret_end_sends_end(self):
+        with patch.object(ic, "_send_vk_key") as m_vk:
+            ic.move_caret("end")
+        m_vk.assert_called_once_with(ic.VK_END)
+
+    def test_move_caret_idle_sends_nothing(self):
+        with patch.object(ic, "_send_vk_key") as m_vk:
+            ic.move_caret("idle")
+        m_vk.assert_not_called()
+
+    def test_type_text_at_caret_start_presses_home_before_clear(self):
+        """Order must be click → Home → clear(Ctrl+A+Del) → type → Enter."""
+        with patch.object(ic, "click") as m_click, \
+             patch.object(ic, "shortcut") as m_short, \
+             patch.object(ic, "_send_vk_key") as m_vk, \
+             patch.object(ic, "type_text") as m_type, \
+             patch.object(ic.time, "sleep"):
+            ic.type_text_at("hi", 10, 20, clear=True, enter=True, caret_position="start")
+        m_click.assert_called_once_with(10, 20)
+        # First vk call is Home (caret), then VK_DELETE (clear), last is RETURN
+        assert m_vk.call_args_list[0].args[0] == ic.VK_HOME
+        assert m_vk.call_args_list[1].args[0] == ic.VK_DELETE
+        assert m_vk.call_args_list[-1].args[0] == ic.VK_RETURN
+        m_type.assert_called_once_with("hi")
+
+    def test_type_text_at_caret_idle_backward_compatible(self):
+        """Default caret_position=idle must not inject any extra vk call (backward compat)."""
+        with patch.object(ic, "click"), \
+             patch.object(ic, "_send_vk_key") as m_vk, \
+             patch.object(ic, "type_text"), \
+             patch.object(ic.time, "sleep"):
+            ic.type_text_at("hi", 10, 20)  # no caret_position kwarg
+        # idle → no Home/End; with clear=False/enter=False there are zero vk calls
+        m_vk.assert_not_called()
+
 
 # ── click() parameters ───────────────────────────────────────────────
 

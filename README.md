@@ -125,7 +125,7 @@ Python daemon (persistent, COM STA worker)
 | `hover X Y` | Hover (trigger tooltips/highlights) |
 | `mouse-down X Y [--button left\|right\|middle]` | Press and hold mouse button |
 | `mouse-up X Y [--button left\|right\|middle]` | Release mouse button |
-| `type TEXT [--at X,Y] [--enter] [--clear]` | Type text (Unicode direct input) |
+| `type TEXT [--at X,Y] [--enter] [--clear] [--caret start\|idle\|end]` | Type text (Unicode direct input) |
 | `scroll X Y [--direction up\|down] [--amount N]` | Scroll |
 | `move X Y` | Move mouse |
 | `drag X1 Y1 X2 Y2 [--right]` | Drag |

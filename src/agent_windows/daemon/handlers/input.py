@@ -80,7 +80,8 @@ def _mouse_up(params: dict) -> dict[str, Any]:
 def _type(params: dict) -> dict[str, Any]:
     """Type text."""
     from agent_windows.core.input_controller import (
-        type_text, type_text_at, clear_field, _send_vk_key, validate_coordinates,
+        type_text, type_text_at, clear_field, move_caret,
+        _send_vk_key, validate_coordinates,
     )
 
     text = require(params, "text", str)
@@ -91,18 +92,34 @@ def _type(params: dict) -> dict[str, Any]:
     at_y = params.get("at_y")
     enter = params.get("enter", False)
     clear = params.get("clear", False)
+    # TODO #16: caret_position = start | idle | end. Validated here (not in
+    # core) so a bad value surfaces as INVALID_PARAMS rather than a silent
+    # no-op inside move_caret. A present-but-None value is treated as the
+    # default ("idle"), matching `enter`/`clear` and require()'s None-as-missing
+    # convention (router.py) — so `{"caret_position": null}` is a no-op, not
+    # an error.
+    caret_position = params.get("caret_position") or "idle"
+    if caret_position not in ("start", "idle", "end"):
+        raise ValueError(
+            f"caret_position must be 'start', 'idle', or 'end'; got {caret_position!r}"
+        )
 
     if at_x is not None and at_y is not None:
         ax, ay = validate_coordinates(at_x, at_y)
-        type_text_at(text, ax, ay, clear=clear, enter=enter)
+        type_text_at(text, ax, ay, clear=clear, enter=enter,
+                     caret_position=caret_position)
     else:
+        # No click: operate on the already-focused field. caret_position still
+        # applies (Home/End move the caret in the focused field), matching the
+        # reference semantics. (TODO #16)
+        move_caret(caret_position)
         if clear:
             clear_field()
         type_text(text)
         if enter:
             _send_vk_key(0x0D)  # VK_RETURN
 
-    return {"output": f"## Type\nText: {text[:50]}{'...' if len(text) > 50 else ''}\nEnter: {enter}\nClear: {clear}"}
+    return {"output": f"## Type\nText: {text[:50]}{'...' if len(text) > 50 else ''}\nEnter: {enter}\nClear: {clear}\nCaret: {caret_position}"}
 
 
 @handler("scroll")

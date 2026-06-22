@@ -392,10 +392,32 @@ def clear_field() -> None:
     time.sleep(0.05)
 
 
+def move_caret(caret_position: str) -> None:
+    """Move the text caret in the focused field. (TODO #16)
+
+    ``caret_position`` is one of ``"start"`` / ``"end"`` / ``"idle"``. ``"idle"``
+    (the default elsewhere) leaves the caret where the platform put it after a
+    click; the other two press Home / End respectively. Home/End have no
+    destructive effect on a non-text field (they may scroll or move focus in
+    some controls, but won't alter data).
+    """
+    if caret_position == "start":
+        _send_vk_key(VK_HOME)
+    elif caret_position == "end":
+        _send_vk_key(VK_END)
+    # "idle" (or anything else) → no-op; validation lives at the handler layer.
+
+
 def type_text_at(text: str, x: int, y: int, clear: bool = False,
-                 enter: bool = False) -> None:
-    """Click at position, optionally clear, then type text."""
+                 enter: bool = False, caret_position: str = "idle") -> None:
+    """Click at position, optionally move caret, optionally clear, then type.
+
+    Order matches the reference implementation (TODO #16): click → caret
+    (Home/End) → clear → type → Enter. ``caret_position`` defaults to
+    ``"idle"`` (no caret move) so existing callers are unchanged.
+    """
     click(x, y)
+    move_caret(caret_position)
 
     if clear:
         clear_field()

@@ -95,7 +95,7 @@ class TestTypeHandler:
         with patch("agent_windows.core.input_controller.type_text_at") as m_at, \
              patch("agent_windows.core.input_controller.type_text") as m_plain:
             HANDLERS["type"]({"text": "hi", "at_x": 10, "at_y": 20, "clear": True, "enter": True})
-        m_at.assert_called_once_with("hi", 10, 20, clear=True, enter=True)
+        m_at.assert_called_once_with("hi", 10, 20, clear=True, enter=True, caret_position="idle")
         m_plain.assert_not_called()
 
     def test_type_asymmetric_at_coords_falls_back_to_plain(self):
@@ -129,6 +129,75 @@ class TestTypeHandler:
     def test_text_must_be_str(self):
         with pytest.raises(ValueError, match="must be str"):
             HANDLERS["type"]({"text": 123})
+
+    # ── caret_position (TODO #16) ──────────────────────────────────────
+
+    def test_type_invalid_caret_rejected(self):
+        """A bad caret_position surfaces as INVALID_PARAMS, not a silent no-op."""
+        with pytest.raises(ValueError, match="caret_position must be"):
+            HANDLERS["type"]({"text": "hi", "caret_position": "middle"})
+
+    def test_type_caret_at_position_forwarded(self):
+        """caret_position is forwarded to type_text_at when at_x/at_y given."""
+        with patch("agent_windows.core.input_controller.type_text_at") as m_at:
+            HANDLERS["type"]({
+                "text": "hi", "at_x": 10, "at_y": 20, "caret_position": "end",
+            })
+        m_at.assert_called_once_with("hi", 10, 20, clear=False, enter=False, caret_position="end")
+
+    def test_type_caret_start_without_position_sends_home(self):
+        """No at_x/at_y: caret_position=start still presses Home in the focused field."""
+        with patch("agent_windows.core.input_controller.type_text"), \
+             patch("agent_windows.core.input_controller._send_vk_key") as m_vk, \
+             patch.object(time, "sleep"):
+            HANDLERS["type"]({"text": "hi", "caret_position": "start"})
+        assert m_vk.call_args_list[0].args[0] == 0x24  # VK_HOME
+
+    def test_type_caret_end_without_position_sends_end(self):
+        with patch("agent_windows.core.input_controller.type_text"), \
+             patch("agent_windows.core.input_controller._send_vk_key") as m_vk, \
+             patch.object(time, "sleep"):
+            HANDLERS["type"]({"text": "hi", "caret_position": "end"})
+        assert m_vk.call_args_list[0].args[0] == 0x23  # VK_END
+
+    def test_type_caret_idle_without_position_sends_no_vk(self):
+        """idle is a true no-op: no Home/End, so no _send_vk_key at all."""
+        with patch("agent_windows.core.input_controller.type_text"), \
+             patch("agent_windows.core.input_controller._send_vk_key") as m_vk, \
+             patch.object(time, "sleep"):
+            HANDLERS["type"]({"text": "hi", "caret_position": "idle"})
+        m_vk.assert_not_called()
+
+    def test_type_caret_null_treated_as_idle(self):
+        """A present-but-None caret_position is treated as the default 'idle'
+        (matching require()'s None-as-missing convention), not rejected."""
+        with patch("agent_windows.core.input_controller.type_text"), \
+             patch("agent_windows.core.input_controller._send_vk_key") as m_vk, \
+             patch.object(time, "sleep"):
+            r = HANDLERS["type"]({"text": "hi", "caret_position": None})
+        m_vk.assert_not_called()
+        assert "Caret: idle" in r["output"]
+
+    def test_type_caret_non_string_rejected(self):
+        """A non-string caret_position (int/bool) must surface as INVALID_PARAMS,
+        not crash with TypeError as a DAEMON_INTERNAL_ERROR. The `in` membership
+        check is what keeps this safe — pin it so a refactor to match/case or a
+        dict lookup doesn't silently regress."""
+        with pytest.raises(ValueError, match="caret_position must be"):
+            HANDLERS["type"]({"text": "hi", "caret_position": 1})
+        with pytest.raises(ValueError, match="caret_position must be"):
+            HANDLERS["type"]({"text": "hi", "caret_position": True})
+
+    def test_type_caret_start_before_clear_on_no_coords_path(self):
+        """No-coords path: caret (Home) must precede clear (VK_DELETE), mirroring
+        the at-coords type_text_at ordering."""
+        with patch("agent_windows.core.input_controller.type_text"), \
+             patch("agent_windows.core.input_controller.shortcut"), \
+             patch("agent_windows.core.input_controller._send_vk_key") as m_vk, \
+             patch.object(time, "sleep"):
+            HANDLERS["type"]({"text": "hi", "clear": True, "caret_position": "start"})
+        assert m_vk.call_args_list[0].args[0] == 0x24  # VK_HOME before…
+        assert m_vk.call_args_list[1].args[0] == 0x2E  # …VK_DELETE
 
 
 class TestScrollHandler:

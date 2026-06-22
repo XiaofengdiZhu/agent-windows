@@ -62,7 +62,14 @@ class TestInputCommands:
         runner.invoke(app, ["type", "hi", "--enter", "--clear"])
         _, params = _cmd_calls(mock_cmd)[0]
         assert "at_x" not in params
-        assert params == {"text": "hi", "enter": True, "clear": True}
+        assert params == {"text": "hi", "enter": True, "clear": True, "caret_position": "idle"}
+
+    @patch("agent_windows.cli.commands.input._cmd")
+    def test_type_caret_option_forwarded(self, mock_cmd):
+        """--caret start maps to caret_position=start param (TODO #16)."""
+        runner.invoke(app, ["type", "hi", "--caret", "start"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params["caret_position"] == "start"
 
     @patch("agent_windows.cli.commands.input._cmd")
     def test_type_at_ignored_when_not_two_parts(self, mock_cmd):
