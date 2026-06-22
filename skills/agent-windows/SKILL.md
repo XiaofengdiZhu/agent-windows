@@ -338,6 +338,20 @@ agent-windows notify "Alert" "Disk 95% full" --app-id my.app  # Custom AppUserMo
 
 Shows a Windows toast via PowerShell WinRT (`ToastNotificationManager`). The default app id is PowerShell's own AUMID (always present, no registration needed); a custom `--app-id` only displays reliably if a matching Start Menu shortcut is registered. Title/message are XML-escaped; `app_id` must not contain a single quote.
 
+### Registry
+
+Read and write the Windows Registry (PowerShell-drive paths like `HKCU:\Software\MyApp`):
+
+```bash
+agent-windows registry list HKCU:\Software\Microsoft\Windows        # Values + sub-keys
+agent-windows registry get HKCU:\Software\MyApp Version             # Read a value
+agent-windows registry set HKCU:\Software\MyApp Count 42 -t DWord   # Set typed value
+agent-windows registry delete HKCU:\Software\MyApp Version          # Delete value
+agent-windows registry delete HKCU:\Software\MyApp                  # Delete whole key
+```
+
+`set` types: `String` (default), `ExpandString`, `DWord`, `QWord`, `MultiString` (value = JSON array), `Binary` (value = hex string). Paths must start with `HKCU/HKLM/HKCR/HKU/HKCC/HKPD`.
+
 ## Batch Execution
 
 Execute multiple commands in one call:

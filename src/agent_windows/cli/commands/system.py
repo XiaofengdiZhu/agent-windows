@@ -308,3 +308,79 @@ def notify(
     if app_id:
         params["app_id"] = app_id
     _cmd(ctx, "notify", **params)
+
+
+# ── registry ────────────────────────────────────────────────────────
+
+registry_cmd = typer.Typer(help="Windows Registry operations")
+
+
+@registry_cmd.command("get")
+def registry_get(
+    ctx: typer.Context,
+    path: str = typer.Argument(help="Registry path (e.g. HKCU:\\Software\\MyApp)"),
+    name: str = typer.Argument(help="Value name"),
+) -> None:
+    """Read a registry value."""
+    _cmd(ctx, "registry", mode="get", path=path, name=name)
+
+
+@registry_cmd.command("set")
+def registry_set(
+    ctx: typer.Context,
+    path: str = typer.Argument(help="Registry path"),
+    name: str = typer.Argument(help="Value name"),
+    value: str = typer.Argument(help="Value (string/int, JSON array for MultiString, hex for Binary)"),
+    type: str = typer.Option(
+        "String", "--type", "-t",
+        help="Value type: String|ExpandString|DWord|QWord|MultiString|Binary",
+    ),
+) -> None:
+    """Set a registry value (creates the key if absent)."""
+    # MultiString takes a list; the CLI receives a string, so JSON-parse it here
+    # (the boundary where a CLI string becomes a typed value). The daemon's
+    # JSON-RPC path already receives a native list. (BUG-A fix)
+    set_value = value
+    if type == "MultiString":
+        import json
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError as e:
+            typer.echo(f"Error: --type MultiString requires a JSON array: {e}", err=True)
+            raise typer.Exit(1)
+        if not isinstance(parsed, list):
+            typer.echo("Error: --type MultiString requires a JSON array", err=True)
+            raise typer.Exit(1)
+        set_value = parsed
+    _cmd(ctx, "registry", mode="set", path=path, name=name, value=set_value, type=type)
+
+
+@registry_cmd.command("delete")
+def registry_delete(
+    ctx: typer.Context,
+    path: str = typer.Argument(help="Registry path"),
+    name: str = typer.Argument(
+        None, help="Value name (omit to delete the whole key)",
+    ),
+) -> None:
+    """Delete a registry value, or the whole key when NAME is omitted.
+
+    NAME is optional: pass an explicit empty string to delete the unnamed
+    (default) value; omit the argument entirely to delete the whole key.
+    """
+    params: dict = {"mode": "delete", "path": path}
+    # name is None when the argument is omitted (delete whole key). An explicit
+    # empty string ("") targets the registry's unnamed default value, so we
+    # forward it only when the argument was actually provided. (BUG-B fix)
+    if name is not None:
+        params["name"] = name
+    _cmd(ctx, "registry", **params)
+
+
+@registry_cmd.command("list")
+def registry_list(
+    ctx: typer.Context,
+    path: str = typer.Argument(help="Registry path"),
+) -> None:
+    """List values and sub-keys under a path."""
+    _cmd(ctx, "registry", mode="list", path=path)

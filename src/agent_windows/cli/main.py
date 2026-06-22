@@ -34,7 +34,7 @@ from agent_windows.cli.commands.observe import observe, snapshot, screenshot, gr
 from agent_windows.cli.commands.input import click, type_text, scroll, move, dblclick, hover, mouse_down, mouse_up, drag, shortcut  # noqa: E402
 from agent_windows.cli.commands.system import (  # noqa: E402
     shell, batch, notify,
-    app_cmd, fs_cmd, clip_cmd, proc_cmd,
+    app_cmd, fs_cmd, clip_cmd, proc_cmd, registry_cmd,
 )
 from agent_windows.cli.commands.wait import wait, wait_for  # noqa: E402
 from agent_windows.cli.commands.multi import multi_select, multi_edit  # noqa: E402
@@ -74,6 +74,7 @@ app.add_typer(fs_cmd, name="fs")
 app.add_typer(clip_cmd, name="clipboard")
 app.add_typer(proc_cmd, name="process")
 app.add_typer(is_cmd, name="is")
+app.add_typer(registry_cmd, name="registry")
 
 # ── Daemon and Config groups ──────────────────────────────────────
 

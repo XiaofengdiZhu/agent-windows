@@ -610,6 +610,29 @@ agent-windows notify "Alert" "Disk 95% full" --app-id my.app
 
 **Output**: `sent` (bool), `exit_code`, `app_id`. Title/message are XML-escaped (safe for any content); `app_id` must not contain a single quote. A custom `--app-id` only displays reliably if a matching Start Menu shortcut is registered.
 
+### registry get / set / delete / list
+
+Windows Registry operations via PowerShell cmdlets. Paths use PowerShell drive format (`HKCU:\Software\MyApp`).
+
+```bash
+agent-windows registry list HKCU:\Software\MyApp
+agent-windows registry get HKCU:\Software\MyApp Version
+agent-windows registry set HKCU:\Software\MyApp Count 42 --type DWord
+agent-windows registry delete HKCU:\Software\MyApp Version   # Delete a value
+agent-windows registry delete HKCU:\Software\MyApp           # Delete the whole key
+```
+
+| Command | Parameters |
+|---------|-----------|
+| `registry get` | `path` (str, **required**), `name` (str, **required**) |
+| `registry set` | `path` (str, **required**), `name` (str, **required**), `value` (**required**), `--type`/`-t` (str, default `String`) |
+| `registry delete` | `path` (str, **required**), `name` (str, optional — omit to delete the whole key) |
+| `registry list` | `path` (str, **required**) |
+
+**`--type` values**: `String` (default), `ExpandString`, `DWord`, `QWord`, `MultiString` (value = JSON array, e.g. `'["a","b"]'`), `Binary` (value = hex string, e.g. `deadbeef`).
+
+**Output**: `exit_code`, `stdout`, `stderr`; `get` also returns `value`. Paths must start with `HKCU/HKLM/HKCR/HKU/HKCC/HKPD`. All interpolated strings are single-quote-escaped (safe for any content). A missing value/key surfaces as a non-zero `exit_code` with stderr (not an exception).
+
 ---
 
 ## Control

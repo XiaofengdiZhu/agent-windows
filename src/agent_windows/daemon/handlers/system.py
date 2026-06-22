@@ -215,3 +215,40 @@ def _notify(params: dict) -> dict[str, Any]:
         require(params, "message", str),
         app_id=params.get("app_id") or DEFAULT_APP_ID,
     )
+
+
+# ── Registry ─────────────────────────────────────────────────────────
+
+
+@handler("registry")
+def _registry(params: dict) -> dict[str, Any]:
+    """Windows Registry operations: get/set/delete/list. (TODO #11)
+
+    ``mode`` selects the operation; ``path`` is a PowerShell-drive path
+    (e.g. ``HKCU:\\Software\\MyApp``). ``set`` requires ``name``+``value``;
+    ``get`` requires ``name``; ``delete`` takes optional ``name`` (omit to
+    delete the whole key); ``list`` takes only ``path``.
+    """
+    from agent_windows.core import registry
+    mode = require(params, "mode", str)
+    path = require(params, "path", str)
+    if mode == "get":
+        return registry.get_value(path, require(params, "name", str))
+    if mode == "set":
+        return registry.set_value(
+            path,
+            require(params, "name", str),
+            require(params, "value"),
+            reg_type=params.get("type") or "String",
+        )
+    if mode == "delete":
+        # name absent → delete the whole key; name="" → delete the unnamed
+        # (default) value. Distinguish "key not in params" from a falsy name so
+        # an explicit empty string targets the default value, not the whole key. (BUG-B)
+        name = params["name"] if "name" in params else None
+        return registry.delete_entry(path, name=name)
+    if mode == "list":
+        return registry.list_key(path)
+    raise ValueError(
+        f"mode must be 'get', 'set', 'delete', or 'list' (got {mode!r})"
+    )

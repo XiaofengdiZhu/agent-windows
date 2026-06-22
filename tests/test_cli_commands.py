@@ -323,6 +323,68 @@ class TestSystemCommands:
         _, params = _cmd_calls(mock_cmd)[0]
         assert params == {"title": "Hello", "message": "World", "app_id": "my.app"}
 
+    @patch("agent_windows.cli.commands.system._cmd")
+    def test_registry_get(self, mock_cmd):
+        runner.invoke(app, ["registry", "get", r"HKCU:\Soft", "Name"])
+        method, params = _cmd_calls(mock_cmd)[0]
+        assert method == "registry"
+        assert params == {"mode": "get", "path": r"HKCU:\Soft", "name": "Name"}
+
+    @patch("agent_windows.cli.commands.system._cmd")
+    def test_registry_set_default_type(self, mock_cmd):
+        runner.invoke(app, ["registry", "set", r"HKCU:\Soft", "Name", "val"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params == {"mode": "set", "path": r"HKCU:\Soft",
+                          "name": "Name", "value": "val", "type": "String"}
+
+    @patch("agent_windows.cli.commands.system._cmd")
+    def test_registry_set_custom_type(self, mock_cmd):
+        runner.invoke(app, ["registry", "set", r"HKCU:\Soft", "Count", "42", "--type", "DWord"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params["type"] == "DWord"
+        assert params["value"] == "42"
+
+    @patch("agent_windows.cli.commands.system._cmd")
+    def test_registry_delete_with_name(self, mock_cmd):
+        runner.invoke(app, ["registry", "delete", r"HKCU:\Soft", "Name"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params == {"mode": "delete", "path": r"HKCU:\Soft", "name": "Name"}
+
+    @patch("agent_windows.cli.commands.system._cmd")
+    def test_registry_delete_without_name(self, mock_cmd):
+        runner.invoke(app, ["registry", "delete", r"HKCU:\Soft"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params == {"mode": "delete", "path": r"HKCU:\Soft"}
+
+    @patch("agent_windows.cli.commands.system._cmd")
+    def test_registry_list(self, mock_cmd):
+        runner.invoke(app, ["registry", "list", r"HKCU:\Soft"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params == {"mode": "list", "path": r"HKCU:\Soft"}
+
+    @patch("agent_windows.cli.commands.system._cmd")
+    def test_registry_set_multistring_parses_json(self, mock_cmd):
+        """BUG-A fix: --type MultiString JSON-parses the value into a list
+        before forwarding (the CLI boundary where string → typed value)."""
+        runner.invoke(app, ["registry", "set", r"HKCU:\Soft", "Name",
+                            '["a","b"]', "--type", "MultiString"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params["value"] == ["a", "b"]
+        assert params["type"] == "MultiString"
+
+    def test_registry_set_multistring_rejects_non_array(self):
+        result = runner.invoke(app, ["registry", "set", r"HKCU:\Soft", "Name",
+                                     '"notarray"', "--type", "MultiString"])
+        assert result.exit_code != 0
+
+    @patch("agent_windows.cli.commands.system._cmd")
+    def test_registry_delete_empty_name_targets_default_value(self, mock_cmd):
+        """BUG-B fix: an explicit empty NAME targets the unnamed default value,
+        not a whole-key delete. NAME omitted → whole key."""
+        runner.invoke(app, ["registry", "delete", r"HKCU:\Soft", ""])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params == {"mode": "delete", "path": r"HKCU:\Soft", "name": ""}
+
 
 # ── batch command: JSON source resolution + error paths ─────────────
 

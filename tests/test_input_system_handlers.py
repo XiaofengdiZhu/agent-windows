@@ -549,3 +549,61 @@ class TestNotifyHandler:
     def test_notify_missing_message_raises(self):
         with pytest.raises(ValueError, match="missing required parameter 'message'"):
             HANDLERS["notify"]({"title": "T"})
+
+
+# ── registry handler (TODO #11) ──────────────────────────────────────
+
+
+class TestRegistryHandler:
+    def test_get_mode_forwards(self):
+        with patch("agent_windows.core.registry.get_value",
+                   return_value={"output": "ok"}) as m:
+            HANDLERS["registry"]({"mode": "get", "path": r"HKCU:\Soft", "name": "N"})
+        m.assert_called_once_with(r"HKCU:\Soft", "N")
+
+    def test_set_mode_forwards_type_default(self):
+        with patch("agent_windows.core.registry.set_value",
+                   return_value={"output": "ok"}) as m:
+            HANDLERS["registry"]({"mode": "set", "path": "p", "name": "n", "value": "v"})
+        m.assert_called_once_with("p", "n", "v", reg_type="String")
+
+    def test_set_mode_forwards_custom_type(self):
+        with patch("agent_windows.core.registry.set_value",
+                   return_value={"output": "ok"}) as m:
+            HANDLERS["registry"]({"mode": "set", "path": "p", "name": "n",
+                                  "value": "1", "type": "DWord"})
+        m.assert_called_once_with("p", "n", "1", reg_type="DWord")
+
+    def test_delete_mode_with_name(self):
+        with patch("agent_windows.core.registry.delete_entry",
+                   return_value={"output": "ok"}) as m:
+            HANDLERS["registry"]({"mode": "delete", "path": "p", "name": "n"})
+        m.assert_called_once_with("p", name="n")
+
+    def test_delete_mode_without_name(self):
+        with patch("agent_windows.core.registry.delete_entry",
+                   return_value={"output": "ok"}) as m:
+            HANDLERS["registry"]({"mode": "delete", "path": "p"})
+        m.assert_called_once_with("p", name=None)
+
+    def test_delete_mode_empty_name_targets_default_value(self):
+        """BUG-B fix: name='' targets the unnamed default value, not the whole
+        key. Distinguished from name omitted (→ None → whole key)."""
+        with patch("agent_windows.core.registry.delete_entry",
+                   return_value={"output": "ok"}) as m:
+            HANDLERS["registry"]({"mode": "delete", "path": "p", "name": ""})
+        m.assert_called_once_with("p", name="")
+
+    def test_list_mode(self):
+        with patch("agent_windows.core.registry.list_key",
+                   return_value={"output": "ok"}) as m:
+            HANDLERS["registry"]({"mode": "list", "path": "p"})
+        m.assert_called_once_with("p")
+
+    def test_invalid_mode_rejected(self):
+        with pytest.raises(ValueError, match="mode must be"):
+            HANDLERS["registry"]({"mode": "bogus", "path": "p"})
+
+    def test_missing_mode_raises(self):
+        with pytest.raises(ValueError, match="missing required parameter 'mode'"):
+            HANDLERS["registry"]({"path": "p"})
