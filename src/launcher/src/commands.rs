@@ -7,11 +7,9 @@
 //! own arms; everything else routes through the generic table.
 
 use std::collections::HashMap;
-use std::time::Duration;
 
 use serde_json::{json, Map, Value};
 
-use crate::output::print_text;
 
 /// A typed parse error. Carries both a machine-readable `type` (stable string
 /// for the JSON error contract, so an agent consumer can pick a retry strategy
@@ -100,6 +98,12 @@ pub enum Action {
     Call { method: String, params: Value },
     /// Handle entirely locally (no IPC).
     Local(LocalAction),
+    /// `wait <seconds>`: sleep locally (no IPC) and print a confirmation.
+    /// Separate from `Local` (daemon lifecycle) so main() can honor
+    /// --format json — the Python CLI prints `{"output": "## Wait\nSlept Ns"}`
+    /// in json mode, and the old code hard-coded a text-only print + exit
+    /// inside parse(), which had no access to the format flag.
+    LocalSleep(f64),
     /// Client-side polling loop: repeatedly call `wait_check` until found or
     /// timeout. Can't be a single Call because it needs multiple IPC round-
     /// trips with local sleeps between them (mirrors cli/commands/wait.py).
@@ -902,17 +906,18 @@ fn parse_wait(rest: &[String]) -> Result<Action, ParseError> {
         }));
     }
 
-    // Numeric sleep — do it locally, no IPC.
+    // Numeric sleep — return a local-sleep action. main() performs the actual
+    // sleep and formats the output honoring --format json (the Python CLI prints
+    // `{"output": "## Wait\nSlept Ns"}` in json mode). We don't sleep/print here
+    // because parse() has no access to the format flag, and a print+exit inside
+    // parse would bypass json mode (the original bug).
     let secs: f64 = t0.parse().map_err(|_| {
         invalid(format!("invalid target {:?} (expected seconds, @eN selector, or --text)", t0))
     })?;
     if secs <= 0.0 {
         return Err(invalid("provide a positive number of seconds, a selector, or --text"));
     }
-    std::thread::sleep(Duration::from_secs_f64(secs));
-    // Emit the same output the Python CLI would.
-    print_text(&format!("## Wait\nSlept {}s", secs));
-    std::process::exit(0);
+    Ok(Action::LocalSleep(secs))
 }
 
 /// `wait-for <condition> [--text S] [--window W] [--timeout N] [--interval N]`.
@@ -1359,6 +1364,32 @@ mod tests {
         // missing condition → missing_argument
         let e = parse(&argv(&["wait-for"]), &g).unwrap_err();
         assert_eq!(e.type_name(), "missing_argument");
+    }
+
+    #[test]
+    fn wait_numeric_sleep_returns_local_sleep_action() {
+        let g = GlobalFlags::default();
+        // `wait 3` → LocalSleep(3.0). Regression: the old code did the sleep
+        // and a text-only print INSIDE parse() then process::exit(0), which
+        // (a) couldn't honor --format json and (b) made parse() do I/O. Now it
+        // returns an action so main() formats the output correctly.
+        match parse(&argv(&["wait", "3"]), &g) {
+            Ok(Action::LocalSleep(secs)) => assert_eq!(secs, 3.0),
+            other => panic!("expected LocalSleep, got {:?}", other),
+        }
+        // fractional seconds
+        match parse(&argv(&["wait", "0.5"]), &g) {
+            Ok(Action::LocalSleep(secs)) => assert_eq!(secs, 0.5),
+            other => panic!("got {:?}", other),
+        }
+        // zero/negative → invalid_value (no sleep)
+        for bad in &["0", "-1", "0.0"] {
+            let e = parse(&argv(&["wait", bad]), &g).unwrap_err();
+            assert_eq!(e.type_name(), "invalid_value", "wait {:?} should be invalid_value", bad);
+        }
+        // non-numeric → invalid_value
+        let e = parse(&argv(&["wait", "abc"]), &g).unwrap_err();
+        assert_eq!(e.type_name(), "invalid_value");
     }
 
     #[test]

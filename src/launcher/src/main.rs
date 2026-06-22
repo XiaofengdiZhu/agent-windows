@@ -116,6 +116,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Action::Local(local) => run_local(local, &global),
+        Action::LocalSleep(secs) => run_local_sleep(secs, &global),
         Action::Call { method, params } => run_call(&method, &params, &global),
         Action::Wait(spec) => run_wait(spec, &global),
         Action::WaitFor(spec) => run_wait_for(spec, &global),
@@ -541,6 +542,19 @@ fn resolve_python_cli_exe() -> String {
     // Fallback for layouts where the two aren't co-located (e.g. uv run from a
     // source checkout): let the OS resolve it from PATH.
     "agent-windows-python.exe".into()
+}
+
+/// `wait <seconds>`: sleep locally (no IPC) and print a confirmation honoring
+/// --format json. Mirrors cli/commands/wait.py:66-68, which builds
+/// `{"output": "## Wait\nSlept Ns"}` and routes it through print_result — so in
+/// json mode the whole object is emitted, and in text mode just the `output`
+/// string. (The old code hard-coded a text-only print inside parse(), which
+/// had no access to the format flag and broke the json contract.)
+fn run_local_sleep(secs: f64, global: &GlobalFlags) -> ExitCode {
+    std::thread::sleep(std::time::Duration::from_secs_f64(secs));
+    let result = serde_json::json!({ "output": format!("## Wait\nSlept {}s", secs) });
+    output::print_result(&result, global.format_json);
+    ExitCode::SUCCESS
 }
 
 /// Run a local action (daemon start/stop/status). These never hit the IPC pipe
