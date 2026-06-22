@@ -17,7 +17,7 @@ mod win32;
 
 use std::process::ExitCode;
 
-use commands::{parse, Action, GlobalFlags, LocalAction, WaitProbe, WaitSpec};
+use commands::{parse, Action, GlobalFlags, LocalAction, WaitProbe, WaitSpec, WaitForSpec};
 use serde_json::json;
 
 fn main() -> ExitCode {
@@ -118,6 +118,7 @@ fn main() -> ExitCode {
         Action::Local(local) => run_local(local, &global),
         Action::Call { method, params } => run_call(&method, &params, &global),
         Action::Wait(spec) => run_wait(spec, &global),
+        Action::WaitFor(spec) => run_wait_for(spec, &global),
     }
 }
 
@@ -375,6 +376,110 @@ fn run_wait(spec: WaitSpec, global: &GlobalFlags) -> ExitCode {
     }
 }
 
+/// Run the `wait-for` polling loop. Mirrors cli/commands/wait.py:wait_for:
+/// repeatedly probe `wait_for_check` with a {condition, text, window_name}
+/// payload, sleeping locally between probes so the daemon's single STA worker
+/// is never tied up for the wait duration (same rationale as `run_wait`).
+///
+/// The condition is normalized/validated server-side on the first probe — a bad
+/// condition returns INVALID_PARAMS immediately, surfacing as a daemon error.
+fn run_wait_for(spec: WaitForSpec, global: &GlobalFlags) -> ExitCode {
+    // NOTE: --no-daemon is intercepted in main() before parse() runs, so it
+    // can never reach here. This function always goes through the daemon.
+    let python = resolve_python_exe();
+    if let Err(e) = daemon::ensure_daemon_running(&python, global.debug) {
+        report_error(&e, "daemon", global);
+        return ExitCode::from(1);
+    }
+
+    let poll = if spec.interval > 0.0 {
+        spec.interval
+    } else {
+        0.5
+    };
+    let start = std::time::Instant::now();
+
+    loop {
+        // Bound each probe to the remaining timeout budget (see run_wait): a
+        // wedged daemon could otherwise block a single probe up to the 150s
+        // read timeout, blowing past the caller's --timeout.
+        let remaining = spec.timeout - start.elapsed().as_secs_f64();
+        if remaining <= 0.0 {
+            report_error(
+                &format!(
+                    "WaitFor condition {:?} not satisfied within {}s",
+                    spec.condition, spec.timeout
+                ),
+                "timeout",
+                global,
+            );
+            return ExitCode::from(1);
+        }
+        let probe_timeout_ms = (remaining * 1000.0) as u32;
+        let probe_timeout_ms = probe_timeout_ms.min(win32::READ_TIMEOUT_MS);
+
+        let req = ipc::build_request(
+            "wait_for_check",
+            &json!({
+                "condition": spec.condition,
+                "text": spec.text,
+                "window_name": spec.window,
+            }),
+        );
+        match ipc::send_to_daemon_bounded(&req, probe_timeout_ms) {
+            Ok(resp) => {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&resp) {
+                    if let Some(err) = parsed.get("error") {
+                        // A bad condition → INVALID_PARAMS; surface it as a
+                        // daemon error (matches the Python CLI's exit-1 path).
+                        let msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("error");
+                        report_error(
+                            &format!("wait_for_check failed: {}", msg),
+                            "daemon",
+                            global,
+                        );
+                        return ExitCode::from(1);
+                    }
+                    if let Some(result) = parsed.get("result") {
+                        if result.get("found").and_then(|f| f.as_bool()).unwrap_or(false) {
+                            let elapsed = start.elapsed().as_secs_f64();
+                            let detail = result
+                                .get("detail")
+                                .and_then(|d| d.as_str())
+                                .unwrap_or("");
+                            let cond = result
+                                .get("condition")
+                                .and_then(|c| c.as_str())
+                                .unwrap_or(&spec.condition);
+                            let output = format!(
+                                "## WaitFor\nCondition {} satisfied after {:.1}s: {}",
+                                cond, elapsed, detail
+                            );
+                            let elapsed_rounded = (elapsed * 10.0).round() / 10.0;
+                            let mut out = serde_json::Map::new();
+                            out.insert("output".into(), output.into());
+                            out.insert("condition".into(), cond.into());
+                            out.insert("elapsed".into(), serde_json::json!(elapsed_rounded));
+                            out.insert("detail".into(), detail.into());
+                            output::print_result(
+                                &serde_json::Value::Object(out),
+                                global.format_json,
+                            );
+                            return ExitCode::SUCCESS;
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                report_error(&format!("IPC error during wait-for: {}", e), "ipc", global);
+                return ExitCode::from(1);
+            }
+        }
+
+        std::thread::sleep(std::time::Duration::from_secs_f64(poll));
+    }
+}
+
 /// Delegate to the Python CLI (`agent-windows-python`), forwarding the full
 /// original argv verbatim. Used for `config` (a command not ported to the
 /// launcher) and `--no-daemon` (which needs the in-process Python handlers
@@ -605,7 +710,7 @@ Commands:
   diff                  Pixel-level screenshot diff
   cleanup               Clean up old screenshots
 
-  click / dblclick / hover / move  Mouse actions
+  click / dblclick / hover / move  Mouse actions (--selector/-s @eN)
   mouse-down / mouse-up            Press / release mouse button
   drag / scroll                    Drag / scroll
   type / shortcut                  Keyboard actions
@@ -615,9 +720,12 @@ Commands:
   clipboard get/set                Clipboard access
   process list/kill                Process management
 
-  wait                 Wait for seconds / element / text
-  batch                Execute multiple commands in one IPC round-trip
-  shell                Run a shell command (subject to the daemon's blacklist)
+  multi-select / multi-edit        Batch click / fill multiple targets
+  wait / wait-for                  Wait for time / element / condition
+  batch                            Execute multiple commands in one IPC round-trip
+  shell                            Run a shell command (subject to the daemon's blacklist)
+  notify                           Send a Windows toast notification
+  registry get/set/delete/list     Windows Registry operations
 
   daemon start/stop/status         Daemon management
   config init/show/set/doctor      Configuration (delegated to the Python CLI)

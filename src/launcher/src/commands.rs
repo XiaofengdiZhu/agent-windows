@@ -104,6 +104,12 @@ pub enum Action {
     /// timeout. Can't be a single Call because it needs multiple IPC round-
     /// trips with local sleeps between them (mirrors cli/commands/wait.py).
     Wait(WaitSpec),
+    /// Client-side polling loop for `wait-for`: repeatedly call
+    /// `wait_for_check` with a multi-condition predicate until satisfied or
+    /// timeout (mirrors cli/commands/wait.py:wait_for). Separate from `Wait`
+    /// because the probe carries three fields (condition/text/window) and the
+    /// success output names the condition rather than a selector/text.
+    WaitFor(WaitForSpec),
     /// Print usage and exit.
     Help,
 }
@@ -120,6 +126,16 @@ pub struct WaitSpec {
 pub enum WaitProbe {
     Selector(String),
     Text(String),
+}
+
+/// Parameters for the `wait-for` polling loop.
+#[derive(Debug)]
+pub struct WaitForSpec {
+    pub condition: String,
+    pub text: String,
+    pub window: String,
+    pub timeout: f64,
+    pub interval: f64,
 }
 
 #[derive(Debug)]
@@ -154,7 +170,7 @@ pub fn parse(argv: &[String], global: &GlobalFlags) -> Result<Action, ParseError
 
         // ── Observation ───────────────────────────────────────────────────
         "observe" => parse_observe(rest),
-        "snapshot" => Ok(Action::Call { method: "snapshot".into(), params: json!({}) }),
+        "snapshot" => parse_snapshot(rest),
         "screenshot" => parse_screenshot(rest),
         "ground" => parse_ground(rest),
         "ask-vision" => parse_ask_vision(rest),
@@ -214,7 +230,19 @@ pub fn parse(argv: &[String], global: &GlobalFlags) -> Result<Action, ParseError
 
         // ── Control ───────────────────────────────────────────────────────
         "wait" => parse_wait(rest),
+        "wait-for" => parse_wait_for(rest),
         "batch" => parse_batch(rest, global),
+
+        // ── Batch interaction ─────────────────────────────────────────────
+        "multi-select" => parse_multi_select(rest),
+        "multi-edit" => parse_multi_edit(rest),
+
+        // ── System extras ─────────────────────────────────────────────────
+        // `notify` and `registry` route to daemon handlers; they were missing
+        // from the launcher, so the skill's documented commands failed with
+        // "Unknown command" under the recommended `uv tool install` path.
+        "notify" => parse_notify(rest),
+        "registry" => parse_registry(rest),
 
         // ── Diagnostic ────────────────────────────────────────────────────
         "ping" => Ok(Action::Call { method: "ping".into(), params: json!({}) }),
@@ -401,7 +429,20 @@ fn opt_float(p: &ParsedArgs, names: &[&str], default: f64) -> Result<f64, ParseE
 }
 
 fn parse_xy(rest: &[String], method: &str) -> Result<Action, ParseError> {
-    let p = ParsedArgs::parse(rest, &[]);
+    // `--selector/-s @eN` overrides X Y (mirrors input.py:_xy_or_selector). The
+    // selector must start with "@e"; an empty/bare value is treated as a bad
+    // selector so the daemon surfaces a clear ELEMENT_NOT_FOUND rather than the
+    // launcher silently sending an empty string.
+    let p = ParsedArgs::parse(rest, &["selector", "s"]);
+    if let Some(sel) = p.value(&["selector", "s"]) {
+        if sel.is_empty() {
+            return Err(invalid("--selector/-s requires an @eN ref"));
+        }
+        return Ok(Action::Call {
+            method: method.into(),
+            params: json!({ "selector": sel }),
+        });
+    }
     let x: i64 = p.pos(0, "x")?.parse().map_err(|_| invalid("x must be an integer"))?;
     let y: i64 = p.pos(1, "y")?.parse().map_err(|_| invalid("y must be an integer"))?;
     Ok(Action::Call {
@@ -411,12 +452,19 @@ fn parse_xy(rest: &[String], method: &str) -> Result<Action, ParseError> {
 }
 
 fn parse_xy_opts(rest: &[String], method: &str, flags: &[&str]) -> Result<Action, ParseError> {
-    let p = ParsedArgs::parse(rest, &[]);
-    let x: i64 = p.pos(0, "x")?.parse().map_err(|_| invalid("x must be an integer"))?;
-    let y: i64 = p.pos(1, "y")?.parse().map_err(|_| invalid("y must be an integer"))?;
+    let p = ParsedArgs::parse(rest, &["selector", "s"]);
     let mut params = Map::new();
-    params.insert("x".into(), x.into());
-    params.insert("y".into(), y.into());
+    if let Some(sel) = p.value(&["selector", "s"]) {
+        if sel.is_empty() {
+            return Err(invalid("--selector/-s requires an @eN ref"));
+        }
+        params.insert("selector".into(), sel.into());
+    } else {
+        let x: i64 = p.pos(0, "x")?.parse().map_err(|_| invalid("x must be an integer"))?;
+        let y: i64 = p.pos(1, "y")?.parse().map_err(|_| invalid("y must be an integer"))?;
+        params.insert("x".into(), x.into());
+        params.insert("y".into(), y.into());
+    }
     for f in flags {
         params.insert((*f).into(), p.flag(&[f]).into());
     }
@@ -424,14 +472,22 @@ fn parse_xy_opts(rest: &[String], method: &str, flags: &[&str]) -> Result<Action
 }
 
 fn parse_mouse_button(rest: &[String], method: &str) -> Result<Action, ParseError> {
-    let p = ParsedArgs::parse(rest, &["button"]);
-    let x: i64 = p.pos(0, "x")?.parse().map_err(|_| invalid("x must be an integer"))?;
-    let y: i64 = p.pos(1, "y")?.parse().map_err(|_| invalid("y must be an integer"))?;
+    let p = ParsedArgs::parse(rest, &["button", "selector", "s"]);
+    let mut params = Map::new();
+    if let Some(sel) = p.value(&["selector", "s"]) {
+        if sel.is_empty() {
+            return Err(invalid("--selector/-s requires an @eN ref"));
+        }
+        params.insert("selector".into(), sel.into());
+    } else {
+        let x: i64 = p.pos(0, "x")?.parse().map_err(|_| invalid("x must be an integer"))?;
+        let y: i64 = p.pos(1, "y")?.parse().map_err(|_| invalid("y must be an integer"))?;
+        params.insert("x".into(), x.into());
+        params.insert("y".into(), y.into());
+    }
     let button = p.value(&["button"]).unwrap_or("left").to_string();
-    Ok(Action::Call {
-        method: method.into(),
-        params: json!({ "x": x, "y": y, "button": button }),
-    })
+    params.insert("button".into(), button.into());
+    Ok(Action::Call { method: method.into(), params: Value::Object(params) })
 }
 
 fn parse_drag(rest: &[String]) -> Result<Action, ParseError> {
@@ -450,11 +506,20 @@ fn parse_drag(rest: &[String]) -> Result<Action, ParseError> {
 }
 
 fn parse_scroll(rest: &[String]) -> Result<Action, ParseError> {
-    let p = ParsedArgs::parse(rest, &["direction", "amount"]);
-    let x: i64 = p.pos(0, "x")?.parse().map_err(|_| invalid("x must be an integer"))?;
-    let y: i64 = p.pos(1, "y")?.parse().map_err(|_| invalid("y must be an integer"))?;
+    let p = ParsedArgs::parse(rest, &["direction", "amount", "selector", "s"]);
     let direction = p.value(&["direction"]).unwrap_or("down").to_string();
     let amount: i64 = opt_int(&p, &["amount"], 3)?;
+    if let Some(sel) = p.value(&["selector", "s"]) {
+        if sel.is_empty() {
+            return Err(invalid("--selector/-s requires an @eN ref"));
+        }
+        return Ok(Action::Call {
+            method: "scroll".into(),
+            params: json!({ "selector": sel, "direction": direction, "amount": amount }),
+        });
+    }
+    let x: i64 = p.pos(0, "x")?.parse().map_err(|_| invalid("x must be an integer"))?;
+    let y: i64 = p.pos(1, "y")?.parse().map_err(|_| invalid("y must be an integer"))?;
     Ok(Action::Call {
         method: "scroll".into(),
         params: json!({ "x": x, "y": y, "direction": direction, "amount": amount }),
@@ -462,7 +527,7 @@ fn parse_scroll(rest: &[String]) -> Result<Action, ParseError> {
 }
 
 fn parse_observe(rest: &[String]) -> Result<Action, ParseError> {
-    let p = ParsedArgs::parse(rest, &["ground"]);
+    let p = ParsedArgs::parse(rest, &["ground", "display", "d"]);
     let snapshot = p.flag(&["snapshot"]);
     let screenshot = p.flag(&["screenshot"]);
     let ground = p.value(&["ground"]).unwrap_or("").to_string();
@@ -476,7 +541,75 @@ fn parse_observe(rest: &[String]) -> Result<Action, ParseError> {
     params.insert("snapshot".into(), snap.into());
     params.insert("screenshot".into(), shot.into());
     params.insert("ground".into(), ground.into());
+    if let Some(disp) = collect_display(rest)? {
+        params.insert("display".into(), disp);
+    }
     Ok(Action::Call { method: "observe".into(), params: Value::Object(params) })
+}
+
+/// `snapshot` used to forward an empty params object; now it also forwards the
+/// multi-display filter (`--display`/`-d`, repeatable) so the launcher matches
+/// the Python CLI (TODO #9-B). The daemon's `parse_display_selection` accepts a
+/// single int or a list; we always send a list (a single `-d 0` → `[0]`).
+fn parse_snapshot(rest: &[String]) -> Result<Action, ParseError> {
+    let mut params = Map::new();
+    if let Some(disp) = collect_display(rest)? {
+        params.insert("display".into(), disp);
+    }
+    Ok(Action::Call { method: "snapshot".into(), params: Value::Object(params) })
+}
+
+/// Collect every `--display N` / `-d N` occurrence into a de-duplicated JSON
+/// array of non-negative ints. `ParsedArgs` is last-writer-wins, so it can't
+/// represent the repeatable form; we walk the raw argv here. `-d=0` and
+/// `--display=0` work too. Returns None when no display flag was given (the
+/// daemon treats a missing `display` as "no filter" — backward compatible).
+///
+/// The daemon's `parse_display_selection` also accepts a single int, but
+/// sending a list uniformly is simpler and accepted in all cases.
+fn collect_display(rest: &[String]) -> Result<Option<Value>, ParseError> {
+    let mut indices: Vec<i64> = Vec::new();
+    let mut i = 0;
+    while i < rest.len() {
+        let a = &rest[i];
+        // `--display=N` / `-d=N`
+        if let Some(rhs) = a.strip_prefix("--display=").or_else(|| a.strip_prefix("-d=")) {
+            push_display(&mut indices, rhs)?;
+            i += 1;
+            continue;
+        }
+        // `--display N` / `-d N` (two tokens)
+        if a == "--display" || a == "-d" {
+            let v = rest.get(i + 1).map(|s| s.as_str()).unwrap_or("");
+            if v.is_empty() {
+                return Err(invalid("--display/-d requires a non-negative integer"));
+            }
+            push_display(&mut indices, v)?;
+            i += 2;
+            continue;
+        }
+        i += 1;
+    }
+    if indices.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(Value::Array(indices.into_iter().map(Value::from).collect())))
+    }
+}
+
+/// Parse one display index and push it if not already present (the daemon
+/// de-duplicates too, but doing it here keeps the forwarded payload minimal).
+fn push_display(indices: &mut Vec<i64>, raw: &str) -> Result<(), ParseError> {
+    let n: i64 = raw.parse().map_err(|_| {
+        invalid(format!("--display/-d must be a non-negative integer, got {:?}", raw))
+    })?;
+    if n < 0 {
+        return Err(invalid(format!("--display/-d must be non-negative, got {}", n)));
+    }
+    if !indices.contains(&n) {
+        indices.push(n);
+    }
+    Ok(())
 }
 
 fn parse_screenshot(rest: &[String]) -> Result<Action, ParseError> {
@@ -584,12 +717,20 @@ fn parse_is(rest: &[String]) -> Result<Action, ParseError> {
 }
 
 fn parse_type(rest: &[String]) -> Result<Action, ParseError> {
-    let p = ParsedArgs::parse(rest, &["at"]);
+    // value opts: --at (x,y), --at-selector/--ats (@eN, overrides --at), --caret
+    // (start|idle|end). The daemon's `type` handler reads at_x/at_y OR
+    // at_selector, and caret_position (input.py:55).
+    let p = ParsedArgs::parse(rest, &["at", "at-selector", "ats", "caret"]);
     let text = p.pos(0, "text")?;
     let mut params = Map::new();
     params.insert("text".into(), text.into());
-    if let Some(at) = p.value(&["at"]) {
-        // `--at X,Y` → at_x, at_y (mirrors input.py:32-36)
+    if let Some(sel) = p.value(&["at-selector", "ats"]) {
+        if sel.is_empty() {
+            return Err(invalid("--at-selector requires an @eN ref"));
+        }
+        params.insert("at_selector".into(), sel.into());
+    } else if let Some(at) = p.value(&["at"]) {
+        // `--at X,Y` → at_x, at_y (mirrors input.py:59-62)
         let parts: Vec<&str> = at.split(',').collect();
         if parts.len() != 2 {
             return Err(invalid(format!("--at expects X,Y, got: {}", at)));
@@ -601,6 +742,9 @@ fn parse_type(rest: &[String]) -> Result<Action, ParseError> {
     }
     params.insert("enter".into(), p.flag(&["enter"]).into());
     params.insert("clear".into(), p.flag(&["clear"]).into());
+    // caret defaults to "idle"; the daemon maps the value through unchanged.
+    let caret = p.value(&["caret"]).unwrap_or("idle").to_string();
+    params.insert("caret_position".into(), caret.into());
     Ok(Action::Call { method: "type".into(), params: Value::Object(params) })
 }
 
@@ -771,6 +915,22 @@ fn parse_wait(rest: &[String]) -> Result<Action, ParseError> {
     std::process::exit(0);
 }
 
+/// `wait-for <condition> [--text S] [--window W] [--timeout N] [--interval N]`.
+/// Polls `wait_for_check` client-side (mirrors cli/commands/wait.py:wait_for).
+/// The condition is validated server-side on the first probe; we forward it
+/// verbatim rather than duplicating the alias table here (normalize_condition
+/// in core/wait_for.py lowercases, maps aliases like `enabled`→
+/// `element_enabled`, and raises INVALID_PARAMS for an unknown one).
+fn parse_wait_for(rest: &[String]) -> Result<Action, ParseError> {
+    let p = ParsedArgs::parse(rest, &["text", "window", "timeout", "t", "interval"]);
+    let condition = p.pos(0, "condition")?;
+    let text = p.value(&["text"]).unwrap_or("").to_string();
+    let window = p.value(&["window"]).unwrap_or("").to_string();
+    let timeout: f64 = opt_float(&p, &["timeout", "t"], 30.0)?;
+    let interval: f64 = opt_float(&p, &["interval"], 0.5)?;
+    Ok(Action::WaitFor(WaitForSpec { condition, text, window, timeout, interval }))
+}
+
 fn parse_batch(rest: &[String], _global: &GlobalFlags) -> Result<Action, ParseError> {
     let p = ParsedArgs::parse(rest, &["file", "f", "delay", "d"]);
     // --file / stdin / positional JSON
@@ -813,6 +973,165 @@ fn parse_daemon(rest: &[String]) -> Result<Action, ParseError> {
         "status" => Ok(Action::Local(LocalAction::DaemonStatus)),
         _ => Err(unknown_subcommand("daemon", sub, VALID)),
     }
+}
+
+/// `notify "title" "message" [--app-id ID]`. The daemon handler requires
+/// title+message and defaults app_id to PowerShell's AUMID when absent, so we
+/// forward app_id only when the user gave one (system.py:296-310).
+fn parse_notify(rest: &[String]) -> Result<Action, ParseError> {
+    let p = ParsedArgs::parse(rest, &["app-id"]);
+    let title = p.pos(0, "title")?;
+    let message = p.pos(1, "message")?;
+    let mut params = Map::new();
+    params.insert("title".into(), title.into());
+    params.insert("message".into(), message.into());
+    if let Some(app_id) = p.value(&["app-id"]) {
+        if !app_id.is_empty() {
+            params.insert("app_id".into(), app_id.into());
+        }
+    }
+    Ok(Action::Call { method: "notify".into(), params: Value::Object(params) })
+}
+
+/// `registry {get|set|delete|list} ...`. All four sub-commands route to the
+/// single `registry` method with a `mode` field (system.py:318-386).
+///   get    PATH NAME
+///   set    PATH NAME VALUE [--type/-t T]
+///   delete PATH [NAME]   (NAME omitted → delete the whole key)
+///   list   PATH
+fn parse_registry(rest: &[String]) -> Result<Action, ParseError> {
+    const VALID: &[&str] = &["get", "set", "delete", "list"];
+    let sub = rest.first()
+        .ok_or_else(|| missing("Missing registry subcommand (get/set/delete/list)"))?;
+    let args = &rest[1..];
+    match sub.as_str() {
+        "get" => {
+            let p = ParsedArgs::parse(args, &[]);
+            let path = p.pos(0, "path")?;
+            let name = p.pos(1, "name")?;
+            Ok(Action::Call {
+                method: "registry".into(),
+                params: json!({ "mode": "get", "path": path, "name": name }),
+            })
+        }
+        "set" => {
+            let p = ParsedArgs::parse(args, &["type", "t"]);
+            let path = p.pos(0, "path")?;
+            let name = p.pos(1, "name")?;
+            let value = p.pos(2, "value")?;
+            let reg_type = p.value(&["type", "t"]).unwrap_or("String").to_string();
+            // MultiString takes a list; the Python CLI JSON-parses the string
+            // value into a list before forwarding (system.py:344-354). The
+            // daemon's JSON-RPC path accepts either a native list or a string,
+            // so for MultiString we parse the JSON here and forward a list to
+            // match the CLI contract; for Binary we forward the hex string as-is.
+            let value_param: Value = if reg_type == "MultiString" {
+                serde_json::from_str(&value).map_err(|e| {
+                    invalid(format!("--type MultiString requires a JSON array: {}", e))
+                }).and_then(|parsed: Value| {
+                    if parsed.is_array() {
+                        Ok(parsed)
+                    } else {
+                        Err(invalid("--type MultiString requires a JSON array"))
+                    }
+                })?
+            } else {
+                Value::String(value)
+            };
+            Ok(Action::Call {
+                method: "registry".into(),
+                params: json!({ "mode": "set", "path": path, "name": name, "value": value_param, "type": reg_type }),
+            })
+        }
+        "delete" => {
+            let p = ParsedArgs::parse(args, &[]);
+            let path = p.pos(0, "path")?;
+            let mut params = Map::new();
+            params.insert("mode".into(), "delete".into());
+            params.insert("path".into(), path.into());
+            // name omitted → delete the whole key (forward nothing). An explicit
+            // empty string targets the registry's unnamed default value — but we
+            // can't distinguish "no positional" from "empty positional" here, so
+            // we follow the Python CLI's lead: a provided NAME (incl. "") is
+            // forwarded; an absent NAME isn't. (BUG-B in system.py:358-377.)
+            if let Some(name) = p.positionals.get(1) {
+                params.insert("name".into(), name.clone().into());
+            }
+            Ok(Action::Call { method: "registry".into(), params: Value::Object(params) })
+        }
+        "list" => {
+            let p = ParsedArgs::parse(args, &[]);
+            let path = p.pos(0, "path")?;
+            Ok(Action::Call {
+                method: "registry".into(),
+                params: json!({ "mode": "list", "path": path }),
+            })
+        }
+        _ => Err(unknown_subcommand("registry", sub, VALID)),
+    }
+}
+
+/// Read the JSON payload for multi-select/multi-edit: `--file` > stdin (`-`) >
+/// positional argument. Mirrors multi.py:_read_json and batch's source
+/// precedence. Returns the parsed JSON array (shape validated by the daemon).
+fn read_multi_json(p: &ParsedArgs) -> Result<Value, ParseError> {
+    let raw = if let Some(path) = p.value(&["file", "f"]) {
+        std::fs::read_to_string(path)
+            .map_err(|e| invalid(format!("cannot read --file: {}", e)))?
+    } else {
+        match p.positionals.first() {
+            Some(s) if s == "-" => {
+                use std::io::Read;
+                let mut buf = String::new();
+                std::io::stdin().read_to_string(&mut buf)
+                    .map_err(|e| invalid(format!("cannot read stdin: {}", e)))?;
+                buf
+            }
+            Some(json) => json.clone(),
+            None => {
+                return Err(missing("provide JSON as argument, --file, or stdin (-)"));
+            }
+        }
+    };
+    let data: Value = serde_json::from_str(&raw)
+        .map_err(|e| invalid(format!("invalid JSON: {}", e)))?;
+    if !data.is_array() {
+        return Err(invalid("JSON must be an array"));
+    }
+    Ok(data)
+}
+
+/// `multi-select '[[x,y],...]' --selectors` or with @eN refs.
+/// `--press-ctrl/--no-ctrl` is a Typer boolean pair (default press-ctrl=true).
+/// The daemon wants `locs` (coords) OR `selectors` (@eN) — never both
+/// (multi.py:42-77, handler multi.py:129).
+fn parse_multi_select(rest: &[String]) -> Result<Action, ParseError> {
+    let p = ParsedArgs::parse(rest, &["file", "f"]);
+    let data = read_multi_json(&p)?;
+    let mut params = Map::new();
+    // --no-ctrl present → press_ctrl false; --press-ctrl present → true; else default true.
+    let press_ctrl = !p.flag(&["no-ctrl"]);
+    params.insert("press_ctrl".into(), press_ctrl.into());
+    if p.flag(&["selectors"]) {
+        params.insert("selectors".into(), data);
+    } else {
+        params.insert("locs".into(), data);
+    }
+    Ok(Action::Call { method: "multi_select".into(), params: Value::Object(params) })
+}
+
+/// `multi-edit '[[x,y,text],...]' --selectors` or with @eN+text pairs.
+/// Same locs/selectors split as multi-select; no press-ctrl (multi.py:80-108).
+fn parse_multi_edit(rest: &[String]) -> Result<Action, ParseError> {
+    let p = ParsedArgs::parse(rest, &["file", "f"]);
+    let data = read_multi_json(&p)?;
+    let mut params = Map::new();
+    if p.flag(&["selectors"]) {
+        params.insert("selectors".into(), data);
+    } else {
+        params.insert("locs".into(), data);
+    }
+    Ok(Action::Call { method: "multi_edit".into(), params: Value::Object(params) })
 }
 
 #[cfg(test)]
@@ -875,6 +1194,303 @@ mod tests {
         let g = GlobalFlags::default();
         assert!(parse(&argv(&["ping"]), &g).is_ok());
         assert!(parse(&argv(&["app", "list"]), &g).is_ok());
+    }
+
+    // ── New command mappings (parity with the Python CLI) ──────────────────
+    //
+    // These were missing from the launcher, so the documented commands failed
+    // with "Unknown command" under the recommended `uv tool install` path.
+    // Each test locks both that the command is recognized AND the exact JSON
+    // the daemon expects (method name + param keys), since a method/param
+    // mismatch surfaces only at runtime as a JSON-RPC error.
+
+    #[test]
+    fn notify_forwards_title_message_and_app_id() {
+        let g = GlobalFlags::default();
+        match parse(&argv(&["notify", "Build done", "all green", "--app-id", "my.app"]), &g) {
+            Ok(Action::Call { method, params }) => {
+                assert_eq!(method, "notify");
+                assert_eq!(params["title"], "Build done");
+                assert_eq!(params["message"], "all green");
+                assert_eq!(params["app_id"], "my.app");
+            }
+            other => panic!("expected Call, got {:?}", other),
+        }
+        // No --app-id → app_id absent (daemon defaults to PowerShell's AUMID).
+        match parse(&argv(&["notify", "t", "m"]), &g) {
+            Ok(Action::Call { params, .. }) => assert!(params.get("app_id").is_none()),
+            other => panic!("expected Call, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn registry_modes_map_to_single_method_with_mode() {
+        let g = GlobalFlags::default();
+        // get
+        match parse(&argv(&["registry", "get", "HKCU:\\S", "Version"]), &g) {
+            Ok(Action::Call { method, params }) => {
+                assert_eq!(method, "registry");
+                assert_eq!(params["mode"], "get");
+                assert_eq!(params["path"], "HKCU:\\S");
+                assert_eq!(params["name"], "Version");
+            }
+            other => panic!("got {:?}", other),
+        }
+        // set with default type String
+        match parse(&argv(&["registry", "set", "HKCU:\\S", "Count", "42"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert_eq!(params["mode"], "set");
+                assert_eq!(params["value"], "42");
+                assert_eq!(params["type"], "String");
+            }
+            other => panic!("got {:?}", other),
+        }
+        // set with --type DWord
+        match parse(&argv(&["registry", "set", "HKCU:\\S", "Count", "42", "--type", "DWord"]), &g) {
+            Ok(Action::Call { params, .. }) => assert_eq!(params["type"], "DWord"),
+            other => panic!("got {:?}", other),
+        }
+        // set -t short form
+        match parse(&argv(&["registry", "set", "HKCU:\\S", "Count", "42", "-t", "QWord"]), &g) {
+            Ok(Action::Call { params, .. }) => assert_eq!(params["type"], "QWord"),
+            other => panic!("got {:?}", other),
+        }
+        // set MultiString → forwarded as a JSON array
+        match parse(&argv(&["registry", "set", "HKCU:\\S", "Multi", "[\"a\",\"b\"]", "-t", "MultiString"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert_eq!(params["value"], serde_json::json!(["a", "b"]));
+            }
+            other => panic!("got {:?}", other),
+        }
+        // set MultiString with a non-array → invalid_value
+        let e = parse(&argv(&["registry", "set", "HKCU:\\S", "Multi", "notarray", "-t", "MultiString"]), &g).unwrap_err();
+        assert_eq!(e.type_name(), "invalid_value");
+        // delete with name
+        match parse(&argv(&["registry", "delete", "HKCU:\\S", "Version"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert_eq!(params["mode"], "delete");
+                assert_eq!(params["name"], "Version");
+            }
+            other => panic!("got {:?}", other),
+        }
+        // delete whole key (name omitted → name absent)
+        match parse(&argv(&["registry", "delete", "HKCU:\\S"]), &g) {
+            Ok(Action::Call { params, .. }) => assert!(params.get("name").is_none()),
+            other => panic!("got {:?}", other),
+        }
+        // list
+        match parse(&argv(&["registry", "list", "HKCU:\\S"]), &g) {
+            Ok(Action::Call { params, .. }) => assert_eq!(params["mode"], "list"),
+            other => panic!("got {:?}", other),
+        }
+        // unknown sub → lists valid choices
+        let e = parse(&argv(&["registry", "frob"]), &g).unwrap_err();
+        assert_eq!(e.type_name(), "unknown_subcommand");
+        assert!(e.message().contains("get") && e.message().contains("list"));
+    }
+
+    #[test]
+    fn multi_select_and_edit_split_locs_and_selectors() {
+        let g = GlobalFlags::default();
+        // multi-select coords (default press-ctrl true)
+        match parse(&argv(&["multi-select", "[[100,200],[300,400]]"]), &g) {
+            Ok(Action::Call { method, params }) => {
+                assert_eq!(method, "multi_select");
+                assert_eq!(params["locs"], serde_json::json!([[100,200],[300,400]]));
+                assert_eq!(params["press_ctrl"], true);
+                assert!(params.get("selectors").is_none());
+            }
+            other => panic!("got {:?}", other),
+        }
+        // multi-select selectors
+        match parse(&argv(&["multi-select", "[\"@e1\",\"@e3\"]", "--selectors"]), &g) {
+            Ok(Action::Call { method, params }) => {
+                assert_eq!(method, "multi_select");
+                assert_eq!(params["selectors"], serde_json::json!(["@e1","@e3"]));
+                assert!(params.get("locs").is_none());
+            }
+            other => panic!("got {:?}", other),
+        }
+        // --no-ctrl flips press_ctrl
+        match parse(&argv(&["multi-select", "[[1,2]]", "--no-ctrl"]), &g) {
+            Ok(Action::Call { params, .. }) => assert_eq!(params["press_ctrl"], false),
+            other => panic!("got {:?}", other),
+        }
+        // multi-edit coords → locs
+        match parse(&argv(&["multi-edit", "[[100,200,\"hi\"]]"]), &g) {
+            Ok(Action::Call { method, params }) => {
+                assert_eq!(method, "multi_edit");
+                assert_eq!(params["locs"], serde_json::json!([[100,200,"hi"]]));
+            }
+            other => panic!("got {:?}", other),
+        }
+        // multi-edit selectors
+        match parse(&argv(&["multi-edit", "[[\"@e1\",\"Alice\"]]", "--selectors"]), &g) {
+            Ok(Action::Call { params, .. }) => assert!(params.get("selectors").is_some() && params.get("locs").is_none()),
+            other => panic!("got {:?}", other),
+        }
+        // non-array JSON → invalid_value
+        let e = parse(&argv(&["multi-select", "{}"]), &g).unwrap_err();
+        assert_eq!(e.type_name(), "invalid_value");
+        // missing payload → missing_argument
+        let e = parse(&argv(&["multi-select"]), &g).unwrap_err();
+        assert_eq!(e.type_name(), "missing_argument");
+    }
+
+    #[test]
+    fn wait_for_parses_to_wait_for_action() {
+        let g = GlobalFlags::default();
+        match parse(&argv(&["wait-for", "text_exists", "--text", "Done", "--timeout", "5"]), &g) {
+            Ok(Action::WaitFor(spec)) => {
+                assert_eq!(spec.condition, "text_exists");
+                assert_eq!(spec.text, "Done");
+                assert_eq!(spec.timeout, 5.0);
+            }
+            other => panic!("expected WaitFor, got {:?}", other),
+        }
+        // alias + window scoping + short timeout
+        match parse(&argv(&["wait-for", "enabled", "--text", "OK", "--window", "Notepad", "-t", "10"]), &g) {
+            Ok(Action::WaitFor(spec)) => {
+                assert_eq!(spec.condition, "enabled");
+                assert_eq!(spec.window, "Notepad");
+            }
+            other => panic!("got {:?}", other),
+        }
+        // missing condition → missing_argument
+        let e = parse(&argv(&["wait-for"]), &g).unwrap_err();
+        assert_eq!(e.type_name(), "missing_argument");
+    }
+
+    #[test]
+    fn mouse_commands_accept_selector_override() {
+        let g = GlobalFlags::default();
+        // click -s @e3 → selector, no x/y
+        match parse(&argv(&["click", "-s", "@e3"]), &g) {
+            Ok(Action::Call { method, params }) => {
+                assert_eq!(method, "click");
+                assert_eq!(params["selector"], "@e3");
+                assert!(params.get("x").is_none());
+            }
+            other => panic!("got {:?}", other),
+        }
+        // click --selector @e3 --right → selector + right flag
+        match parse(&argv(&["click", "--selector", "@e3", "--right"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert_eq!(params["selector"], "@e3");
+                assert_eq!(params["right"], true);
+            }
+            other => panic!("got {:?}", other),
+        }
+        // coordinates still work when no selector
+        match parse(&argv(&["click", "10", "20"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert_eq!(params["x"], 10);
+                assert_eq!(params["y"], 20);
+                assert!(params.get("selector").is_none());
+            }
+            other => panic!("got {:?}", other),
+        }
+        // mouse-down -s @e3 --button right
+        match parse(&argv(&["mouse-down", "-s", "@e3", "--button", "right"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert_eq!(params["selector"], "@e3");
+                assert_eq!(params["button"], "right");
+            }
+            other => panic!("got {:?}", other),
+        }
+        // scroll -s @e3 --direction up
+        match parse(&argv(&["scroll", "-s", "@e3", "--direction", "up"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert_eq!(params["selector"], "@e3");
+                assert_eq!(params["direction"], "up");
+            }
+            other => panic!("got {:?}", other),
+        }
+        // hover / move / dblclick / mouse-up also take selector
+        for cmd in &["hover", "move", "dblclick", "mouse-up"] {
+            match parse(&argv(&[cmd, "-s", "@e1"]), &g) {
+                Ok(Action::Call { params, .. }) => assert_eq!(params["selector"], "@e1"),
+                other => panic!("{}: got {:?}", cmd, other),
+            }
+        }
+        // empty selector → invalid_value
+        let e = parse(&argv(&["click", "-s", ""]), &g).unwrap_err();
+        assert_eq!(e.type_name(), "invalid_value");
+    }
+
+    #[test]
+    fn type_at_selector_and_caret_forwarded() {
+        let g = GlobalFlags::default();
+        // --at-selector overrides --at, maps to at_selector
+        match parse(&argv(&["type", "hi", "--at-selector", "@e3"]), &g) {
+            Ok(Action::Call { method, params }) => {
+                assert_eq!(method, "type");
+                assert_eq!(params["text"], "hi");
+                assert_eq!(params["at_selector"], "@e3");
+                assert!(params.get("at_x").is_none());
+                // caret defaults to idle
+                assert_eq!(params["caret_position"], "idle");
+            }
+            other => panic!("got {:?}", other),
+        }
+        // --ats short alias
+        match parse(&argv(&["type", "hi", "--ats", "@e3"]), &g) {
+            Ok(Action::Call { params, .. }) => assert_eq!(params["at_selector"], "@e3"),
+            other => panic!("got {:?}", other),
+        }
+        // --at X,Y still works when no at-selector
+        match parse(&argv(&["type", "hi", "--at", "100,200"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert_eq!(params["at_x"], 100);
+                assert_eq!(params["at_y"], 200);
+                assert!(params.get("at_selector").is_none());
+            }
+            other => panic!("got {:?}", other),
+        }
+        // --caret start
+        match parse(&argv(&["type", "hi", "--caret", "start"]), &g) {
+            Ok(Action::Call { params, .. }) => assert_eq!(params["caret_position"], "start"),
+            other => panic!("got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn observe_and_snapshot_accept_display_filter() {
+        let g = GlobalFlags::default();
+        // snapshot -d 0 → display [0]
+        match parse(&argv(&["snapshot", "-d", "0"]), &g) {
+            Ok(Action::Call { method, params }) => {
+                assert_eq!(method, "snapshot");
+                assert_eq!(params["display"], serde_json::json!([0]));
+            }
+            other => panic!("got {:?}", other),
+        }
+        // snapshot with no -d → no display key (backward compatible)
+        match parse(&argv(&["snapshot"]), &g) {
+            Ok(Action::Call { params, .. }) => assert!(params.get("display").is_none()),
+            other => panic!("got {:?}", other),
+        }
+        // repeated -d de-duplicated into one array
+        match parse(&argv(&["snapshot", "-d", "0", "-d", "1", "-d", "0"]), &g) {
+            Ok(Action::Call { params, .. }) => assert_eq!(params["display"], serde_json::json!([0, 1])),
+            other => panic!("got {:?}", other),
+        }
+        // --display= form
+        match parse(&argv(&["snapshot", "--display=2"]), &g) {
+            Ok(Action::Call { params, .. }) => assert_eq!(params["display"], serde_json::json!([2])),
+            other => panic!("got {:?}", other),
+        }
+        // negative index → invalid_value
+        let e = parse(&argv(&["snapshot", "-d", "-1"]), &g).unwrap_err();
+        assert_eq!(e.type_name(), "invalid_value");
+        // non-int → invalid_value
+        let e = parse(&argv(&["snapshot", "-d", "abc"]), &g).unwrap_err();
+        assert_eq!(e.type_name(), "invalid_value");
+        // observe also forwards display
+        match parse(&argv(&["observe", "-d", "1"]), &g) {
+            Ok(Action::Call { params, .. }) => assert_eq!(params["display"], serde_json::json!([1])),
+            other => panic!("got {:?}", other),
+        }
     }
 
     // ── ParsedArgs: the regression suite ───────────────────────────────────
