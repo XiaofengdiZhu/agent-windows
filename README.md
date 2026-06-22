@@ -139,13 +139,14 @@ Python daemon (persistent, COM STA worker)
 | `app resize NAME --width W --height H` | Resize window |
 | `app list` | List visible windows |
 | `shell COMMAND` | Run PowerShell command |
-| `fs read/write/list PATH` | File operations |
+| `fs read/write/list/copy/move/delete/search/info PATH ...` | File operations |
 | `clipboard get/set [--keyboard]` | Clipboard access (`--keyboard` simulates Ctrl+C/V) |
 | `process list/kill` | Process management |
 | `notify TITLE MESSAGE [--app-id ID]` | Windows toast notification (defaults to PowerShell's AUMID) |
 | `registry get/set/delete/list PATH [NAME] [VALUE] [--type T]` | Windows Registry operations (typed values: String/DWord/QWord/MultiString/Binary) |
 | `cleanup` | Clean up old/oversized screenshots |
 | `wait SECONDS|SELECTOR [--text TEXT] [--timeout N] [--interval N]` | Wait for duration, element, or text |
+| `wait-for CONDITION [--text S] [--window W] [--timeout N]` | Wait until a UI predicate holds (`text_exists`/`active_window`/`element_exists`/`element_enabled`/`focused_element`; aliases `text`/`window`/`element`/`enabled`/`focused`) |
 | `batch JSON/--file PATH [--delay N] [--continue-on-error]` | Execute multiple commands in one IPC round-trip |
 | `multi-select JSON/--file PATH [--selectors] [--no-ctrl]` | Click multiple targets (Ctrl held by default) |
 | `multi-edit JSON/--file PATH [--selectors]` | Type into multiple fields in one call |
@@ -154,6 +155,7 @@ Python daemon (persistent, COM STA worker)
 | Command | Description |
 |---------|-------------|
 | `daemon start/stop/status` | Daemon management |
+| `ping` | Daemon health check (single IPC round-trip) |
 | `config init/show/set/doctor` | Configuration (delegated to the Python CLI) |
 
 ### Global Options
@@ -168,7 +170,7 @@ Python daemon (persistent, COM STA worker)
 `ground`, `detect`, and `ask-vision` need a multimodal model to read the screen. Configure one with `config set`:
 
 ```bash
-# 1. API key (or export AGENT_WINDOWS_VLM_API_KEY instead)
+# 1. API key (or set AGENT_WINDOWS_VLM_API_KEY env var instead)
 agent-windows config set vlm.api_key sk-xxxxxxxx
 
 # 2. Engine: openai (default) / anthropic / gemini
@@ -258,7 +260,7 @@ Some actions are buried in 2nd- or 3rd-level menus. Buttons may show only icons 
 
 - Windows 8.1 / 10 / 11
 - Python 3.13+
-- Dependencies: typer, comtypes, pywin32 (≥308), Pillow, mss, openai
+- Dependencies: typer, comtypes, pywin32 (≥306; ≥308 recommended), Pillow, mss, openai, toml
 
 > **pywin32 note**: modern pywin32 wheels (≥308) self-configure their DLLs via a `.pth` bootstrap at install time, so `uv tool install` / `uvx` works out of the box. If you ever hit `pythoncom3xx.dll` / `pywintypes3xx.dll` not found on an older pywin32 or a manually-managed environment, run `python Scripts\pywin32_postinstall.py -install` from your install prefix.
 
