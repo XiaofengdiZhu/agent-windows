@@ -591,6 +591,72 @@ class TestResolveElementParsing:
                 resolve_element("@eabc")
 
 
+# ── resolve_element_center @eN → bbox center (TODO #13) ──────────────
+
+
+class TestResolveElementCenter:
+    """resolve_element_center returns the bbox center of an @eN element and
+    re-validates it against the virtual screen. We mock the virtual screen so
+    the in-bounds check is deterministic."""
+
+    _VSCREEN = (0, 0, 1920, 1080)
+
+    def _patch_snapshot(self, elements):
+        return patch("agent_windows.core.tree.get_tree_snapshot",
+                     return_value={"interactive_elements": elements})
+
+    def _patch_config(self):
+        return patch("agent_windows.utils.config.load_config", return_value={})
+
+    def test_returns_bbox_center(self):
+        from agent_windows.core.tree import resolve_element_center
+        el = ElementInfo(name="btn", control_type="ButtonControl",
+                         bbox=BoundingBox(100, 200, 300, 400))  # center (200, 300)
+        with self._patch_snapshot([el]), self._patch_config(), \
+                patch("agent_windows.core.input_controller._get_virtual_screen",
+                      return_value=self._VSCREEN):
+            x, y = resolve_element_center("@e1")
+        assert (x, y) == (200, 300)
+
+    def test_no_bbox_raises_valueerror(self):
+        from agent_windows.core.tree import resolve_element_center
+        el = ElementInfo(name="x", control_type="ButtonControl", bbox=None)
+        with self._patch_snapshot([el]), self._patch_config():
+            with pytest.raises(ValueError, match="no usable bounding box"):
+                resolve_element_center("@e1")
+
+    def test_zero_area_bbox_raises_valueerror(self):
+        """A degenerate (zero-area) bbox is unusable for centering — reject it
+        rather than clicking a corner pixel."""
+        from agent_windows.core.tree import resolve_element_center
+        el = ElementInfo(name="x", control_type="ButtonControl",
+                         bbox=BoundingBox(50, 50, 50, 50))  # zero area
+        with self._patch_snapshot([el]), self._patch_config():
+            with pytest.raises(ValueError, match="no usable bounding box"):
+                resolve_element_center("@e1")
+
+    def test_stale_offscreen_center_revalidated(self):
+        """A cached bbox whose center has gone off-screen (window moved/closed
+        since the 2s-TTL snapshot) surfaces as CoordinateRangeError, not a
+        silent misclick. (TODO #13 defensive re-validation.)"""
+        from agent_windows.core.tree import resolve_element_center
+        from agent_windows.daemon.router import CoordinateRangeError
+        # bbox center at (50000, 50000) — way off a 1920x1080 screen
+        el = ElementInfo(name="x", control_type="ButtonControl",
+                         bbox=BoundingBox(49900, 49900, 50100, 50100))
+        with self._patch_snapshot([el]), self._patch_config(), \
+                patch("agent_windows.core.input_controller._get_virtual_screen",
+                      return_value=self._VSCREEN):
+            with pytest.raises(CoordinateRangeError):
+                resolve_element_center("@e1")
+
+    def test_invalid_selector_format_raises(self):
+        from agent_windows.core.tree import resolve_element_center
+        with self._patch_snapshot([]), self._patch_config():
+            with pytest.raises(ValueError, match="Invalid selector"):
+                resolve_element_center("not-a-selector")
+
+
 # ── child-iteration failure is swallowed (QUAL-02 outer block) ───────
 
 

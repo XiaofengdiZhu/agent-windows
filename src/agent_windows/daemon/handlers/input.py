@@ -11,13 +11,28 @@ MAX_TYPE_TEXT_LEN = 10000
 
 
 def _coords(params: dict) -> tuple[int, int]:
-    """Extract and validate the (x, y) coordinates from params.
+    """Extract the target (x, y) coordinates from params. (TODO #13)
+
+    A ``selector`` (``@eN`` element ref) takes priority and is resolved to the
+    element's bbox center via ``resolve_element_center`` — matching the
+    screenshot handler's "selector takes priority over bbox" rule. Without a
+    selector, falls back to the explicit ``x``/``y`` and validates them.
 
     Raises CoordinateRangeError (→ COORDINATE_OUT_OF_RANGE) for non-numeric or
-    out-of-screen values, instead of letting bad input crash the ctypes call
-    or silently move the cursor off-screen. (SEC3-02)
+    out-of-screen values; ValueError (bad selector format / no bbox) and
+    IndexError (out-of-range @eN) both surface as INVALID_PARAMS. (SEC3-02)
+
+    Note: unlike the screenshot handler (which warns-and-continues on a
+    non-``@e`` selector), input fails loudly here — a silent fallback to x/y
+    would risk clicking the wrong target. (TODO #13)
     """
     from agent_windows.core.input_controller import validate_coordinates
+
+    selector = params.get("selector")
+    if selector:
+        from agent_windows.core.tree import resolve_element_center
+        # resolve_element_center validates the center itself; return directly.
+        return resolve_element_center(selector)
     return validate_coordinates(require(params, "x"), require(params, "y"))
 
 
@@ -104,7 +119,15 @@ def _type(params: dict) -> dict[str, Any]:
             f"caret_position must be 'start', 'idle', or 'end'; got {caret_position!r}"
         )
 
-    if at_x is not None and at_y is not None:
+    at_selector = params.get("at_selector")
+    if at_selector:
+        # TODO #13: @eN ref resolves to bbox center, overriding at_x/at_y.
+        # Selector-first mirrors _coords' rule and the screenshot handler.
+        from agent_windows.core.tree import resolve_element_center
+        ax, ay = resolve_element_center(at_selector)
+        type_text_at(text, ax, ay, clear=clear, enter=enter,
+                     caret_position=caret_position)
+    elif at_x is not None and at_y is not None:
         ax, ay = validate_coordinates(at_x, at_y)
         type_text_at(text, ax, ay, clear=clear, enter=enter,
                      caret_position=caret_position)

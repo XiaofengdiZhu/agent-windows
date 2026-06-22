@@ -120,14 +120,14 @@ Python daemon (persistent, COM STA worker)
 | `is visible/enabled SELECTOR` | Check element state |
 
 ### Input
-| `click X Y [--right] [--double]` | Mouse click |
-| `dblclick X Y [--right]` | Double-click |
-| `hover X Y` | Hover (trigger tooltips/highlights) |
-| `mouse-down X Y [--button left\|right\|middle]` | Press and hold mouse button |
-| `mouse-up X Y [--button left\|right\|middle]` | Release mouse button |
-| `type TEXT [--at X,Y] [--enter] [--clear] [--caret start\|idle\|end]` | Type text (Unicode direct input) |
-| `scroll X Y [--direction up\|down] [--amount N]` | Scroll |
-| `move X Y` | Move mouse |
+| `click X Y \| -s @eN [--right] [--double]` | Mouse click |
+| `dblclick X Y \| -s @eN [--right]` | Double-click |
+| `hover X Y \| -s @eN` | Hover (trigger tooltips/highlights) |
+| `mouse-down X Y \| -s @eN [--button left\|right\|middle]` | Press and hold mouse button |
+| `mouse-up X Y \| -s @eN [--button left\|right\|middle]` | Release mouse button |
+| `type TEXT [--at X,Y \| --ats @eN] [--enter] [--clear] [--caret start\|idle\|end]` | Type text (Unicode direct input) |
+| `scroll X Y \| -s @eN [--direction up\|down] [--amount N]` | Scroll |
+| `move X Y \| -s @eN` | Move mouse |
 | `drag X1 Y1 X2 Y2 [--right]` | Drag |
 | `shortcut KEYS` | Keyboard shortcut (e.g. `ctrl+c`) |
 

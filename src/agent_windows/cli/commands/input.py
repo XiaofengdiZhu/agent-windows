@@ -7,16 +7,34 @@ from agent_windows.cli.dispatcher import _cmd
 app = typer.Typer(help="Input commands")
 
 
+def _xy_or_selector(coords: list[int] | None, selector: str) -> dict:
+    """Assemble the coordinate params for a mouse command. (TODO #13)
+
+    ``--selector @eN`` overrides positional ``X Y``. Exactly one must be given.
+    Returns ``{"selector": s}`` or ``{"x": .., "y": ..}`` — ready to splat into
+    ``_cmd`` alongside the command's other params.
+    """
+    if selector:
+        return {"selector": selector}
+    if coords and len(coords) == 1:
+        # The likely user mistake: typed one number, forgot the second.
+        raise typer.BadParameter("expected X Y (two coordinates); got one")
+    if not coords or len(coords) != 2:
+        raise typer.BadParameter("provide X Y coordinates, or --selector")
+    return {"x": coords[0], "y": coords[1]}
+
+
 @app.command()
 def click(
     ctx: typer.Context,
-    x: int = typer.Argument(help="X coordinate"),
-    y: int = typer.Argument(help="Y coordinate"),
+    coords: list[int] = typer.Argument(None, help="X Y coordinates (omit with --selector)"),
+    selector: str = typer.Option("", "--selector", "-s", help="Element ref (@eN); overrides X Y"),
     right: bool = typer.Option(False, "--right", help="Right-click"),
     double: bool = typer.Option(False, "--double", help="Double-click"),
 ) -> None:
-    """Mouse click at (x, y)."""
-    _cmd(ctx, "click", x=x, y=y, right=right, double=double)
+    """Mouse click at (X, Y) or at an element (@eN via --selector)."""
+    _cmd(ctx, "click", **_xy_or_selector(coords, selector),
+         right=right, double=double)
 
 
 @app.command()
@@ -24,16 +42,20 @@ def type_text(
     ctx: typer.Context,
     text: str = typer.Argument(help="Text to type"),
     at: str = typer.Option("", "--at", help="Click at x,y before typing"),
+    at_selector: str = typer.Option(
+        "", "--at-selector", "--ats",
+        help="Click at element @eN before typing; overrides --at"),
     enter: bool = typer.Option(False, "--enter", help="Press Enter after typing"),
     clear: bool = typer.Option(False, "--clear", help="Select-all and delete before typing"),
     caret: str = typer.Option(
         "idle", "--caret",
-        help="Move caret before typing: start | idle | end",
-    ),
+        help="Move caret before typing: start | idle | end"),
 ) -> None:
     """Type text using Unicode direct input (bypasses IME)."""
     params = {"text": text, "enter": enter, "clear": clear, "caret_position": caret}
-    if at:
+    if at_selector:
+        params["at_selector"] = at_selector
+    elif at:
         parts = at.split(",")
         if len(parts) == 2:
             params["at_x"] = int(parts[0])
@@ -44,66 +66,67 @@ def type_text(
 @app.command()
 def scroll(
     ctx: typer.Context,
-    x: int = typer.Argument(help="X coordinate"),
-    y: int = typer.Argument(help="Y coordinate"),
+    coords: list[int] = typer.Argument(None, help="X Y coordinates (omit with --selector)"),
+    selector: str = typer.Option("", "--selector", "-s", help="Element ref (@eN); overrides X Y"),
     direction: str = typer.Option("down", "--direction", help="Scroll direction: up/down"),
     amount: int = typer.Option(3, "--amount", help="Scroll amount"),
 ) -> None:
-    """Scroll at position (x, y)."""
-    _cmd(ctx, "scroll", x=x, y=y, direction=direction, amount=amount)
+    """Scroll at (X, Y) or at an element (@eN via --selector)."""
+    _cmd(ctx, "scroll", **_xy_or_selector(coords, selector),
+         direction=direction, amount=amount)
 
 
 @app.command()
 def move(
     ctx: typer.Context,
-    x: int = typer.Argument(help="X coordinate"),
-    y: int = typer.Argument(help="Y coordinate"),
+    coords: list[int] = typer.Argument(None, help="X Y coordinates (omit with --selector)"),
+    selector: str = typer.Option("", "--selector", "-s", help="Element ref (@eN); overrides X Y"),
 ) -> None:
-    """Move mouse to (x, y)."""
-    _cmd(ctx, "move", x=x, y=y)
+    """Move mouse to (X, Y) or to an element (@eN via --selector)."""
+    _cmd(ctx, "move", **_xy_or_selector(coords, selector))
 
 
 @app.command()
 def dblclick(
     ctx: typer.Context,
-    x: int = typer.Argument(help="X coordinate"),
-    y: int = typer.Argument(help="Y coordinate"),
+    coords: list[int] = typer.Argument(None, help="X Y coordinates (omit with --selector)"),
+    selector: str = typer.Option("", "--selector", "-s", help="Element ref (@eN); overrides X Y"),
     right: bool = typer.Option(False, "--right", help="Right-button double-click"),
 ) -> None:
-    """Double-click at (x, y)."""
-    _cmd(ctx, "dblclick", x=x, y=y, right=right)
+    """Double-click at (X, Y) or at an element (@eN via --selector)."""
+    _cmd(ctx, "dblclick", **_xy_or_selector(coords, selector), right=right)
 
 
 @app.command()
 def hover(
     ctx: typer.Context,
-    x: int = typer.Argument(help="X coordinate"),
-    y: int = typer.Argument(help="Y coordinate"),
+    coords: list[int] = typer.Argument(None, help="X Y coordinates (omit with --selector)"),
+    selector: str = typer.Option("", "--selector", "-s", help="Element ref (@eN); overrides X Y"),
 ) -> None:
-    """Move mouse to (x, y) and trigger hover event."""
-    _cmd(ctx, "hover", x=x, y=y)
+    """Hover at (X, Y) or at an element (@eN via --selector)."""
+    _cmd(ctx, "hover", **_xy_or_selector(coords, selector))
 
 
 @app.command(name="mouse-down")
 def mouse_down(
     ctx: typer.Context,
-    x: int = typer.Argument(help="X coordinate"),
-    y: int = typer.Argument(help="Y coordinate"),
+    coords: list[int] = typer.Argument(None, help="X Y coordinates (omit with --selector)"),
+    selector: str = typer.Option("", "--selector", "-s", help="Element ref (@eN); overrides X Y"),
     button: str = typer.Option("left", "--button", help="Mouse button: left, right, middle"),
 ) -> None:
-    """Press and hold mouse button at (x, y)."""
-    _cmd(ctx, "mouse_down", x=x, y=y, button=button)
+    """Press and hold mouse button at (X, Y) or at an element (@eN via --selector)."""
+    _cmd(ctx, "mouse_down", **_xy_or_selector(coords, selector), button=button)
 
 
 @app.command(name="mouse-up")
 def mouse_up(
     ctx: typer.Context,
-    x: int = typer.Argument(help="X coordinate"),
-    y: int = typer.Argument(help="Y coordinate"),
+    coords: list[int] = typer.Argument(None, help="X Y coordinates (omit with --selector)"),
+    selector: str = typer.Option("", "--selector", "-s", help="Element ref (@eN); overrides X Y"),
     button: str = typer.Option("left", "--button", help="Mouse button: left, right, middle"),
 ) -> None:
-    """Release mouse button at (x, y)."""
-    _cmd(ctx, "mouse_up", x=x, y=y, button=button)
+    """Release mouse button at (X, Y) or at an element (@eN via --selector)."""
+    _cmd(ctx, "mouse_up", **_xy_or_selector(coords, selector), button=button)
 
 
 @app.command()

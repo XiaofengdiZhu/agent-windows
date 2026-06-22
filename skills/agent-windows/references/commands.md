@@ -210,36 +210,45 @@ No parameters. Uses config `screenshot.max_screenshot_age_days` (default 7) and 
 
 ## Input (Mouse)
 
+Most mouse commands accept either explicit `X Y` coordinates or a `--selector`/`-s` `@eN` element ref from a `snapshot`. `--selector` overrides `X Y` when both are given; the element's bbox center is the click point.
+
 ### click
 
-Mouse click at coordinates.
+Mouse click at coordinates or an element.
 
 ```bash
 agent-windows click 500 300 [--right] [--double]
+agent-windows click --selector @e3 [--right]      # click element center
+agent-windows click -s @e3                          # short form
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `x` | int | **required** | X coordinate |
-| `y` | int | **required** | Y coordinate |
+| `X Y` | int | **required*** | X and Y coordinates |
+| `--selector` / `-s` | str | `""` | Element ref (`@eN`); overrides `X Y` |
 | `--right` | bool | `false` | Right-click |
 | `--double` | bool | `false` | Double-click |
+
+\* `X Y` is required unless `--selector` is given.
 
 **Output**: `{output}`
 
 ### dblclick
 
-Double-click at coordinates.
+Double-click at coordinates or an element.
 
 ```bash
 agent-windows dblclick 500 300 [--right]
+agent-windows dblclick -s @e3
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `x` | int | **required** | X coordinate |
-| `y` | int | **required** | Y coordinate |
+| `X Y` | int | **required*** | X and Y coordinates |
+| `--selector` / `-s` | str | `""` | Element ref (`@eN`); overrides `X Y` |
 | `--right` | bool | `false` | Right-button double-click |
+
+\* `X Y` is required unless `--selector` is given.
 
 **Output**: `{output}`
 
@@ -249,27 +258,33 @@ Move mouse and trigger hover event (tooltips, highlights).
 
 ```bash
 agent-windows hover 500 300
+agent-windows hover -s @e3
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `x` | int | **required** | X coordinate |
-| `y` | int | **required** | Y coordinate |
+| `X Y` | int | **required*** | X and Y coordinates |
+| `--selector` / `-s` | str | `""` | Element ref (`@eN`); overrides `X Y` |
+
+\* `X Y` is required unless `--selector` is given.
 
 **Output**: `{output}`
 
 ### move
 
-Move mouse to coordinates (no click).
+Move mouse to coordinates or an element (no click).
 
 ```bash
 agent-windows move 500 300
+agent-windows move -s @e3
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `x` | int | **required** | X coordinate |
-| `y` | int | **required** | Y coordinate |
+| `X Y` | int | **required*** | X and Y coordinates |
+| `--selector` / `-s` | str | `""` | Element ref (`@eN`); overrides `X Y` |
+
+\* `X Y` is required unless `--selector` is given.
 
 **Output**: `{output}`
 
@@ -279,14 +294,17 @@ Press and hold / release mouse button. Use together for custom drag sequences.
 
 ```bash
 agent-windows mouse-down 500 300 [--button left|right|middle]
-agent-windows mouse-up 500 300 [--button left|right|middle]
+agent-windows mouse-down -s @e3 [--button left|right|middle]
+agent-windows mouse-up -s @e3 [--button left|right|middle]
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `x` | int | **required** | X coordinate |
-| `y` | int | **required** | Y coordinate |
+| `X Y` | int | **required*** | X and Y coordinates |
+| `--selector` / `-s` | str | `""` | Element ref (`@eN`); overrides `X Y` |
 | `--button` | str | `"left"` | `left`, `right`, or `middle` |
+
+\* `X Y` is required unless `--selector` is given.
 
 **Output**: `{output}`
 
@@ -306,22 +324,27 @@ agent-windows drag 100 200 400 500 [--right]
 | `y2` | int | **required** | End Y |
 | `--right` | bool | `false` | Right-button drag |
 
+`drag` takes explicit coordinates only (two endpoints); resolve element centers via `snapshot` first if needed.
+
 **Output**: `{output}`
 
 ### scroll
 
-Scroll at coordinates.
+Scroll at coordinates or an element.
 
 ```bash
 agent-windows scroll 500 300 [--direction down] [--amount 3]
+agent-windows scroll -s @e3 [--direction up]
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `x` | int | **required** | X coordinate |
-| `y` | int | **required** | Y coordinate |
+| `X Y` | int | **required*** | X and Y coordinates |
+| `--selector` / `-s` | str | `""` | Element ref (`@eN`); overrides `X Y` |
 | `--direction` | str | `"down"` | `up` or `down` |
 | `--amount` | int | `3` | Scroll amount |
+
+\* `X Y` is required unless `--selector` is given.
 
 **Output**: `{output}`
 
@@ -334,18 +357,19 @@ agent-windows scroll 500 300 [--direction down] [--amount 3]
 Type text using Unicode direct input (bypasses IME).
 
 ```bash
-agent-windows type "Hello World" [--at X,Y] [--enter] [--clear] [--caret idle]
+agent-windows type "Hello World" [--at X,Y] [--at-selector @eN] [--enter] [--clear] [--caret idle]
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `text` | str | **required** | Text to type |
 | `--at` | str | `""` | Click at `x,y` before typing |
+| `--at-selector` / `--ats` | str | `""` | Click at element `@eN` before typing; overrides `--at` |
 | `--enter` | bool | `false` | Press Enter after typing |
 | `--clear` | bool | `false` | Select-all (Ctrl+A) and delete before typing |
 | `--caret` | str | `"idle"` | Move caret before typing: `start` (Home), `idle` (leave as-is), or `end` (End) |
 
-`--caret` moves the text caret after the click (or in the already-focused field when `--at` is omitted): `start` presses Home, `end` presses End, `idle` leaves it where the platform placed it. Applied before `--clear`, so `--caret start --clear` selects-from-start semantics still wipe the field. Omitting the flag (or sending `null`) uses `idle`.
+`--at-selector` resolves the element's bbox center and clicks there before typing; it overrides `--at` when both are given. `--caret` moves the text caret after the click (or in the already-focused field when `--at`/`--at-selector` are omitted): `start` presses Home, `end` presses End, `idle` leaves it where the platform placed it. Applied before `--clear`, so `--caret start --clear` selects-from-start semantics still wipe the field. Omitting the flag (or sending `null`) uses `idle`.
 
 **Output**: `{output}`
 

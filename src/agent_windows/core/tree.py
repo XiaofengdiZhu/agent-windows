@@ -384,6 +384,40 @@ def resolve_element(selector: str) -> ElementInfo:
     return elements[index]
 
 
+def resolve_element_center(selector: str) -> tuple[int, int]:
+    """Resolve a UIA element selector to the center of its bounding box. (TODO #13)
+
+    Used by the input handlers (click/type/scroll/move/…) to accept an ``@eN``
+    element ref in place of explicit ``x, y`` coordinates. The center is taken
+    from the element's cached bbox (no extra COM cost) and re-validated against
+    the virtual screen so a stale/moved element surfaces as
+    COORDINATE_OUT_OF_RANGE rather than clicking off-target.
+
+    Args:
+        selector: Element reference like ``"@e3"``.
+
+    Returns:
+        ``(x, y)`` pixel coordinates of the bbox center.
+
+    Raises:
+        ValueError: If selector format is invalid or the element has no usable
+            bbox (→ INVALID_PARAMS at the router).
+        IndexError: If the element index is out of range (→ INVALID_PARAMS).
+        CoordinateRangeError: If the (possibly stale) center is off-screen
+            (→ COORDINATE_OUT_OF_RANGE).
+    """
+    el = resolve_element(selector)
+    if not el.bbox or el.bbox.area <= 0:
+        raise ValueError(f"Element {selector} has no usable bounding box")
+    cx, cy = el.bbox.center
+    # Re-validate: the snapshot is cached (up to 2s), so the element may have
+    # moved or been closed since. validate_coordinates raises
+    # CoordinateRangeError (→ COORDINATE_OUT_OF_RANGE) on a stale off-screen
+    # center, which is more informative than a silent misclick.
+    from agent_windows.core.input_controller import validate_coordinates
+    return validate_coordinates(cx, cy)
+
+
 def _traverse_window(
     client,
     window: WindowInfo,

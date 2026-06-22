@@ -35,10 +35,9 @@ Every desktop interaction follows this cycle:
 ```
 1. agent-windows observe              # See the screen (snapshot + screenshot)
 2. Find target in Interactive Elements table
-3. Extract coordinates from Position column: (x1, y1, x2, y2)
-4. Compute center: cx = (x1+x2)//2, cy = (y1+y2)//2
-5. agent-windows click cx cy          # Act using coordinates
-6. agent-windows observe              # Verify the result
+3. agent-windows click -s @eN         # Act via selector (preferred)
+   # or: extract coords from Position, compute center, click cx cy
+4. agent-windows observe              # Verify the result
 ```
 
 **Critical rule**: `@eN` refs from the Interactive Elements table go **stale** after any UI change (click, type, shortcut). Always re-observe before the next interaction.
@@ -52,8 +51,9 @@ agent-windows config init
 # See the screen
 agent-windows observe
 
-# Click a button (find @e3 in snapshot, use its coordinates)
-agent-windows click 450 320
+# Click a button (find @e3 in snapshot)
+agent-windows click -s @e3            # via selector (preferred)
+agent-windows click 450 320           # or explicit coordinates
 
 # Type text
 agent-windows type "Hello World" --enter
@@ -148,18 +148,22 @@ agent-windows is visible @e3             # Check if element is on-screen
 agent-windows is enabled @e3             # Check if element is enabled
 agent-windows wait @e3 --timeout 10      # Wait for element to appear
 agent-windows screenshot -s @e3          # Screenshot cropped to element
+agent-windows click -s @e3               # Click element's bbox center
+agent-windows type "text" --at-selector @e3   # Click element center, then type
+agent-windows scroll -s @e3 --direction up
 ```
 
-### Commands That Require Coordinates
+`click`, `dblclick`, `hover`, `move`, `mouse-down`, `mouse-up`, `scroll`, and `type` (`--at-selector`) all accept `--selector`/`-s` and resolve the element's bbox center for you — no manual coordinate math.
 
-Most input commands need pixel coordinates, not @eN:
+### When You Need Explicit Coordinates
+
+For `drag` (two endpoints) or when you want a non-center click point, extract coordinates manually:
 
 ```bash
 # Extract center from Position: (400,300,500,340) → center=(450,320)
 agent-windows click 450 320
 agent-windows type "text" --at 450,320
-agent-windows hover 450 320
-agent-windows scroll 450 320 --direction down
+agent-windows drag 100 200 400 500
 ```
 
 ### Ref Lifecycle

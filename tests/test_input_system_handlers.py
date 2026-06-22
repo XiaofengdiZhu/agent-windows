@@ -248,6 +248,129 @@ class TestShortcutHandler:
             HANDLERS["shortcut"]({"keys": ["ctrl", "c"]})
 
 
+# ── selector (@eN) → coordinate resolution (TODO #13) ────────────────
+
+
+class TestSelectorResolution:
+    """Mouse/keyboard handlers accept a `selector` (@eN) that resolves to the
+    element's bbox center, overriding x/y. resolve_element_center is patched
+    so no real UIA runs."""
+
+    _CENTER = (200, 300)
+
+    def _patch_center(self):
+        return patch("agent_windows.core.tree.resolve_element_center",
+                     return_value=self._CENTER)
+
+    def test_click_selector_overrides_coords(self):
+        """selector present → resolve_element_center drives the click; x/y ignored."""
+        with self._patch_center() as m_res, \
+                patch("agent_windows.core.input_controller.click") as m_click:
+            HANDLERS["click"]({"selector": "@e3", "x": 999, "y": 999})
+        m_res.assert_called_once_with("@e3")
+        m_click.assert_called_once_with(200, 300, right=False, double=False)
+
+    def test_click_selector_without_xy_works(self):
+        with self._patch_center(), \
+                patch("agent_windows.core.input_controller.click") as m_click:
+            HANDLERS["click"]({"selector": "@e3"})
+        m_click.assert_called_once_with(200, 300, right=False, double=False)
+
+    def test_click_xy_path_untouched_when_no_selector(self):
+        """No selector → the legacy x/y path; resolve_element_center not called."""
+        with self._patch_center() as m_res, \
+                patch("agent_windows.core.input_controller.click") as m_click:
+            HANDLERS["click"]({"x": 10, "y": 20})
+        m_res.assert_not_called()
+        m_click.assert_called_once_with(10, 20, right=False, double=False)
+
+    @pytest.mark.parametrize("handler,core_fn,extra", [
+        ("dblclick", "click", {}),
+        ("hover", "hover", {}),
+        ("move", "move_to", {}),
+        ("scroll", "scroll_at", {"direction": "down", "amount": 3}),
+    ])
+    def test_every_coord_handler_supports_selector(self, handler, core_fn, extra):
+        """Each coordinate-taking handler honors selector over x/y."""
+        with self._patch_center(), \
+                patch(f"agent_windows.core.input_controller.{core_fn}") as m_core:
+            HANDLERS[handler]({"selector": "@e2"})
+        # First two positional args are the resolved center coords.
+        assert m_core.call_args.args[:2] == self._CENTER
+
+    def test_mouse_down_up_support_selector(self):
+        with self._patch_center(), \
+                patch("agent_windows.core.input_controller.mouse_down") as m_dn, \
+                patch("agent_windows.core.input_controller.mouse_up") as m_up:
+            HANDLERS["mouse_down"]({"selector": "@e4", "button": "right"})
+            HANDLERS["mouse_up"]({"selector": "@e4", "button": "right"})
+        m_dn.assert_called_once_with(200, 300, button="right")
+        m_up.assert_called_once_with(200, 300, button="right")
+
+    def test_selector_resolution_error_propagates(self):
+        """A bad/missing selector surfaces its error (ValueError → INVALID_PARAMS),
+        not a silent fallback to x/y."""
+        with patch("agent_windows.core.tree.resolve_element_center",
+                   side_effect=ValueError("Invalid selector: 'bad'")):
+            with pytest.raises(ValueError, match="Invalid selector"):
+                HANDLERS["click"]({"selector": "bad"})
+
+    def test_selector_missing_element_propagates(self):
+        """An out-of-range @eN (IndexError from resolve_element) surfaces as-is —
+        the handler does not swallow it into a generic error."""
+        with patch("agent_windows.core.tree.resolve_element_center",
+                   side_effect=IndexError("Element @e99 not found")):
+            with pytest.raises(IndexError, match="not found"):
+                HANDLERS["click"]({"selector": "@e99"})
+
+
+class TestTypeAtSelector:
+    """type --at-selector (@eN) resolves to a click point, overriding --at."""
+
+    _CENTER = (200, 300)
+
+    def _patch_center(self):
+        return patch("agent_windows.core.tree.resolve_element_center",
+                     return_value=self._CENTER)
+
+    def test_at_selector_routes_to_type_text_at(self):
+        with self._patch_center() as m_res, \
+                patch("agent_windows.core.input_controller.type_text_at") as m_at, \
+                patch("agent_windows.core.input_controller.type_text") as m_plain:
+            HANDLERS["type"]({"text": "hi", "at_selector": "@e3"})
+        m_res.assert_called_once_with("@e3")
+        m_at.assert_called_once_with("hi", 200, 300, clear=False, enter=False,
+                                     caret_position="idle")
+        m_plain.assert_not_called()
+
+    def test_at_selector_overrides_at_xy(self):
+        """If both at_selector and at_x/at_y given, selector wins (no x/y call)."""
+        with self._patch_center(), \
+                patch("agent_windows.core.input_controller.type_text_at") as m_at:
+            HANDLERS["type"]({"text": "hi", "at_selector": "@e3",
+                              "at_x": 999, "at_y": 999})
+        # type_text_at gets the resolved center, NOT 999,999
+        assert m_at.call_args.args[1:3] == self._CENTER
+
+    def test_no_at_no_selector_is_plain_type(self):
+        """Without at_selector or at_x/at_y, falls to the focused-field path."""
+        with self._patch_center() as m_res, \
+                patch("agent_windows.core.input_controller.type_text") as m_plain, \
+                patch("agent_windows.core.input_controller.type_text_at") as m_at:
+            HANDLERS["type"]({"text": "hi"})
+        m_res.assert_not_called()
+        m_at.assert_not_called()
+        m_plain.assert_called_once_with("hi")
+
+    def test_at_selector_error_propagates(self):
+        """A bad at_selector surfaces its error (different branch from _coords,
+        so pin it independently)."""
+        with patch("agent_windows.core.tree.resolve_element_center",
+                   side_effect=ValueError("Invalid selector: 'bad'")):
+            with pytest.raises(ValueError, match="Invalid selector"):
+                HANDLERS["type"]({"text": "hi", "at_selector": "bad"})
+
+
 # ── system.py handlers ───────────────────────────────────────────────
 
 

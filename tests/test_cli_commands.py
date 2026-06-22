@@ -103,6 +103,60 @@ class TestInputCommands:
         _, params = _cmd_calls(mock_cmd)[0]
         assert params == {"keys": "ctrl+c"}
 
+    # ── --selector / -s (TODO #13) ─────────────────────────────────────
+
+    @patch("agent_windows.cli.commands.input._cmd")
+    def test_click_selector_overrides_coords(self, mock_cmd):
+        """--selector @eN sends selector param; no x/y in params."""
+        result = runner.invoke(app, ["click", "--selector", "@e3", "--right"])
+        assert result.exit_code == 0
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params == {"selector": "@e3", "right": True, "double": False}
+
+    @patch("agent_windows.cli.commands.input._cmd")
+    def test_click_short_flag_selector(self, mock_cmd):
+        """-s is the short alias for --selector."""
+        runner.invoke(app, ["click", "-s", "@e2"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params["selector"] == "@e2"
+        assert "x" not in params
+
+    @patch("agent_windows.cli.commands.input._cmd")
+    def test_click_coords_still_work_without_selector(self, mock_cmd):
+        """Backward compat: bare X Y still produces x/y params."""
+        runner.invoke(app, ["click", "100", "200"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params == {"x": 100, "y": 200, "right": False, "double": False}
+
+    @patch("agent_windows.cli.commands.input._cmd")
+    def test_click_missing_coords_and_selector_errors(self, mock_cmd):
+        """Neither coords nor selector → CLI usage error (non-zero exit)."""
+        result = runner.invoke(app, ["click"])
+        assert result.exit_code != 0
+        mock_cmd.assert_not_called()
+
+    @patch("agent_windows.cli.commands.input._cmd")
+    def test_click_one_coord_errors(self, mock_cmd):
+        """Only one coordinate (forgot the second) → usage error, not a call."""
+        result = runner.invoke(app, ["click", "100"])
+        assert result.exit_code != 0
+        mock_cmd.assert_not_called()
+
+    @patch("agent_windows.cli.commands.input._cmd")
+    def test_scroll_selector(self, mock_cmd):
+        runner.invoke(app, ["scroll", "-s", "@e5", "--direction", "up"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params == {"selector": "@e5", "direction": "up", "amount": 3}
+
+    @patch("agent_windows.cli.commands.input._cmd")
+    def test_type_at_selector(self, mock_cmd):
+        """--at-selector sends at_selector param; no at_x/at_y."""
+        runner.invoke(app, ["type", "hi", "--at-selector", "@e3"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params["at_selector"] == "@e3"
+        assert "at_x" not in params
+        assert params["text"] == "hi"
+
 
 # ── observe/screenshot param assembly ────────────────────────────────
 
