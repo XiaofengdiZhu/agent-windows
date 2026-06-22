@@ -1,6 +1,6 @@
 ---
 name: agent-windows
-description: "Windows desktop automation CLI for AI agents. Use when the user needs to interact with the Windows desktop: open apps, read the screen, click / type / press shortcut keys / scroll / drag, execute shell commands, manage files, processes, and clipboard, or automate any Windows GUI task. Triggers include requests to open an application, click a button, type text, take a screenshot, read screen content, manage windows, run PowerShell, or automate any desktop workflow on Windows."
+description: "Windows desktop automation CLI for AI agents. Use when the user wants to automate anything on a Windows desktop: open apps, read the screen, click, type, press shortcuts, scroll, drag, run PowerShell, or manage files, processes, windows, and clipboard. Triggers: 'open/launch an app', 'click the button', 'type into the field', 'take a screenshot', 'read the screen', 'run this PowerShell', or any Windows GUI automation task."
 allowed-tools: Bash(agent-windows:*)
 ---
 
@@ -106,7 +106,7 @@ agent-windows screenshot --annotate --grid-w 4 --grid-h 4  # Annotated + % refer
 | `ground` / `detect` | ±~100 px | Custom-drawn UI that UIA can't capture |
 | `ask-vision` | Descriptive only | Understanding icons, reading screen state |
 
-**Rule**: Prefer `snapshot` for element location. Use vision tools only when UIA can't see an element.
+Prefer `snapshot` for element location; reach for vision only when UIA can't see an element (see `references/vision.md`).
 
 ## Vision Model Setup
 
@@ -389,6 +389,22 @@ agent-windows batch --file cmds.json --delay 0.5 --continue-on-error
 ```
 
 Each command in the array: `{"method": "<name>", "params": {<optional>}}`.
+
+## When Things Go Wrong
+
+A command failed? Don't guess — diagnose in order:
+
+1. **Read the error code** first. Common ones:
+   - `-1001 ELEMENT_NOT_FOUND` → `@eN` ref is stale; re-`observe` and use a fresh ref.
+   - `-1003 WAIT_TIMEOUT` → element/text never appeared; check the name's exact case (matching is case-sensitive), or raise the timeout.
+   - `-1005 VISION_API_ERROR` → vision model not configured/rate-limited; run `config doctor`.
+   - `-1004 PERMISSION_DENIED` → UAC blocked the action.
+
+2. **Re-observe** (`agent-windows observe`) to see the current screen state — it usually reveals what changed.
+
+3. **For full diagnostics**: add `--debug --format json` to any command. `--no-daemon` shows full Python stack traces.
+
+For the complete error-code table and per-symptom recovery steps, see `references/troubleshooting.md`.
 
 ## Common Workflows
 

@@ -76,7 +76,7 @@ agent-windows screenshot --annotate --grid-w 3 --grid-h 3   # + 3×3 reference g
 
 `--selector` resolves the element's bounding box and crops to it. `--bbox` specifies pixel coordinates directly. If both given, `--selector` takes priority.
 
-`--annotate` draws a numbered box around each interactive element matching the snapshot's `@eN` refs, so you can visually map a ref to its on-screen location. Add `--grid-w`/`--grid-h` to overlay a reference lattice with percentage labels at each line — useful for estimating coordinates when reasoning about element positions. Annotation requires the full-screen capture (boxes use screen coordinates), so a `--bbox`/`--selector`/`--monitor` is dropped with a warning when `--annotate` is set.
+`--annotate` draws a numbered box around each interactive element matching the snapshot's `@eN` refs, so you can visually map a ref to its on-screen location. Add `--grid-w`/`--grid-h` to overlay a reference lattice with percentage labels at each line — useful for estimating coordinates when reasoning about element positions. **`--grid-w`/`--grid-h` only take effect with `--annotate` — they are ignored (silently) otherwise.** Annotation requires the full-screen capture (boxes use screen coordinates), so a `--bbox`/`--selector`/`--monitor` is dropped with a warning when `--annotate` is set.
 
 **Output**: `{output, path, width, height, coord_scale, backend, region}`
 
@@ -544,21 +544,34 @@ agent-windows shell "Get-Process | Select-Object -First 5"
 
 **Output**: Command stdout/stderr.
 
-### fs read / fs write / fs list
+### fs read / fs write / fs list / fs copy / fs move / fs delete / fs search / fs info
 
-File system operations.
+File system operations. `read`/`write`/`list` cover the common cases; `copy`/`move`/`delete`/`search`/`info` handle the rest — prefer these over shelling out to `Copy-Item`/`Remove-Item` (they round-trip through the daemon in one call).
 
 ```bash
 agent-windows fs read C:\Users\test\file.txt
+agent-windows fs read C:\Users\test\file.txt --offset 10 --limit 50   # line range
 agent-windows fs write C:\Users\test\out.txt "Hello, World!"
+agent-windows fs write C:\Users\test\log.txt "new line" --append
 agent-windows fs list C:\Users
+agent-windows fs list C:\Users --pattern *.py --recursive --show-hidden
+agent-windows fs copy C:\a.txt C:\backup\a.txt --overwrite
+agent-windows fs move C:\old.txt C:\new.txt
+agent-windows fs delete C:\temp\junk --recursive
+agent-windows fs search C:\Projects "*.py"
+agent-windows fs info C:\Users\test\file.txt
 ```
 
 | Command | Parameters |
 |---------|-----------|
-| `fs read` | `path` (str, **required**) |
-| `fs write` | `path` (str, **required**), `content` (str, **required**) |
-| `fs list` | `path` (str, **required**) |
+| `fs read` | `path` (str, **required**), `--offset` (int, default 0 — 1-based start line, 0 = whole file), `--limit` (int, default 0 — max lines, 0 = to EOF) |
+| `fs write` | `path` (str, **required**), `content` (str, **required**), `--append` (bool, default `false` — append instead of overwriting) |
+| `fs list` | `path` (str, **required**), `--pattern` (str, default `""` — name glob filter), `--recursive` (bool, default `false` — walk subdirectories), `--show-hidden` (bool, default `false` — include dotfiles) |
+| `fs copy` | `path` (str, **required**), `destination` (str, **required**), `--overwrite` (bool, default `false` — replace existing destination) |
+| `fs move` | `path` (str, **required**), `destination` (str, **required**), `--overwrite` (bool, default `false`) |
+| `fs delete` | `path` (str, **required**), `--recursive` (bool, default `false` — required to delete non-empty directories) |
+| `fs search` | `path` (str, **required**), `pattern` (str, **required** — glob, e.g. `*.py`), `--no-recursive` (bool, default `false` — search top level only) |
+| `fs info` | `path` (str, **required**) — returns metadata (size, timestamps, attributes) |
 
 ### clipboard get / clipboard set
 
@@ -573,10 +586,10 @@ agent-windows clipboard set "text" --keyboard   # Simulate Ctrl+V after
 
 | Command | Parameters |
 |---------|-----------|
-| `clipboard get` | `--keyboard` / `-k` (bool, optional) |
+| `clipboard get` | `--keyboard` / `-k` (bool, optional — **optional**, not tri-state) |
 | `clipboard set` | `text` (str, **required**), `--keyboard` / `-k` (bool, optional) |
 
-Without `--keyboard`, uses the system clipboard API (PowerShell). With `--keyboard`, simulates Ctrl+C/V keystrokes. Config default: `clipboard.method` = `"system"`.
+`--keyboard` is an **optional** flag: when **omitted**, the command forwards no `keyboard` param to the daemon and behavior falls back to config (`clipboard.method`, default `"system"` — PowerShell API); when **present**, it forces keyboard simulation (Ctrl+C/V). There is **no** `--no-keyboard` form. So the effective default depends on config, not a hardcoded value.
 
 ### process list / process kill
 

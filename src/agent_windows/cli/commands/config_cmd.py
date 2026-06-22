@@ -42,7 +42,7 @@ def config_show() -> None:
 
 @app.command("set")
 def config_set(
-    key: str = typer.Argument(help="Config key, e.g. grounding.model"),
+    key: str = typer.Argument(help="Config key, e.g. vlm.model"),
     value: str = typer.Argument(help="Config value"),
 ) -> None:
     """Set a configuration value."""
