@@ -37,14 +37,20 @@ from agent_windows.core.tree import (
     BoundingBox,
     INTERACTIVE_TYPES,
 )
-from agent_windows.uia.enums import PropertyId, UIAError
+from agent_windows.uia.enums import PropertyId, UIAError, ToggleState, ExpandCollapseState
 from agent_windows.uia.core import ControlType
 
 BUTTON = ControlType.ButtonControl   # 50000 → "ButtonControl" (interactive)
+CHECKBOX = ControlType.CheckBoxControl  # 50002 → "CheckBoxControl"
+COMBO = ControlType.ComboBoxControl     # 50003 → "ComboBoxControl"
+EDIT = ControlType.EditControl          # 50004 → "EditControl" (interactive)
+LIST_ITEM = ControlType.ListItemControl  # 50007 → "ListItemControl"
+SLIDER = ControlType.SliderControl      # 50015 → "SliderControl"
+SPINNER = ControlType.SpinnerControl    # 50016 → "SpinnerControl"
+TREE_ITEM = ControlType.TreeItemControl  # 50024 → "TreeItemControl"
 WINDOW = ControlType.WindowControl   # 50032 → "WindowControl" (modal-detection)
 PANE = ControlType.PaneControl       # 50033 → "PaneControl" (NOT interactive)
 TEXT = ControlType.TextControl       # 50020 → "TextControl" (NOT interactive)
-EDIT = ControlType.EditControl       # 50004 → "EditControl" (interactive)
 
 # A normal on-screen rect (left, top, WIDTH, HEIGHT) — UIA returns width/height,
 # NOT right/bottom edges (see tree.py:425-440).
@@ -59,7 +65,7 @@ class FakeElement:
     def __init__(self, *, name="", control_type=TEXT, is_enabled=True,
                  is_offscreen=False, rect=RECT_ONSCREEN, has_keyboard_focus=False,
                  children=None, raise_on=None, raise_on_build_updated=False,
-                 is_modal=False):
+                 is_modal=False, extra_props=None):
         self._name = name
         self._control_type = control_type
         self._is_enabled = is_enabled
@@ -73,6 +79,8 @@ class FakeElement:
         self._raise_on_build_updated = raise_on_build_updated
         # WindowIsModalProperty value (PERF3-06 modal-marking test)
         self._is_modal = is_modal
+        # TODO #15: additional cached property values keyed by PropertyId attr.
+        self._extra = dict(extra_props) if extra_props else {}
 
     def GetCachedPropertyValue(self, prop_id):
         if self._raise_on == prop_id:
@@ -91,7 +99,7 @@ class FakeElement:
             return self._has_focus
         if prop_id == PropertyId.WindowIsModalProperty:
             return self._is_modal
-        return None
+        return self._extra.get(prop_id)
 
     def BuildUpdatedCache(self, children_req):
         """Bulk-fetch entry point (PERF3-05). Returns a wrapper whose
@@ -1029,4 +1037,205 @@ class TestTraverseTreeMetadata:
         for key in ("cursor", "resolution", "displays", "active_window",
                     "windows", "semantic_tree", "interactive_elements"):
             assert key in data, f"{key} dropped from traverse_tree return"
+
+
+# ── Rich element metadata (TODO #15) ────────────────────────────────
+
+
+class TestRichMetadata:
+    """_collect_rich_metadata fills ElementInfo.metadata with toggle/value/range/
+    selection/shortcut/help attributes based on control type. Drives the real
+    _traverse_node against FakeElement with extra_props set."""
+
+    def _one(self, element):
+        """Traverse a single root element; return its interactive ElementInfo."""
+        root = FakeElement(control_type=PANE, children=[element])
+        client = FakeClient(root)
+        _, interactive = traverse(client, root)
+        assert len(interactive) == 1, f"expected 1 interactive, got {len(interactive)}"
+        return interactive[0]
+
+    def test_checkbox_toggle_on(self):
+        el = self._one(FakeElement(
+            name="Accept", control_type=CHECKBOX,
+            extra_props={PropertyId.ToggleToggleStateProperty: ToggleState.On}))
+        assert el.metadata["toggle_state"] == "on"
+
+    def test_checkbox_toggle_off(self):
+        el = self._one(FakeElement(
+            name="Reject", control_type=CHECKBOX,
+            extra_props={PropertyId.ToggleToggleStateProperty: ToggleState.Off}))
+        assert el.metadata["toggle_state"] == "off"
+
+    def test_button_no_toggle_state_omits_key(self):
+        """A button that doesn't expose ToggleState (most buttons) has no
+        toggle_state key — not toggle_state: None."""
+        el = self._one(FakeElement(name="OK", control_type=BUTTON))
+        assert "toggle_state" not in el.metadata
+
+    def test_edit_value_and_password(self):
+        el = self._one(FakeElement(
+            name="Pass", control_type=EDIT,
+            extra_props={PropertyId.ValueValueProperty: "secret",
+                         PropertyId.IsPasswordProperty: True}))
+        assert el.metadata["value"] == "secret"
+        assert el.metadata["is_password"] is True
+
+    def test_edit_empty_value_shows_placeholder(self):
+        """An empty-string value surfaces as '(empty)' so the agent can tell a
+        blank field from one whose value wasn't exposed."""
+        el = self._one(FakeElement(
+            name="User", control_type=EDIT,
+            extra_props={PropertyId.ValueValueProperty: ""}))
+        assert el.metadata["value"] == "(empty)"
+
+    def test_edit_value_falls_back_to_legacy_accessible(self):
+        """ValueValue absent → LegacyIAccessibleValue used (some controls only
+        expose the latter)."""
+        el = self._one(FakeElement(
+            name="X", control_type=EDIT,
+            extra_props={PropertyId.LegacyIAccessibleValueProperty: "legacy"}))
+        assert el.metadata["value"] == "legacy"
+
+    def test_combo_expand_collapse(self):
+        el = self._one(FakeElement(
+            name="Drop", control_type=COMBO,
+            extra_props={
+                PropertyId.ExpandCollapseExpandCollapseStateProperty:
+                    ExpandCollapseState.Expanded}))
+        assert el.metadata["expand_collapse_state"] == "expanded"
+
+    def test_slider_range(self):
+        """SliderControl is now interactive (TODO #15 added it), so a slider's
+        range metadata surfaces via the normal traversal path."""
+        el = self._one(FakeElement(
+            name="Vol", control_type=SLIDER,
+            extra_props={
+                PropertyId.RangeValueValueProperty: 50.0,
+                PropertyId.RangeValueMinimumProperty: 0.0,
+                PropertyId.RangeValueMaximumProperty: 100.0}))
+        assert el.metadata["value"] == 50.0
+        assert el.metadata["min"] == 0.0
+        assert el.metadata["max"] == 100.0
+
+    def test_list_item_selected(self):
+        el = self._one(FakeElement(
+            name="file.txt", control_type=LIST_ITEM,
+            extra_props={PropertyId.SelectionItemIsSelectedProperty: True}))
+        assert el.metadata["is_selected"] is True
+
+    def test_accelerator_and_help_text(self):
+        """Shortcut (AcceleratorKey) and help_text apply to any control."""
+        el = self._one(FakeElement(
+            name="Save", control_type=BUTTON,
+            extra_props={PropertyId.AcceleratorKeyProperty: "Ctrl+S",
+                         PropertyId.HelpTextProperty: "Saves the document"}))
+        assert el.metadata["shortcut"] == "Ctrl+S"
+        assert el.metadata["help_text"] == "Saves the document"
+
+    def test_plain_button_has_empty_metadata(self):
+        """A button with no extra attributes has an empty metadata dict — keeps
+        ElementInfo small and the render output quiet for plain controls."""
+        el = self._one(FakeElement(name="Click", control_type=BUTTON))
+        assert el.metadata == {}
+
+    def test_metadata_rendered_in_state_column(self):
+        """render_snapshot surfaces metadata keys in the State column (TODO #15),
+        skipping the _orig_idx display-filtering internal."""
+        from agent_windows.core.tree import render_snapshot
+        el = ElementInfo(name="Check", control_type="CheckBoxControl",
+                         bbox=BoundingBox(0, 0, 10, 10), is_interactive=True,
+                         metadata={"toggle_state": "on", "_orig_idx": 5})
+        rendered = render_snapshot({
+            "cursor": (0, 0), "resolution": (100, 100), "displays": 1,
+            "interactive_elements": [el],
+        })
+        assert "toggle_state:on" in rendered
+        assert "_orig_idx" not in rendered  # internal, not user-facing
+
+    def test_long_metadata_value_truncated_in_render(self):
+        """A long value (e.g. a paragraph in an edit field) is truncated so it
+        doesn't blow out the table row width."""
+        from agent_windows.core.tree import render_snapshot
+        long_val = "x" * 100
+        el = ElementInfo(name="Notes", control_type="EditControl",
+                         bbox=BoundingBox(0, 0, 10, 10), is_interactive=True,
+                         metadata={"value": long_val})
+        rendered = render_snapshot({
+            "cursor": (0, 0), "resolution": (100, 100), "displays": 1,
+            "interactive_elements": [el],
+        })
+        assert "..." in rendered
+        assert long_val not in rendered
+
+    def test_sentinel_not_misread_as_truthy(self):
+        """A UIA NotSupported sentinel (a truthy non-None COM object) must NOT be
+        misread as is_selected:true or is_password:true. _read_cached filters
+        sentinels at the read boundary so bool()/str() never see them. (TODO #15)"""
+        class _Sentinel:
+            # Stand-in for ReservedNotSupportedValue: truthy, non-primitive.
+            def __bool__(self):
+                return True
+        el = self._one(FakeElement(
+            name="x", control_type=LIST_ITEM,
+            extra_props={PropertyId.SelectionItemIsSelectedProperty: _Sentinel()}))
+        assert "is_selected" not in el.metadata  # not silently True
+        # Same defense for the password flag on an EditControl.
+        el2 = self._one(FakeElement(
+            name="y", control_type=EDIT,
+            extra_props={PropertyId.IsPasswordProperty: _Sentinel()}))
+        assert "is_password" not in el2.metadata
+
+    def test_value_with_pipe_and_newline_escaped_in_render(self):
+        """A value containing | or newlines must not break the markdown table row —
+        pipes are escaped and newlines collapsed to spaces. (TODO #15)"""
+        from agent_windows.core.tree import render_snapshot
+        el = ElementInfo(name="X", control_type="EditControl",
+                         bbox=BoundingBox(0, 0, 10, 10), is_interactive=True,
+                         metadata={"value": "a|b\nc\rd"})
+        rendered = render_snapshot({
+            "cursor": (0, 0), "resolution": (100, 100), "displays": 1,
+            "interactive_elements": [el],
+        })
+        # The rendered row stays on one line (no raw newline in output).
+        table_lines = [ln for ln in rendered.splitlines() if "value:" in ln]
+        assert len(table_lines) == 1
+        # Pipe is backslash-escaped; newline/CR became spaces.
+        assert "a\\|b c d" in table_lines[0]
+
+    def test_pipe_near_truncation_boundary_not_split(self):
+        """Truncation happens BEFORE escaping, so a pipe near the 27-char
+        boundary can't be split from its backslash (which would leave a dangling
+        backslash). The escaped form stays intact after truncation. (TODO #15)"""
+        from agent_windows.core.tree import render_snapshot
+        # 26 chars then a pipe then enough to exceed the 30-char truncation:
+        # 'abcdefghijklmnopqrstuvwxyz|plus-more'
+        el = ElementInfo(name="X", control_type="EditControl",
+                         bbox=BoundingBox(0, 0, 10, 10), is_interactive=True,
+                         metadata={"value": "abcdefghijklmnopqrstuvwxyz|plus-more"})
+        rendered = render_snapshot({
+            "cursor": (0, 0), "resolution": (100, 100), "displays": 1,
+            "interactive_elements": [el],
+        })
+        # Truncated to first 27 chars ('abcdefghijklmnopqrstuvwxyz|') then
+        # escaped: the pipe becomes \| and the ellipsis follows cleanly.
+        assert "value:abcdefghijklmnopqrstuvwxyz\\|..." in rendered
+        assert "\\..." not in rendered  # no dangling-backslash form
+
+    def test_toggle_indeterminate_mapped(self):
+        """All ToggleState values map (not just on/off) — pin indeterminate too."""
+        el = self._one(FakeElement(
+            name="Tri", control_type=CHECKBOX,
+            extra_props={PropertyId.ToggleToggleStateProperty: ToggleState.Indeterminate}))
+        assert el.metadata["toggle_state"] == "indeterminate"
+
+    def test_radio_button_selected(self):
+        """RadioButtonControl now surfaces is_selected (TODO #15 added it to the
+        selection set) so the agent can tell which radio is checked."""
+        RADIO = getattr(ControlType, "RadioButtonControl")
+        el = self._one(FakeElement(
+            name="Option A", control_type=RADIO,
+            extra_props={PropertyId.SelectionItemIsSelectedProperty: True}))
+        assert el.metadata["is_selected"] is True
+
 

@@ -52,6 +52,8 @@ Uses config `tree.max_depth` (default 15), `tree.max_elements` (default 200), `t
 
 **Output**: Same as observe but without screenshot file. Contains the Interactive Elements table with `@eN` refs.
 
+**Rich element attributes** (TODO #15): the Interactive Elements table's State column surfaces extra attributes when the element exposes them — `toggle_state:on|off|indeterminate` (checkboxes/toggles), `value:...` (text fields, sliders), `expand_collapse_state:expanded|collapsed|partially expanded|leaf` (combo boxes), `min:..`/`max:..` (sliders), `is_selected:true|false` (list/radio/tab items), `is_password:true`, `shortcut:Ctrl+S`, `help_text:...`. These are read from the cached UIA properties (no extra COM round-trips) and help disambiguate similar-looking elements and read current state without an extra click.
+
 ### screenshot
 
 Capture a screenshot, optionally cropped to a region or UIA element.

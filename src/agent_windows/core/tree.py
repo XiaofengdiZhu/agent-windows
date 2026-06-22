@@ -90,7 +90,7 @@ INTERACTIVE_TYPES = {
     "CheckBoxControl", "RadioButtonControl", "ComboBoxControl",
     "HyperlinkControl", "SplitButtonControl", "TabItemControl",
     "TreeItemControl", "DataItemControl", "HeaderItemControl",
-    "TextBoxControl", "SpinnerControl", "ScrollBarControl",
+    "TextBoxControl", "SliderControl", "SpinnerControl", "ScrollBarControl",
     "DocumentControl",
 }
 
@@ -526,6 +526,20 @@ def _build_traversal_cache(client):
     # WindowIsModal lets _traverse_node detect modal dialogs and mark their
     # subtree so render_snapshot can promote those elements (PERF3-06).
     cache.AddProperty(PropertyId.WindowIsModalProperty)
+    # TODO #15: richer element attributes surfaced in ElementInfo.metadata —
+    # toggle/expand/value/range/selection/shortcut/help/password. Cached so each
+    # is a local lookup, not a live COM round-trip per property.
+    cache.AddProperty(PropertyId.ToggleToggleStateProperty)
+    cache.AddProperty(PropertyId.ExpandCollapseExpandCollapseStateProperty)
+    cache.AddProperty(PropertyId.ValueValueProperty)
+    cache.AddProperty(PropertyId.LegacyIAccessibleValueProperty)
+    cache.AddProperty(PropertyId.RangeValueValueProperty)
+    cache.AddProperty(PropertyId.RangeValueMinimumProperty)
+    cache.AddProperty(PropertyId.RangeValueMaximumProperty)
+    cache.AddProperty(PropertyId.AcceleratorKeyProperty)
+    cache.AddProperty(PropertyId.HelpTextProperty)
+    cache.AddProperty(PropertyId.IsPasswordProperty)
+    cache.AddProperty(PropertyId.SelectionItemIsSelectedProperty)
     cache.TreeScope = TreeScope.TreeScope_Element | TreeScope.TreeScope_Children
     cache.TreeFilter = client.IUIAutomation.RawViewCondition
     return cache
@@ -709,6 +723,7 @@ def _traverse_node(
                     is_offscreen=is_offscreen,
                     is_modal=this_in_modal,
                     window_name=window.title,
+                    metadata=_collect_rich_metadata(node, control_type),
                 ))
 
         # Recurse into children. PERF3-05: fetch all children pre-cached in one
@@ -734,6 +749,151 @@ def _traverse_node(
 
     except Exception as e:
         logger.debug("Error traversing node at depth %d: %s", depth, e)
+
+
+# ── Rich metadata collection (TODO #15) ────────────────────────────
+
+
+def _is_uia_sentinel(val: Any) -> bool:
+    """True if *val* is UIA's ReservedNotSupportedValue / ReservedMixedAttributeValue.
+
+    UIA returns these non-None COM sentinels (``IUnknown`` pointers) for
+    properties a provider doesn't implement. ``bool(sentinel)`` is ``True`` and
+    ``str(sentinel)`` is non-empty, so without filtering they'd corrupt bool /
+    value reads (e.g. falsely flag a control ``is_password`` or ``is_selected``).
+    The real values we collect are always bool/int/float/str, so reject any
+    other type. (TODO #15; mirrors the WindowIsModal guard at the top of
+    _traverse_node.)
+    """
+    return not isinstance(val, (bool, int, float, str))
+
+
+def _read_cached(node, prop_id) -> Any:
+    """Read one cached property, returning None on any failure or sentinel.
+
+    A per-property try/except mirrors the existing node reads, and the sentinel
+    filter (_is_uia_sentinel) stops a NotSupported/MixedAttribute COM object
+    from being misread as a truthy bool or a non-empty string. GetCachedPropertyValue
+    is a local lookup (no COM round-trip), so reading several is cheap. (TODO #15)
+    """
+    try:
+        val = node.GetCachedPropertyValue(prop_id)
+    except Exception:
+        logger.debug("Failed to get cached node property", exc_info=True)
+        return None
+    if val is None or _is_uia_sentinel(val):
+        return None
+    return val
+
+
+# Control types whose Toggle state is meaningful (on/off/indeterminate).
+_TOGGLE_TYPES = {"ButtonControl", "CheckBoxControl", "MenuItemControl",
+                 "ListItemControl", "TreeItemControl"}
+# Control types carrying a text value (input fields).
+_VALUE_TYPES = {"EditControl", "TextBoxControl", "DocumentControl"}
+# Controls that expand/collapse (combo boxes, trees, menus).
+_EXPAND_TYPES = {"ComboBoxControl", "TreeItemControl", "MenuItemControl",
+                 "SplitButtonControl"}
+# Controls exposing a numeric range (sliders, spinners).
+_RANGE_TYPES = {"SliderControl", "SpinnerControl"}
+
+
+def _collect_rich_metadata(node, control_type: str) -> dict[str, Any]:
+    """Collect richer element attributes into the metadata dict. (TODO #15)
+
+    Reads only cached properties (one local lookup each — the CacheRequest in
+    _build_traversal_cache pre-fetched them), so this adds no COM round-trips.
+    Fills keys conditionally based on control_type to keep the metadata concise:
+      - toggle_state  for Button/CheckBox/MenuItem/ListItem/TreeItem
+      - value         for Edit/TextBox/Document (text content) and Slider/Spinner
+      - is_password   for Edit/TextBox
+      - expand_collapse_state for ComboBox/TreeItem/MenuItem/SplitButton
+      - min/max/value for Slider/Spinner (range)
+      - is_selected   for ListItem/TreeItem (selection state)
+      - shortcut      (AcceleratorKey) and help_text for any element that has one
+
+    Returns an empty dict when no richer attributes apply (keeps ElementInfo
+    small and the render output quiet for plain buttons/links).
+    """
+    from agent_windows.uia.enums import ToggleState, ExpandCollapseState
+
+    md: dict[str, Any] = {}
+
+    # Shortcut / help text apply to any element that exposes them.
+    accel = _read_cached(node, PropertyId.AcceleratorKeyProperty)
+    if isinstance(accel, str) and accel.strip():
+        md["shortcut"] = accel.strip()
+    help_text = _read_cached(node, PropertyId.HelpTextProperty)
+    if isinstance(help_text, str) and help_text.strip():
+        md["help_text"] = help_text.strip()
+
+    # Toggle state (on/off/indeterminate) for checkable controls.
+    if control_type in _TOGGLE_TYPES:
+        ts = _read_cached(node, PropertyId.ToggleToggleStateProperty)
+        if ts is not None:
+            try:
+                md["toggle_state"] = {
+                    ToggleState.Off: "off",
+                    ToggleState.On: "on",
+                    ToggleState.Indeterminate: "indeterminate",
+                }.get(int(ts))
+            except (TypeError, ValueError):
+                pass
+
+    # Expand/collapse state for combo boxes, tree items, etc.
+    if control_type in _EXPAND_TYPES:
+        ecs = _read_cached(node, PropertyId.ExpandCollapseExpandCollapseStateProperty)
+        if ecs is not None:
+            try:
+                md["expand_collapse_state"] = {
+                    ExpandCollapseState.Collapsed: "collapsed",
+                    ExpandCollapseState.Expanded: "expanded",
+                    ExpandCollapseState.PartiallyExpanded: "partially expanded",
+                    ExpandCollapseState.LeafNode: "leaf",
+                }.get(int(ecs))
+            except (TypeError, ValueError):
+                pass
+
+    # Text value + password flag for input fields.
+    if control_type in _VALUE_TYPES:
+        # Prefer ValueValue (ValuePattern), fall back to LegacyIAccessibleValue.
+        value = _read_cached(node, PropertyId.ValueValueProperty)
+        if value is None:
+            value = _read_cached(node, PropertyId.LegacyIAccessibleValueProperty)
+        if isinstance(value, str):
+            md["value"] = value.strip() if value.strip() else "(empty)"
+        if _read_cached(node, PropertyId.IsPasswordProperty):
+            md["is_password"] = True
+
+    # Numeric range (slider/spinner): value, min, max.
+    if control_type in _RANGE_TYPES:
+        rv = _read_cached(node, PropertyId.RangeValueValueProperty)
+        rmin = _read_cached(node, PropertyId.RangeValueMinimumProperty)
+        rmax = _read_cached(node, PropertyId.RangeValueMaximumProperty)
+        if rv is not None:
+            try:
+                md["value"] = round(float(rv), 2)
+            except (TypeError, ValueError):
+                pass
+        if rmin is not None:
+            try:
+                md["min"] = round(float(rmin), 2)
+            except (TypeError, ValueError):
+                pass
+        if rmax is not None:
+            try:
+                md["max"] = round(float(rmax), 2)
+            except (TypeError, ValueError):
+                pass
+
+    # Selection state for list/tree/radio/tab items (is this item selected?).
+    if control_type in {"ListItemControl", "TreeItemControl",
+                        "RadioButtonControl", "TabItemControl"}:
+        sel = _read_cached(node, PropertyId.SelectionItemIsSelectedProperty)
+        if sel is not None:
+            md["is_selected"] = bool(sel)
+
+    return md
 
 
 # ── Control type mapping ─────────────────────────────────────────
@@ -868,6 +1028,21 @@ def render_snapshot(data: dict[str, Any]) -> str:
                 states.append("focused")
             if not el.is_enabled:
                 states.append("disabled")
+            # TODO #15: surface richer attributes from metadata. _orig_idx is a
+            # display-filtering internal (not user-facing), so skip it. Each key
+            # renders as ``key:value`` for compactness; long values (value/help_text)
+            # are truncated. Truncate BEFORE escaping so a pipe near the boundary
+            # can't be split from its backslash; collapse newlines and escape pipes
+            # so user-controlled text (an Edit value, help_text) can't break the
+            # markdown table row.
+            if el.metadata:
+                for key, val in el.metadata.items():
+                    if key == "_orig_idx":
+                        continue
+                    raw = str(val).replace("\r", " ").replace("\n", " ")
+                    if len(raw) > 30:
+                        raw = raw[:27] + "..."
+                    states.append(f"{key}:{raw.replace('|', '\\|')}")
             state_str = ", ".join(states)
             parts.append(f"| {ref} | {type_name} | {name} | {window_name} | {pos} | {state_str} |")
         parts.append("")
