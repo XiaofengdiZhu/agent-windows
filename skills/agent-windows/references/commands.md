@@ -393,6 +393,66 @@ Modifiers: `ctrl`, `alt`, `shift`, `win`. Special keys: `enter`, `escape`, `tab`
 
 ---
 
+## Batch Interaction
+
+### multi-select
+
+Click multiple targets in one call, optionally holding Ctrl for multi-selection.
+
+```bash
+# Coordinates: [[x,y], ...]
+agent-windows multi-select '[[100,200],[300,400]]'
+agent-windows multi-select '[[100,200]]' --no-ctrl         # independent clicks
+
+# Element refs: ["@e1", "@e3", ...] (resolved to bbox centers)
+agent-windows multi-select '["@e1","@e3"]' --selectors
+
+# From a file or stdin
+agent-windows multi-select --file targets.json --selectors
+echo '[[1,2],[3,4]]' | agent-windows multi-select -
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `JSON` | str | **required*** | JSON array of `[x,y]` pairs or `@eN` strings, or `-` for stdin |
+| `--file` / `-f` | str | `""` | Read JSON from file (overrides argument) |
+| `--selectors` | bool | `false` | Treat JSON values as `@eN` element refs (resolved to centers) |
+| `--press-ctrl` / `--no-ctrl` | bool | `true` | Hold Ctrl across all clicks (multi-select) vs independent clicks |
+
+\* `JSON` is required unless `--file` or stdin (`-`) is given.
+
+With `--press-ctrl` (default), Ctrl is held down across every click so each toggles selection (file multi-select, checkbox groups) rather than activating. With `--no-ctrl`, each click is independent. Capped at 50 targets.
+
+**Output**: `{output, count, press_ctrl, locations}`
+
+### multi-edit
+
+Type text into multiple fields in one call.
+
+```bash
+# Coordinates: [[x,y,text], ...]
+agent-windows multi-edit '[[100,200,"Alice"],[300,400,"admin"]]'
+
+# Element refs: [["@eN", text], ...]
+agent-windows multi-edit '[["@e1","Alice"],["@e3","admin"]]' --selectors
+
+agent-windows multi-edit --file form.json --selectors
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `JSON` | str | **required*** | JSON array of `[x,y,text]` triples or `[@eN,text]` pairs, or `-` for stdin |
+| `--file` / `-f` | str | `""` | Read JSON from file (overrides argument) |
+| `--selectors` | bool | `false` | Treat JSON pairs as `[@eN, text]` (resolved to centers) |
+
+\* `JSON` is required unless `--file` or stdin (`-`) is given.
+
+Each field is clicked, cleared (Ctrl+A + Delete), then typed into. Capped at 50 targets; each text capped at 10000 chars. Fields are committed sequentially — if field N fails, fields 1..N-1 have already been typed and the error propagates; verify with `snapshot` afterward, or issue separate `type` calls when rollback matters.
+
+**Output**: `{output, count, fields}`
+
+---
+
 ## Application Management
 
 ### app launch

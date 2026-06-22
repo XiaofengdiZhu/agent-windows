@@ -206,6 +206,26 @@ agent-windows shortcut win+r                         # Run dialog
 
 Key notation for `shortcut`: `ctrl`, `alt`, `shift`, `win` as modifiers, joined with `+`. Special keys: `enter`, `escape`, `tab`, `space`, `backspace`, `delete`, `up/down/left/right`, `home`, `end`, `pageup`, `pagedown`, `f1`–`f12`.
 
+### Batch Interaction
+
+Click multiple targets or fill multiple fields in one call (caps at 50 targets; each text field capped at 10000 chars). Pass coordinates (`[[x,y],...]` / `[[x,y,text],...]`) or element refs with `--selectors` (`["@e1",...]` / `[["@e1","text"],...]`).
+
+```bash
+# Select multiple files (Ctrl held across clicks — default)
+agent-windows multi-select '[[100,200],[300,400],[500,600]]'
+agent-windows multi-select '["@e1","@e3","@e5"]' --selectors
+
+# Fill a form in one shot — each field is clicked, cleared, and typed
+agent-windows multi-edit '[[100,200,"Alice"],[300,400,"admin@example.com"]]'
+agent-windows multi-edit '[["@e1","Alice"],["@e3","admin"]]' --selectors
+
+# Read targets from a file or stdin
+agent-windows multi-select --file targets.json --selectors
+echo '[[1,2],[3,4]]' | agent-windows multi-select -
+```
+
+Use `--no-ctrl` on `multi-select` for independent clicks (no selection semantics).
+
 ## Safety Rules
 
 ### 1. Always switch window before input

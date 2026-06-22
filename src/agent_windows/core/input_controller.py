@@ -474,3 +474,44 @@ def shortcut(keys: str, wait_time: float = 0.3) -> None:
         time.sleep(0.01)
 
     time.sleep(wait_time)
+
+
+# ── Batch operations (TODO #12) ────────────────────────────────────
+
+
+def multi_select(press_ctrl: bool, locs: list[tuple[int, int]]) -> None:
+    """Click multiple points in sequence. (TODO #12)
+
+    With ``press_ctrl=True``, Ctrl is held down across all clicks so each
+    click toggles selection (file multi-select, checkbox groups, …) rather
+    than activating. With ``press_ctrl=False``, each click is independent
+    (equivalent to a sequence of plain ``click`` calls, but in one call).
+
+    Args:
+        press_ctrl: Hold Ctrl across the whole sequence.
+        locs: Screen coordinates to click, as ``(x, y)`` tuples.
+    """
+    if press_ctrl:
+        _press_key(VK_CONTROL)
+        time.sleep(0.05)
+    try:
+        for x, y in locs:
+            click(x, y)
+            time.sleep(0.2)
+    finally:
+        # Always release Ctrl, even if a click raised — otherwise the desktop
+        # is stuck with Ctrl held (every subsequent click toggles selection).
+        if press_ctrl:
+            _release_key(VK_CONTROL)
+            time.sleep(0.05)
+
+
+def multi_edit(locs: list[tuple[int, int, str]]) -> None:
+    """Type text into multiple fields in sequence. (TODO #12)
+
+    Each entry is ``(x, y, text)``: click the field, clear it, type the text.
+    Equivalent to a sequence of ``type_text_at(text, x, y, clear=True)`` but in
+    one call — for filling out a form in one shot.
+    """
+    for x, y, text in locs:
+        type_text_at(text, x, y, clear=True)

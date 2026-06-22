@@ -145,6 +145,8 @@ Python daemon (persistent, COM STA worker)
 | `cleanup` | Clean up old/oversized screenshots |
 | `wait SECONDS|SELECTOR [--text TEXT] [--timeout N] [--interval N]` | Wait for duration, element, or text |
 | `batch JSON/--file PATH [--delay N] [--continue-on-error]` | Execute multiple commands in one IPC round-trip |
+| `multi-select JSON/--file PATH [--selectors] [--no-ctrl]` | Click multiple targets (Ctrl held by default) |
+| `multi-edit JSON/--file PATH [--selectors]` | Type into multiple fields in one call |
 
 ### Daemon & Config
 | Command | Description |

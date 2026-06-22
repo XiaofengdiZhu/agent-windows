@@ -7,7 +7,7 @@ tests stay deterministic and don't move the real cursor.
 """
 
 import pytest
-from unittest.mock import patch
+from unittest.mock import patch, call
 
 from agent_windows.core import input_controller as ic
 
@@ -534,3 +534,76 @@ class TestScrollAt:
         deltas = [c.args[3] for c in mock_evt.call_args_list]
         assert all(d == ic.WHEEL_DELTA for d in deltas)
         assert len(deltas) == 3
+
+
+# ── multi_select / multi_edit (TODO #12) ────────────────────────────
+
+
+class TestMultiSelect:
+    """multi_select clicks each point; press_ctrl holds Ctrl across all clicks."""
+
+    def test_press_ctrl_holds_then_releases_around_clicks(self):
+        """Ctrl is pressed BEFORE the first click and released AFTER the last."""
+        with patch.object(ic, "_press_key") as m_press, \
+             patch.object(ic, "_release_key") as m_release, \
+             patch.object(ic, "click") as m_click, \
+             patch.object(ic.time, "sleep"):
+            ic.multi_select(True, [(10, 20), (30, 40)])
+        # First press is Ctrl, last release is Ctrl
+        assert m_press.call_args_list[0].args[0] == ic.VK_CONTROL
+        assert m_release.call_args_list[-1].args[0] == ic.VK_CONTROL
+        # Each loc clicked exactly once
+        assert m_click.call_args_list == [
+            call(10, 20),
+            call(30, 40),
+        ]
+
+    def test_no_ctrl_does_not_touch_ctrl_key(self):
+        """press_ctrl=False: no _press_key/_release_key calls at all."""
+        with patch.object(ic, "_press_key") as m_press, \
+             patch.object(ic, "_release_key") as m_release, \
+             patch.object(ic, "click"), \
+             patch.object(ic.time, "sleep"):
+            ic.multi_select(False, [(1, 2)])
+        m_press.assert_not_called()
+        m_release.assert_not_called()
+
+    def test_ctrl_released_even_if_click_raises(self):
+        """If a click raises mid-sequence, Ctrl is still released — otherwise the
+        desktop is stuck with Ctrl held. The finally block is load-bearing."""
+        with patch.object(ic, "_press_key"), \
+             patch.object(ic, "_release_key") as m_release, \
+             patch.object(ic, "click", side_effect=[None, RuntimeError("boom")]), \
+             patch.object(ic.time, "sleep"):
+            with pytest.raises(RuntimeError):
+                ic.multi_select(True, [(1, 2), (3, 4)])
+        m_release.assert_called_with(ic.VK_CONTROL)
+
+    def test_empty_locs_is_a_noop_with_ctrl(self):
+        """Empty locs + press_ctrl: Ctrl pressed then immediately released, no clicks."""
+        with patch.object(ic, "_press_key") as m_press, \
+             patch.object(ic, "_release_key") as m_release, \
+             patch.object(ic, "click") as m_click, \
+             patch.object(ic.time, "sleep"):
+            ic.multi_select(True, [])
+        m_press.assert_called_once_with(ic.VK_CONTROL)
+        m_release.assert_called_once_with(ic.VK_CONTROL)
+        m_click.assert_not_called()
+
+
+class TestMultiEdit:
+    """multi_edit calls type_text_at(text, x, y, clear=True) per triple."""
+
+    def test_each_triple_forwarded_with_clear(self):
+        with patch.object(ic, "type_text_at") as m_type:
+            ic.multi_edit([(10, 20, "Alice"), (30, 40, "Bob")])
+        assert m_type.call_args_list == [
+            call("Alice", 10, 20, clear=True),
+            call("Bob", 30, 40, clear=True),
+        ]
+
+    def test_empty_triples_noop(self):
+        with patch.object(ic, "type_text_at") as m_type:
+            ic.multi_edit([])
+        m_type.assert_not_called()
+

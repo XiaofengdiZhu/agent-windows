@@ -9,6 +9,7 @@
 from agent_windows.daemon.handlers import (  # noqa: F401
     batch,
     input,
+    multi,
     observe,
     screenshot,
     system,

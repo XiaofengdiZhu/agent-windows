@@ -566,3 +566,82 @@ class TestDaemonCommand:
         assert result.exit_code == 0
         assert result.exception is None
         assert "Status: stopped" in result.output
+
+
+# ── multi-select / multi-edit commands (TODO #12) ─────────────────────
+
+
+class TestMultiSelectCommand:
+    @patch("agent_windows.cli.commands.multi._cmd")
+    def test_locs_from_argument(self, mock_cmd):
+        locs = [[100, 200], [300, 400]]
+        result = runner.invoke(app, ["multi-select", json.dumps(locs)])
+        assert result.exit_code == 0
+        method, params = _cmd_calls(mock_cmd)[0]
+        assert method == "multi_select"
+        assert params["locs"] == locs
+        assert params["press_ctrl"] is True
+
+    @patch("agent_windows.cli.commands.multi._cmd")
+    def test_no_ctrl_flag(self, mock_cmd):
+        runner.invoke(app, ["multi-select", "[[1,2]]", "--no-ctrl"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params["press_ctrl"] is False
+
+    @patch("agent_windows.cli.commands.multi._cmd")
+    def test_selectors_flag_sends_selectors_not_locs(self, mock_cmd):
+        runner.invoke(app, ["multi-select", '["@e1","@e3"]', "--selectors"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params["selectors"] == ["@e1", "@e3"]
+        assert "locs" not in params
+
+    @patch("agent_windows.cli.commands.multi._cmd")
+    def test_from_file(self, mock_cmd, tmp_path):
+        locs = [[5, 6]]
+        f = tmp_path / "t.json"
+        f.write_text(json.dumps(locs), encoding="utf-8")
+        result = runner.invoke(app, ["multi-select", "--file", str(f)])
+        assert result.exit_code == 0
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params["locs"] == locs
+
+    def test_no_source_errors(self):
+        result = runner.invoke(app, ["multi-select"])
+        assert result.exit_code == 1
+        assert "provide JSON" in result.output
+
+    def test_invalid_json_errors(self):
+        result = runner.invoke(app, ["multi-select", "not json"])
+        assert result.exit_code == 1
+        assert "invalid JSON" in result.output
+
+
+class TestMultiEditCommand:
+    @patch("agent_windows.cli.commands.multi._cmd")
+    def test_locs_from_argument(self, mock_cmd):
+        locs = [[100, 200, "Alice"], [300, 400, "Bob"]]
+        result = runner.invoke(app, ["multi-edit", json.dumps(locs)])
+        assert result.exit_code == 0
+        method, params = _cmd_calls(mock_cmd)[0]
+        assert method == "multi_edit"
+        assert params["locs"] == locs
+
+    @patch("agent_windows.cli.commands.multi._cmd")
+    def test_selectors_flag(self, mock_cmd):
+        runner.invoke(app, ["multi-edit", '[["@e1","Alice"]]', "--selectors"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params["selectors"] == [["@e1", "Alice"]]
+        assert "locs" not in params
+
+    @patch("agent_windows.cli.commands.multi._cmd")
+    def test_from_stdin(self, mock_cmd):
+        locs = [[1, 2, "x"]]
+        result = runner.invoke(app, ["multi-edit", "-"], input=json.dumps(locs))
+        assert result.exit_code == 0
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params["locs"] == locs
+
+    def test_non_array_errors(self):
+        result = runner.invoke(app, ["multi-edit", json.dumps({"a": 1})])
+        assert result.exit_code == 1
+        assert "must be an array" in result.output

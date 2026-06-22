@@ -37,6 +37,7 @@ from agent_windows.cli.commands.system import (  # noqa: E402
     app_cmd, fs_cmd, clip_cmd, proc_cmd,
 )
 from agent_windows.cli.commands.wait import wait, wait_for  # noqa: E402
+from agent_windows.cli.commands.multi import multi_select, multi_edit  # noqa: E402
 
 app.command()(observe)
 app.command()(snapshot)
@@ -60,6 +61,8 @@ app.command()(drag)
 app.command()(shortcut)
 app.command()(shell)
 app.command()(batch)
+app.command(name="multi-select")(multi_select)
+app.command(name="multi-edit")(multi_edit)
 app.command()(wait)
 app.command(name="wait-for")(wait_for)
 
