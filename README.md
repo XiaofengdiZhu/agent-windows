@@ -266,4 +266,6 @@ Some actions are buried in 2nd- or 3rd-level menus. Buttons may show only icons 
 
 ## License
 
-MIT (the vendored `uia` module is from [yinkaisheng/Python-UIAutomation-for-Windows](https://github.com/yinkaisheng/Python-UIAutomation-for-Windows), Apache 2.0; some patterns adapted from [Windows-MCP](https://github.com/CursorTouch/Windows-MCP), MIT).
+agent-windows is licensed under the **MIT License** (see the root `LICENSE`).
+
+The vendored `uia` module under `src/agent_windows/uia/` is derived from [yinkaisheng/Python-UIAutomation-for-Windows](https://github.com/yinkaisheng/Python-UIAutomation-for-Windows), which is **Apache License 2.0** — see `src/agent_windows/uia/LICENSE-APACHE.txt` and `NOTICE` in that directory. Original copyright notices are retained in each derived file. Some other patterns are adapted from [Windows-MCP](https://github.com/CursorTouch/Windows-MCP) (MIT).

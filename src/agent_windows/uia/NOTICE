@@ -1,0 +1,15 @@
+agent-windows — uia module
+Copyright 2026 销锋镝铸
+
+This product includes software developed by yinkaisheng
+(https://github.com/yinkaisheng/Python-UIAutomation-for-Windows).
+
+The files in this directory derived from the "uiautomation" project
+(currently core.py, controls.py, patterns.py, and enums.py) are licensed
+under the Apache License, Version 2.0 (see LICENSE-APACHE.txt in this
+directory). Original copyright notices are retained at the top of each
+such file. Other files in this directory are original to agent-windows
+and fall under the project's MIT License.
+
+The rest of the agent-windows project is licensed under the MIT License
+(see the root LICENSE file).

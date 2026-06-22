@@ -4,10 +4,44 @@ version = "0.1.0"
 description = "Windows Computer-Use CLI for AI Agents"
 readme = "README.md"
 license = "MIT"
+license-files = ["LICENSE", "src/agent_windows/uia/LICENSE-APACHE.txt"]
 authors = [
     { name = "销锋镝铸", email = "523084467@qq.com" }
 ]
 requires-python = ">=3.13"
+keywords = [
+    "windows",
+    "automation",
+    "agent",
+    "uia",
+    "accessibility",
+    "test-automation",
+    "desktop-automation",
+    "computer-automation",
+    "computer-use",
+    "computer-use-agent",
+    "ai-agents",
+    "ai-tools",
+    "testing-tools",
+    "cli",
+    "rpa",
+    "end-to-end-testing",
+    "e2e-testing",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: Microsoft :: Windows :: Windows 10",
+    "Operating System :: Microsoft :: Windows :: Windows 11",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Testing",
+    "Topic :: System :: Operating System",
+    "Topic :: Utilities",
+]
 dependencies = [
     "typer>=0.12",
     "comtypes>=1.4",
@@ -17,6 +51,12 @@ dependencies = [
     "openai>=1.0",
     "toml>=0.10",
 ]
+
+[project.urls]
+Homepage = "https://github.com/XiaofengdiZhu/agent-windows"
+Repository = "https://github.com/XiaofengdiZhu/agent-windows"
+Issues = "https://github.com/XiaofengdiZhu/agent-windows/issues"
+Changelog = "https://github.com/XiaofengdiZhu/agent-windows/releases"
 
 [project.optional-dependencies]
 dxcam = ["dxcam>=0.3"]

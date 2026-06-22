@@ -25,4 +25,4 @@ if defined WINSDK_VER (
     echo [build] WARNING: no Windows Kits SDK found under "C:\Program Files (x86)\Windows Kits\10\Lib"
 )
 
-"C:\Users\52308\.cargo\bin\cargo.exe" %*
+cargo %*
