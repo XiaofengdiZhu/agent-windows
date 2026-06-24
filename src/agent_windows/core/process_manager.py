@@ -173,7 +173,14 @@ def kill_process(pid_or_name: str | int, force: bool = False) -> dict[str, Any]:
             raise ValueError("Refusing to kill the current process")
     else:
         name_str = str(pid_or_name)
-        if name_str.lower() in _CRITICAL_NAMES:
+        # Normalize before the critical-name check: taskkill is given the
+        # ``.exe``-appended image name, so a caller passing ``"lsass.exe"``
+        # would otherwise slip past the bare-name guard. Strip a trailing
+        # ``.exe`` and lowercase for the membership test. (SEC3-04)
+        check_name = name_str.lower()
+        if check_name.endswith(".exe"):
+            check_name = check_name[:-4]
+        if check_name in _CRITICAL_NAMES:
             raise ValueError(
                 f"Refusing to kill system-critical process '{name_str}'"
             )

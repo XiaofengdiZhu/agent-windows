@@ -98,7 +98,7 @@ def register(mcp) -> None:
 
     @mcp.tool(name="dblclick", description=(
         "Double-click at [x, y] or at a UI element (@eN). "
-        "Keywords: double click, double-click, open, launch, two clicks."
+        "Keywords: double click, double-click, two clicks, open file, expand."
     ), annotations=ToolAnnotations(title="Double Click", readOnlyHint=False,
                                    destructiveHint=True, openWorldHint=False))
     def _dblclick(loc: list[int] | None = None, selector: str | None = None,

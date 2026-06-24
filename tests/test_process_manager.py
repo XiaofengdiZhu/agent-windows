@@ -340,6 +340,17 @@ class TestCriticalProcessProtection:
                 pm.kill_process(name)
             mock_run.assert_not_called()
 
+    @pytest.mark.parametrize("name", ["lsass.exe", "csrss.EXE", "System.exe"])
+    def test_refuses_critical_name_with_exe_suffix(self, name):
+        """Passing the .exe form of a critical name must still be refused — the
+        guard strips a trailing .exe before the membership test, else the image-
+        name path would bypass SEC3-04. Regression lock for the .exe-normalization
+        fix."""
+        with patch("agent_windows.core.process_manager.subprocess.run") as mock_run:
+            with pytest.raises(ValueError, match="system-critical"):
+                pm.kill_process(name)
+            mock_run.assert_not_called()
+
     @patch("agent_windows.core.process_manager.os.getpid", return_value=777)
     def test_refuses_self_pid(self, _mock):
         with pytest.raises(ValueError, match="current process"):
