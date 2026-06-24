@@ -92,12 +92,18 @@ def clipboard_set_fn(text: str, keyboard: bool | str = False) -> str:
 
 # ── process ────────────────────────────────────────────────────────────
 
-def process_list_fn() -> str:
-    return str(_call("process_list").get("output", ""))
+def process_list_fn(
+    sort_by: str = "memory",
+    limit: int = 0,
+    name: str | None = None,
+) -> str:
+    return str(_call("process_list", sort_by=sort_by, limit=limit,
+                     name=name).get("output", ""))
 
 
-def process_kill_fn(pid_or_name: int | str) -> str:
-    return str(_call("process_kill", pid_or_name=pid_or_name).get("output", ""))
+def process_kill_fn(pid_or_name: int | str, force: bool | str = False) -> str:
+    return str(_call("process_kill", pid_or_name=pid_or_name,
+                     force=_as_bool(force) or None).get("output", ""))
 
 
 # ── notify ─────────────────────────────────────────────────────────────
@@ -213,15 +219,23 @@ def register(mcp) -> None:
     def _clipboard_set(text: str, keyboard: bool | str = False) -> str:
         return clipboard_set_fn(text=text, keyboard=keyboard)
 
-    @mcp.tool(name="process_list", description="List running processes.",
-              annotations=_REG(title="Process List", readOnlyHint=True, idempotentHint=True, openWorldHint=False))
-    def _process_list() -> str:
-        return process_list_fn()
+    @mcp.tool(name="process_list", description=(
+        "List running processes with PID, name, memory, and CPU time. "
+        "Keywords: task manager, running tasks, processes, memory usage, CPU usage. "
+        "sort_by=memory|cpu|name; limit caps the row count (0=all); name filters "
+        "by case-insensitive substring."
+    ), annotations=_REG(title="Process List", readOnlyHint=True, idempotentHint=True, openWorldHint=False))
+    def _process_list(sort_by: str = "memory", limit: int = 0,
+                      name: str | None = None) -> str:
+        return process_list_fn(sort_by=sort_by, limit=limit, name=name)
 
-    @mcp.tool(name="process_kill", description="Kill a process by PID (int) or name (str).",
-              annotations=_REG(title="Process Kill", readOnlyHint=False, destructiveHint=True, openWorldHint=False))
-    def _process_kill(pid_or_name: int | str) -> str:
-        return process_kill_fn(pid_or_name=pid_or_name)
+    @mcp.tool(name="process_kill", description=(
+        "Kill a process by PID (int) or name (str). "
+        "Keywords: kill, terminate, end process, stop process, force kill, close app. "
+        "Default is graceful (lets the app save); force=True 强杀 immediately."
+    ), annotations=_REG(title="Process Kill", readOnlyHint=False, destructiveHint=True, openWorldHint=False))
+    def _process_kill(pid_or_name: int | str, force: bool | str = False) -> str:
+        return process_kill_fn(pid_or_name=pid_or_name, force=force)
 
     @mcp.tool(name="notify", description=(
         "Show a Windows toast notification. app_id defaults to PowerShell's AUMID."

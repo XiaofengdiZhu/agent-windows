@@ -245,7 +245,27 @@ def test_clipboard_set_fn_forwards_text():
 def test_process_kill_fn_accepts_int_pid():
     with patch.object(sysmod, "_call", return_value={"output": "killed"}) as m:
         sysmod.process_kill_fn(pid_or_name=1234)
-    m.assert_called_once_with("process_kill", pid_or_name=1234)
+    # *_fn forwards pid_or_name + force(_as_bool(False) or None → None) to _call
+    m.assert_called_once_with("process_kill", pid_or_name=1234, force=None)
+
+
+def test_process_kill_fn_coerces_force_string_true():
+    """force='true' (string, as some MCP clients send) → force=True forwarded."""
+    with patch.object(sysmod, "_call", return_value={"output": "force-killed"}) as m:
+        sysmod.process_kill_fn(pid_or_name="notepad", force="true")
+    m.assert_called_once_with("process_kill", pid_or_name="notepad", force=True)
+
+
+def test_process_list_fn_defaults_forwarded():
+    with patch.object(sysmod, "_call", return_value={"output": "list"}) as m:
+        sysmod.process_list_fn()
+    m.assert_called_once_with("process_list", sort_by="memory", limit=0, name=None)
+
+
+def test_process_list_fn_forwards_filter_params():
+    with patch.object(sysmod, "_call", return_value={"output": "list"}) as m:
+        sysmod.process_list_fn(sort_by="cpu", limit=10, name="edge")
+    m.assert_called_once_with("process_list", sort_by="cpu", limit=10, name="edge")
 
 
 import agent_windows.mcp.tools.batch as bat

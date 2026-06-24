@@ -276,18 +276,44 @@ proc_cmd = typer.Typer(help="Process management")
 
 
 @proc_cmd.command("list")
-def process_list(ctx: typer.Context) -> None:
-    """List running processes."""
-    _cmd(ctx, "process_list")
+def process_list(
+    ctx: typer.Context,
+    sort_by: str = typer.Option(
+        "memory", "--sort-by",
+        help="Sort key: memory|cpu|name (default memory, descending)",
+    ),
+    limit: int = typer.Option(
+        0, "--limit", help="Cap rows to top-N (0 = all)",
+    ),
+    name: str = typer.Option(
+        "", "--name", help="Filter to processes whose name contains this (case-insensitive)",
+    ),
+) -> None:
+    """List running processes (PID/name/memory/CPU)."""
+    params: dict = {}
+    if sort_by != "memory":
+        params["sort_by"] = sort_by
+    if limit:
+        params["limit"] = limit
+    if name:
+        params["name"] = name
+    _cmd(ctx, "process_list", **params)
 
 
 @proc_cmd.command("kill")
 def process_kill(
     ctx: typer.Context,
     pid_or_name: str = typer.Argument(help="PID or process name"),
+    force: bool = typer.Option(
+        False, "--force",
+        help="强杀 immediately (default: graceful, lets the app save)",
+    ),
 ) -> None:
-    """Kill a process."""
-    _cmd(ctx, "process_kill", pid_or_name=pid_or_name)
+    """Kill a process. Use --force for an immediate 强杀."""
+    params: dict = {"pid_or_name": pid_or_name}
+    if force:
+        params["force"] = True
+    _cmd(ctx, "process_kill", **params)
 
 
 # ── notify (top-level command) ──────────────────────────────────────

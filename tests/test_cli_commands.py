@@ -311,6 +311,28 @@ class TestSystemCommands:
         assert params == {"pid_or_name": "notepad"}
 
     @patch("agent_windows.cli.commands.system._cmd")
+    def test_process_kill_force(self, mock_cmd):
+        runner.invoke(app, ["process", "kill", "notepad", "--force"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params == {"pid_or_name": "notepad", "force": True}
+
+    @patch("agent_windows.cli.commands.system._cmd")
+    def test_process_list_defaults_empty(self, mock_cmd):
+        """Bare `process list` sends no params (bare-call compatibility)."""
+        runner.invoke(app, ["process", "list"])
+        method, params = _cmd_calls(mock_cmd)[0]
+        assert method == "process_list"
+        assert params == {}
+
+    @patch("agent_windows.cli.commands.system._cmd")
+    def test_process_list_filters(self, mock_cmd):
+        runner.invoke(app, ["process", "list", "--sort-by", "cpu",
+                            "--limit", "10", "--name", "edge"])
+        method, params = _cmd_calls(mock_cmd)[0]
+        assert method == "process_list"
+        assert params == {"sort_by": "cpu", "limit": 10, "name": "edge"}
+
+    @patch("agent_windows.cli.commands.system._cmd")
     def test_notify_forwards_title_message(self, mock_cmd):
         runner.invoke(app, ["notify", "Hello", "World"])
         method, params = _cmd_calls(mock_cmd)[0]

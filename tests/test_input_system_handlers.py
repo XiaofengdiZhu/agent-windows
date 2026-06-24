@@ -502,20 +502,30 @@ class TestClipboardHandlers:
 
 
 class TestProcessHandlers:
-    def test_process_list(self):
+    def test_process_list_defaults(self):
         with patch("agent_windows.core.process_manager.list_processes", return_value={"output": "c"}) as m:
             HANDLERS["process_list"]({})
-        m.assert_called_once_with()
+        m.assert_called_once_with(sort_by="memory", limit=0, name=None)
+
+    def test_process_list_forwards_params(self):
+        with patch("agent_windows.core.process_manager.list_processes", return_value={"output": "c"}) as m:
+            HANDLERS["process_list"]({"sort_by": "cpu", "limit": 5, "name": "edge"})
+        m.assert_called_once_with(sort_by="cpu", limit=5, name="edge")
 
     def test_process_kill_accepts_str(self):
         with patch("agent_windows.core.process_manager.kill_process", return_value={"output": "c"}) as m:
             HANDLERS["process_kill"]({"pid_or_name": "notepad"})
-        m.assert_called_once_with("notepad")
+        m.assert_called_once_with("notepad", force=False)
 
     def test_process_kill_accepts_int(self):
         with patch("agent_windows.core.process_manager.kill_process", return_value={"output": "c"}) as m:
             HANDLERS["process_kill"]({"pid_or_name": 1234})
-        m.assert_called_once_with(1234)
+        m.assert_called_once_with(1234, force=False)
+
+    def test_process_kill_forwards_force(self):
+        with patch("agent_windows.core.process_manager.kill_process", return_value={"output": "c"}) as m:
+            HANDLERS["process_kill"]({"pid_or_name": "notepad", "force": True})
+        m.assert_called_once_with("notepad", force=True)
 
     def test_process_kill_rejects_list(self):
         with pytest.raises(ValueError, match="must be str or int"):

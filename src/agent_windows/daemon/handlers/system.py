@@ -186,16 +186,27 @@ def _clipboard_set(params: dict) -> dict[str, Any]:
 
 @handler("process_list")
 def _process_list(params: dict) -> dict[str, Any]:
-    """List running processes."""
+    """List running processes.
+
+    Optional ``sort_by`` (memory/cpu/name), ``limit`` (top-N, 0=all), and
+    ``name`` (case-insensitive substring filter) refine the output.
+    """
     from agent_windows.core.process_manager import list_processes
-    return list_processes()
+    return list_processes(
+        sort_by=params.get("sort_by", "memory"),
+        limit=params.get("limit", 0),
+        name=params.get("name"),
+    )
 
 
 @handler("process_kill")
 def _process_kill(params: dict) -> dict[str, Any]:
-    """Kill a process."""
+    """Kill a process. ``force=True`` 强杀 (immediate); default is graceful."""
     from agent_windows.core.process_manager import kill_process
-    return kill_process(require(params, "pid_or_name", (str, int)))
+    return kill_process(
+        require(params, "pid_or_name", (str, int)),
+        force=params.get("force", False),
+    )
 
 
 # ── Notifications ────────────────────────────────────────────────────
