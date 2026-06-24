@@ -179,6 +179,15 @@ def serve(
         in ("1", "true", "yes")
         or bool(cfg.get("allow_insecure_remote", False)))
 
+    # OAuth client id/secret must be set together (one without the other is a
+    # misconfiguration, not a partial setup). Checked BEFORE the bare-bind guard
+    # so a half-configured credential yields the specific "provide both" error
+    # rather than the more generic bind-refusal message.
+    if bool(oauth_client_id) != bool(oauth_client_secret):
+        raise typer.BadParameter(
+            "OAuth requires both --oauth-client-id and --oauth-client-secret "
+            "(provide both or neither).", param_hint="--oauth-client-id")
+
     # Footgun guard: refuse a bare non-loopback HTTP bind. Binding 0.0.0.0 (or
     # any LAN/private address) with no auth_key exposes the full MCP toolset —
     # screenshots, shell, registry, file I/O — to anyone who can reach the port.
@@ -207,13 +216,6 @@ def serve(
             f"WARNING: binding HTTP transport to {host!r} with NO authentication. "
             "Anyone who can reach this port has full desktop control. NOT recommended.",
             err=True)
-
-    # OAuth client id/secret must be set together (one without the other is a
-    # misconfiguration, not a partial setup).
-    if bool(oauth_client_id) != bool(oauth_client_secret):
-        raise typer.BadParameter(
-            "OAuth requires both --oauth-client-id and --oauth-client-secret "
-            "(provide both or neither).", param_hint="--oauth-client-id")
 
     # Tool filtering (applies to all transports). Precedence: flag > env > config.
     # --tools is an explicit whitelist and overrides --exclude-tools when both set.

@@ -299,3 +299,60 @@ def test_token_rejects_expired_code():
     assert r.status_code == 400 and r.json()["error"] == "invalid_grant"
     # expired code is cleaned up on the failed check
     assert code not in store.codes
+
+
+# ── extra negative branches (code-review coverage gap closure) ──────────
+
+
+def test_token_rejects_client_id_mismatch():
+    """client_id at token that differs from the code's client → invalid_grant."""
+    from starlette.testclient import TestClient
+    app, store = _oauth_app()
+    code = _full_flow(TestClient(app), store)
+    r = TestClient(app).post("/oauth/token", data={
+        "grant_type": "authorization_code", "code": code,
+        "code_verifier": "v", "client_id": "OTHER-client",
+        "redirect_uri": "http://localhost:8765/cb",
+        "client_secret": "test-secret"})
+    assert r.status_code == 400 and r.json()["error"] == "invalid_grant"
+
+
+def test_token_rejects_redirect_uri_mismatch():
+    """redirect_uri at token that differs from the authorize one → invalid_grant."""
+    from starlette.testclient import TestClient
+    app, store = _oauth_app()
+    code = _full_flow(TestClient(app), store)
+    r = TestClient(app).post("/oauth/token", data={
+        "grant_type": "authorization_code", "code": code,
+        "code_verifier": "v", "client_id": "test-client",
+        "redirect_uri": "http://127.0.0.1:9999/cb",
+        "client_secret": "test-secret"})
+    assert r.status_code == 400 and r.json()["error"] == "invalid_grant"
+
+
+def test_authorize_server_error_when_client_not_configured():
+    """authorize with no configured client_id/secret → server_error 500."""
+    from starlette.testclient import TestClient
+    app, _ = _oauth_app(client_id=None, client_secret=None)
+    r = _authorize(TestClient(app))
+    assert r.status_code == 500 and r.json()["error"] == "server_error"
+
+
+def test_token_rejects_unparseable_content_type():
+    """A non-form/non-json content-type whose body can't be parsed → 400."""
+    from starlette.testclient import TestClient
+    app, _ = _oauth_app()
+    r = TestClient(app).post("/oauth/token",
+                             content="raw bytes",
+                             headers={"content-type": "text/plain"})
+    # grant_type missing either way, but the body-parse fallback must not 500.
+    assert r.status_code == 400
+
+
+def test_validate_oauth_token_active_returns_true():
+    """Explicit coverage: an active token validates True (not just not-False)."""
+    from agent_windows.mcp.oauth import OAuthStore, AccessToken, validate_oauth_token
+    s = OAuthStore()
+    s.tokens["t"] = AccessToken("t", "cid", expires_at=time.time() + 3600)
+    assert validate_oauth_token(s, "t") is True
+

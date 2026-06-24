@@ -199,12 +199,15 @@ class IPAllowlistMiddleware:
     """ASGI middleware: restrict inbound HTTP to a set of IP networks (CIDR).
 
     Applied to HTTP transports when an IP allowlist is configured. Every
-    non-``/health`` request is checked: the client address (from the ASGI
-    ``scope['client']`` tuple) must fall within one of the configured networks,
-    otherwise a 403 is returned. ``/health`` is exempt so health checks work
-    regardless of source. Implemented as raw ASGI (like AuthKeyMiddleware) so it
-    composes without adding a Starlette ``BaseHTTPMiddleware`` dependency.
-    Mirrors Windows-MCP's IPAllowlistMiddleware.
+    request whose path is not in ``_PUBLIC_PATHS`` is checked: the client
+    address (from the ASGI ``scope['client']`` tuple) must fall within one of
+    the configured networks, otherwise a 403 is returned. Public paths
+    (``/health`` + the OAuth endpoints) are exempt — health checks must work
+    regardless of source, and the OAuth endpoints must be reachable for a
+    remote client so OAuth + IP-allowlist can coexist. Implemented as raw ASGI
+    (like AuthKeyMiddleware) so it composes without adding a Starlette
+    ``BaseHTTPMiddleware`` dependency. Mirrors Windows-MCP's
+    IPAllowlistMiddleware.
     """
 
     def __init__(self, app: Any, *, allowlist: list[ipaddress._BaseNetwork]) -> None:

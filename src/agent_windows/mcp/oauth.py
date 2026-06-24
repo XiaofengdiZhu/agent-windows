@@ -232,6 +232,12 @@ def build_oauth_routes(
                 {"error": "invalid_grant", "error_description": "unknown code"}, status_code=400
             )
 
+        # Note on one-time-use: there is NO `await` between the get() above and
+        # the del() below. Under CPython's GIL a coroutine runs to completion
+        # across that span without yielding, so two concurrent token exchanges
+        # for the same code cannot both pass the checks before one deletes it.
+        # If you add an await in this block, the single-use guarantee breaks —
+        # guard the get+del as a critical section at that point.
         if auth_code.client_id != client_id:
             return JSONResponse(
                 {"error": "invalid_grant", "error_description": "client_id mismatch"}, status_code=400
