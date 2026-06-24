@@ -64,6 +64,8 @@ anthropic = ["anthropic>=0.40"]
 gemini = ["google-generativeai>=0.7"]
 # numpy speeds up the `diff` screenshot command (falls back to a slow path if absent)
 diff = ["numpy>=1.26"]
+# MCP server: exposes every command as MCP tools via FastMCP (see docs/MCP-support.md)
+mcp = ["fastmcp>=3.0"]
 dev = ["pytest>=8.0"]
 
 [project.scripts]
