@@ -61,6 +61,10 @@ class TestEnsureDaemonRunning:
             lambda debug=False: SimpleNamespace(poll=lambda: 42),
         )
         monkeypatch.setattr(client.time, "sleep", lambda _: None)
+        # Isolate from the host: a real daemon's PID file would make
+        # _daemon_process_alive() return True and short-circuit before the
+        # fail-fast path under test.
+        monkeypatch.setattr(client, "_daemon_process_alive", lambda: False)
         # DaemonSpawnLock is also acquired inside ensure_daemon_running (around
         # the spawn). Use a no-op stub so the test doesn't touch the real lock
         # file — we're testing the fail-fast path, not the lock.
@@ -110,6 +114,8 @@ class TestEnsureDaemonRunning:
             lambda debug=False: SimpleNamespace(poll=lambda: None),
         )
         monkeypatch.setattr(client.time, "sleep", lambda _: None)
+        # Isolate from the host (see test_fail_fast_when_daemon_exits...).
+        monkeypatch.setattr(client, "_daemon_process_alive", lambda: False)
         from contextlib import nullcontext
         monkeypatch.setattr(
             "agent_windows.ipc.lock.DaemonSpawnLock", lambda *a, **k: nullcontext()

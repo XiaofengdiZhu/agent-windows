@@ -637,20 +637,24 @@ class TestConfigCommand:
 class TestDaemonCommand:
     # daemon_cmd lazy-imports subprocess / call_daemon / pipe_exists inside the
     # command functions, so patch at their source modules.
+    @patch("agent_windows.ipc.pipe.pipe_exists", return_value=False)
     @patch("subprocess.Popen")
     @patch("agent_windows.cli.commands.daemon_cmd.is_process_alive", return_value=True)
     @patch("agent_windows.cli.commands.daemon_cmd.read_pid_file", return_value=(1234, 0.0))
-    def test_start_already_running(self, mock_pid, mock_alive, mock_popen):
+    def test_start_already_running(self, mock_pid, mock_alive, mock_popen, mock_pipe):
+        # pipe_exists stubbed False so the PID-file branch (which prints the
+        # mocked PID 1234) is reached regardless of a real daemon on the host.
         result = runner.invoke(app, ["daemon", "start"])
         assert result.exit_code == 0
         assert "already running" in result.output
         assert "1234" in result.output
         mock_popen.assert_not_called()
 
+    @patch("agent_windows.ipc.pipe.pipe_exists", return_value=False)
     @patch("subprocess.Popen")
     @patch("agent_windows.cli.commands.daemon_cmd.is_process_alive", return_value=False)
     @patch("agent_windows.cli.commands.daemon_cmd.read_pid_file", return_value=None)
-    def test_start_spawns_when_not_running(self, mock_pid, mock_alive, mock_popen):
+    def test_start_spawns_when_not_running(self, mock_pid, mock_alive, mock_popen, mock_pipe):
         mock_popen.return_value = MagicMock(pid=5678)
         result = runner.invoke(app, ["daemon", "start"])
         assert result.exit_code == 0
