@@ -172,11 +172,15 @@ def test_mcp_auth_prints_stdio_client_snippet():
     from typer.testing import CliRunner
     from agent_windows.cli.commands import mcp_cmd
     from agent_windows.utils import config as cfgmod
+    import copy
 
     runner = CliRunner()
+    # Pass a deep copy: auth() mutates the config it's handed (sets
+    # mcp.host/port/transport/auth_key), so handing it the live DEFAULT_CONFIG
+    # would corrupt it for any later test that reads the defaults.
     with patch("agent_windows.utils.config.save_config"), \
          patch("agent_windows.utils.config.load_config",
-               return_value=cfgmod.DEFAULT_CONFIG):
+               return_value=copy.deepcopy(cfgmod.DEFAULT_CONFIG)):
         result = runner.invoke(mcp_cmd.app, ["auth", "--transport", "stdio"])
     # the printed client config must contain an mcpServers block
     assert "mcpServers" in result.output
