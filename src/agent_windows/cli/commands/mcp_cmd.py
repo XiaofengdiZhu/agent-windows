@@ -50,7 +50,8 @@ def serve(
     debug: bool = typer.Option(False, "--debug", help="Verbose logging"),
     allow_insecure_remote: bool = typer.Option(
         False, "--allow-insecure-remote",
-        help="Allow an unauthenticated HTTP bind to a non-loopback host (NOT recommended)"),
+        help="Allow an unauthenticated HTTP bind to a non-loopback host (NOT recommended). "
+             "Env: AGENT_WINDOWS_ALLOW_INSECURE_REMOTE"),
     ip_allowlist: str = typer.Option(
         None, "--ip-allowlist",
         help="Comma-separated client IPs/CIDRs to allow on HTTP (e.g. '10.0.0.0/8,192.168.1.5'). "
@@ -126,9 +127,12 @@ def serve(
             parsed_cors = cfg_cors or None
 
     # A bool flag needs a config fallback like host/port: the command-line flag
-    # wins; otherwise [mcp] allow_insecure_remote (default false).
-    allow_insecure_remote = allow_insecure_remote or bool(
-        cfg.get("allow_insecure_remote", False))
+    # wins; otherwise AGENT_WINDOWS_ALLOW_INSECURE_REMOTE env > [mcp]
+    # allow_insecure_remote config (default false).
+    allow_insecure_remote = allow_insecure_remote or (
+        os.environ.get("AGENT_WINDOWS_ALLOW_INSECURE_REMOTE", "").lower()
+        in ("1", "true", "yes")
+        or bool(cfg.get("allow_insecure_remote", False)))
 
     # Footgun guard: refuse a bare non-loopback HTTP bind. Binding 0.0.0.0 (or
     # any LAN/private address) with no auth_key exposes the full MCP toolset —

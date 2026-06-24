@@ -346,6 +346,23 @@ def test_mcp_serve_allow_insecure_remote_config_fallback():
     assert "warning" in result.output.lower()
 
 
+def test_mcp_serve_allow_insecure_remote_env_fallback(monkeypatch):
+    """AGENT_WINDOWS_ALLOW_INSECURE_REMOTE=true satisfies the guard (no flag/config)."""
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+
+    monkeypatch.setenv("AGENT_WINDOWS_ALLOW_INSECURE_REMOTE", "true")
+    runner = CliRunner()
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config", return_value={}):
+        result = runner.invoke(mcp_cmd.app,
+                               ["serve", "--transport", "streamable-http",
+                                "--host", "0.0.0.0", "--port", "9000"])
+    assert result.exit_code == 0, result.output
+    mock_run.assert_called_once()
+    assert "warning" in result.output.lower()
+
+
 # ── parse_ip_allowlist + IPAllowlistMiddleware ─────────────────────────
 
 def test_parse_ip_allowlist_accepts_ips_cidrs_ipv4_ipv6():
@@ -906,6 +923,19 @@ def test_mcp_serve_stateless_http_from_env(monkeypatch):
                                 "--host", "127.0.0.1", "--port", "9000"])
     assert result.exit_code == 0, result.output
     assert mock_run.call_args.kwargs["stateless_http"] is True
+
+
+def test_run_stdio_with_stateless_http_does_not_forward_to_mcp_run():
+    """stateless_http must never reach the stdio mcp.run (FastMCP's stdio run
+    rejects it). Belt-and-suspenders: run() always computes it, but the stdio
+    branch's mcp.run call must omit the kwarg entirely."""
+    from agent_windows.mcp import server
+    fake = MagicMock()
+    with patch.object(server, "build_server", return_value=fake):
+        server.run(transport="stdio", stateless_http=True)
+    kwargs = fake.run.call_args.kwargs
+    assert kwargs["transport"] == "stdio"
+    assert "stateless_http" not in kwargs
 
 
 # ── `mcp auth` ──────────────────────────────────────────────────────────
