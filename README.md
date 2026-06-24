@@ -157,6 +157,7 @@ Python daemon (persistent, COM STA worker)
 | `daemon start/stop/status` | Daemon management |
 | `ping` | Daemon health check (single IPC round-trip) |
 | `config init/show/set/doctor` | Configuration (delegated to the Python CLI) |
+| `mcp serve/auth/install/uninstall` | MCP server (delegated to the Python CLI) |
 
 ### Global Options
 | Flag | Description |
@@ -164,6 +165,61 @@ Python daemon (persistent, COM STA worker)
 | `--no-daemon` | Direct execution (bypass daemon, for debugging) |
 | `--format text\|json` | Output format |
 | `--debug` | Verbose logging |
+
+## MCP Server
+
+agent-windows ships a complete [MCP](https://modelcontextprotocol.io/) server (built with [FastMCP](https://github.com/jlowin/fastmcp)), exposing every command above as MCP tools. Any MCP-capable client — Claude Desktop, Cursor, etc. — can drive Windows through it.
+
+> Requires the `mcp` extra: `uv tool install agent-windows` installs it by default; from source run `uv sync --extra mcp`.
+
+### Quick start (local, stdio)
+
+```bash
+agent-windows mcp serve          # stdio — for Claude Desktop / Cursor
+```
+
+The server auto-starts the daemon on the first tool call — no separate `daemon start` needed. Use `--debug` for verbose logging.
+
+**Claude Desktop** (`claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "agent-windows": { "command": "agent-windows", "args": ["mcp", "serve"] }
+  }
+}
+```
+
+### Remote access (HTTP) with authentication
+
+stdio is local-only. For remote/LAN clients use an HTTP transport **behind an auth key** — a bare, unauthenticated bind to a non-loopback address is insecure. `mcp auth` generates a bearer token (DPAPI-encrypted at rest in `[mcp] auth_key`), optionally a TLS cert, and prints the ready-to-paste client config:
+
+```bash
+# 1. Generate an auth key + TLS cert, save to ~/.agent-windows/config.toml
+agent-windows mcp auth --transport streamable-http --host 0.0.0.0 --port 8000 --with-tls
+
+# 2. (Optional) Auto-start the server at every login as a Scheduled Task
+agent-windows mcp install
+agent-windows mcp uninstall     # stop + remove the auto-start task
+```
+
+The printed client snippet already includes the `Authorization: Bearer <key>` header. The server rejects any HTTP request that doesn't carry it (401). Regenerate with `--force`.
+
+> **Security:** `auth_key` is **DPAPI-encrypted at rest** (same protection as `vlm.api_key`) and masked in `config show`. TLS keys are written to `~/.agent-windows/` under an owner-only ACL. For stdio none of this applies — there's no network surface.
+
+### Transports
+
+| Transport | Command | Use case |
+|---|---|---|
+| stdio (default) | `mcp serve` | Local clients (Claude Desktop, Cursor) |
+| streamable-http | `mcp serve --transport streamable-http` | Remote clients (modern MCP) |
+| sse | `mcp serve --transport sse` | Remote clients (legacy SSE) |
+
+### Tools
+
+The server exposes ~46 tools mapping 1:1 to the CLI commands: `screenshot`, `snapshot`, `observe`, `ground`, `detect`, `ask_vision`, `highlight`, `diff`, `get_text`, `element_state`, `cleanup_screenshots`, `click`, `dblclick`, `hover`, `move`, `mouse_down`, `mouse_up`, `drag`, `scroll`, `type`, `shortcut`, `app_launch`, `app_switch`, `app_resize`, `app_list`, `shell`, `fs_read/write/list/copy/move/delete/search/info`, `clipboard_get/set`, `process_list/kill`, `notify`, `registry`, `batch`, `multi_select`, `multi_edit`, `ping`, `wait`, `wait_for`. See the [Commands](#commands) table for what each does; the MCP tool names match the daemon method names.
+
+Same usage tips apply: call `snapshot` first for pixel-exact coordinates, prefer it over `ground`/`detect` for named controls, and always `app switch` before input.
 
 ## Configure a Vision Model (optional, recommended)
 
@@ -261,6 +317,7 @@ Some actions are buried in 2nd- or 3rd-level menus. Buttons may show only icons 
 - Windows 8.1 / 10 / 11
 - Python 3.13+
 - Dependencies: typer, comtypes, pywin32 (≥306; ≥308 recommended), Pillow, mss, openai, toml
+- Optional: fastmcp (≥3.0, for the MCP server — `uv tool install agent-windows` / `uv sync --extra mcp`), dxcam, anthropic, google-generativeai, numpy
 
 > **pywin32 note**: modern pywin32 wheels (≥308) self-configure their DLLs via a `.pth` bootstrap at install time, so `uv tool install` / `uvx` works out of the box. If you ever hit `pythoncom3xx.dll` / `pywintypes3xx.dll` not found on an older pywin32 or a manually-managed environment, run `python Scripts\pywin32_postinstall.py -install` from your install prefix.
 
