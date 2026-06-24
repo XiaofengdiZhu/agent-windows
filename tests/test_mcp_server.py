@@ -564,7 +564,7 @@ def _options_scope(origin=None):
     headers = {}
     if origin is not None:
         headers["origin"] = origin
-    return _http_scope(headers=headers).copy() | {"method": "OPTIONS"}
+    return _http_scope(headers=headers) | {"method": "OPTIONS"}
 
 
 def test_options_middleware_empty_allowlist_emits_no_cors_headers():
@@ -602,7 +602,7 @@ def test_options_middleware_non_matching_origin_emits_no_cors_headers():
 
 def test_options_middleware_passes_through_non_options():
     # A GET must reach the downstream app untouched.
-    scope = _http_scope().copy() | {"method": "GET"}
+    scope = _http_scope() | {"method": "GET"}
     called, sent = _run_options_middleware(scope, ["https://client.example.com"])
     assert called is True
     assert sent == []
@@ -617,9 +617,10 @@ def test_run_http_cors_configured_adds_both_middlewares():
         server.run(transport="streamable-http", host="127.0.0.1", port=9000,
                    cors_origins=["https://client.example.com"])
     kinds = [mw.cls for mw in fake.run.call_args.kwargs["middleware"]]
-    # OptionsMiddleware (always) + CORSMiddleware (origins configured)
-    assert OptionsMiddleware in kinds
-    assert CORSMiddleware in kinds
+    # OptionsMiddleware (outermost, always) then CORSMiddleware — ordering is
+    # load-bearing: preflight must be answered before any auth/CORS gate, and
+    # CORSMiddleware decorates the actual (non-preflight) responses.
+    assert kinds[:2] == [OptionsMiddleware, CORSMiddleware]
 
 
 def test_mcp_serve_forwards_cors_origins_flag():

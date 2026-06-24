@@ -302,6 +302,9 @@ def run(
             allow_origins=cors_origins,
             allow_methods=["GET", "POST", "OPTIONS"],
             allow_headers=["Content-Type", "Authorization", "Mcp-Session-Id"],
+            # MCP clients authenticate via the Authorization header, not cookies;
+            # credentialed cross-origin requests aren't needed (and enabling them
+            # would widen the surface), so credentials stay off.
             allow_credentials=False,
         ))
     if ip_allowlist:
@@ -312,5 +315,7 @@ def run(
     if ssl_certfile and ssl_keyfile:
         uvicorn_config["ssl_certfile"] = ssl_certfile
         uvicorn_config["ssl_keyfile"] = ssl_keyfile
+    # The middleware list is always non-empty for HTTP (OptionsMiddleware is
+    # always added); stdio ignores the middleware kwarg entirely.
     mcp.run(transport=transport, host=host, port=port, show_banner=False,
             middleware=middleware, uvicorn_config=uvicorn_config or None)
