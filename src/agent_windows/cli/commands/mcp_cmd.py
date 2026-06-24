@@ -9,6 +9,7 @@ call — no separate `daemon start` needed. Defaults come from the `[mcp]` confi
 section (set via `mcp auth`); explicit flags override them. auth_key and TLS
 only apply to HTTP transports (sse / streamable-http), never stdio.
 """
+import os
 import secrets
 import subprocess
 import sys
@@ -16,10 +17,25 @@ from pathlib import Path
 
 import typer
 
-from agent_windows.mcp.server import is_loopback_host
+from agent_windows.mcp.server import is_loopback_host, parse_ip_allowlist
 from agent_windows.utils.config import load_config
 
 app = typer.Typer(help="MCP server", no_args_is_help=True)
+
+
+def _parse_allowlist(entries):
+    """Parse raw IP/CIDR string entries into networks, or None when empty.
+
+    Returns None (no middleware) for an empty list; raises typer.BadParameter
+    for invalid entries so the user gets a clear CLI error instead of a buried
+    ValueError.
+    """
+    if not entries:
+        return None
+    try:
+        return parse_ip_allowlist(entries)
+    except ValueError as exc:
+        raise typer.BadParameter(f"Invalid IP allowlist: {exc}", param_hint="--ip-allowlist")
 
 
 @app.command()
@@ -35,13 +51,19 @@ def serve(
     allow_insecure_remote: bool = typer.Option(
         False, "--allow-insecure-remote",
         help="Allow an unauthenticated HTTP bind to a non-loopback host (NOT recommended)"),
+    ip_allowlist: str = typer.Option(
+        None, "--ip-allowlist",
+        help="Comma-separated client IPs/CIDRs to allow on HTTP (e.g. '10.0.0.0/8,192.168.1.5'). "
+             "Env: AGENT_WINDOWS_IP_ALLOWLIST"),
 ) -> None:
     """Run the agent-windows MCP server.
 
     Defaults come from the [mcp] config section; explicit flags override.
     auth_key/TLS are read from config and applied only to HTTP transports.
     """
-    cfg = (load_config().get("mcp") or {})
+    full_cfg = load_config()
+    cfg = full_cfg.get("mcp") or {}
+    security_cfg = full_cfg.get("security") or {}
     transport = transport or cfg.get("transport", "stdio")
     host = host or cfg.get("host", "127.0.0.1")
     port = port if port is not None else int(cfg.get("port", 8000))
@@ -56,10 +78,21 @@ def serve(
         auth_key = None
         ssl_certfile = None
         ssl_keyfile = None
+        parsed_allowlist = None
     else:
         auth_key = cfg.get("auth_key") or None
         ssl_certfile = cfg.get("ssl_certfile") or None
         ssl_keyfile = cfg.get("ssl_keyfile") or None
+        # IP allowlist precedence: --ip-allowlist flag > AGENT_WINDOWS_IP_ALLOWLIST
+        # env > [security] ip_allowlist config. Comma-separated; stdio ignores it.
+        raw_allowlist = ip_allowlist
+        if raw_allowlist is None:
+            raw_allowlist = os.environ.get("AGENT_WINDOWS_IP_ALLOWLIST")
+        entries = ([e.strip() for e in raw_allowlist.split(",") if e.strip()]
+                   if raw_allowlist else None)
+        if not entries:
+            entries = [e for e in (security_cfg.get("ip_allowlist") or []) if e]
+        parsed_allowlist = _parse_allowlist(entries)
 
     # A bool flag needs a config fallback like host/port: the command-line flag
     # wins; otherwise [mcp] allow_insecure_remote (default false).
@@ -91,7 +124,8 @@ def serve(
 
     from agent_windows.mcp import run
     run(transport=transport, host=host, port=port, debug=debug,
-        auth_key=auth_key, ssl_certfile=ssl_certfile, ssl_keyfile=ssl_keyfile)
+        auth_key=auth_key, ssl_certfile=ssl_certfile, ssl_keyfile=ssl_keyfile,
+        ip_allowlist=parsed_allowlist)
 
 
 # ── `mcp auth` ──────────────────────────────────────────────────────────

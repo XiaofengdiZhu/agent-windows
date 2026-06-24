@@ -169,6 +169,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
         # non-loopback bind with no auth_key is insecure. (TODO #1)
         "allow_insecure_remote": False,
     },
+    "security": {
+        # HTTP-transport access controls (sse / streamable-http). Both default
+        # empty = no restriction beyond the auth_key / loopback guard. Set via
+        # `config set security.ip_allowlist ...` (a TOML array of strings) or the
+        # `--ip-allowlist` / `--cors-origins` flags. (TODO #2/#3)
+        "ip_allowlist": [],
+        "cors_origins": [],
+    },
 }
 
 # ── Load / Save ───────────────────────────────────────────────────

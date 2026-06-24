@@ -100,6 +100,88 @@ class AuthKeyMiddleware:
         await send({"type": "http.response.body", "body": b"Unauthorized"})
 
 
+def parse_ip_allowlist(raw_entries: list[str]) -> list[ipaddress._BaseNetwork]:
+    """Parse a list of IP addresses and CIDR ranges into network objects.
+
+    Accepts individual IPs (e.g. '192.168.1.5') and CIDR ranges
+    (e.g. '10.0.0.0/8', '2001:db8::/32'), IPv4 and IPv6. A bare IP becomes a
+    /32 (v4) or /128 (v6) network. Raises ``ValueError`` (naming every bad
+    entry) if any entry is invalid. Ported from the reference implementation
+    (Windows-MCP ``infrastructure/security.py``).
+    """
+    parsed: list[ipaddress._BaseNetwork] = []
+    errors: list[str] = []
+
+    for entry in raw_entries:
+        value = entry.strip()
+        if not value:
+            continue
+        try:
+            if "/" in value:
+                parsed.append(ipaddress.ip_network(value, strict=False))
+            else:
+                ip = ipaddress.ip_address(value)
+                suffix = "/32" if ip.version == 4 else "/128"
+                parsed.append(ipaddress.ip_network(f"{ip}{suffix}", strict=False))
+        except ValueError as exc:
+            errors.append(f"{entry!r}: {exc}")
+
+    if errors:
+        raise ValueError("Invalid IP allowlist entries: " + "; ".join(errors))
+
+    return parsed
+
+
+class IPAllowlistMiddleware:
+    """ASGI middleware: restrict inbound HTTP to a set of IP networks (CIDR).
+
+    Applied to HTTP transports when an IP allowlist is configured. Every
+    non-``/health`` request is checked: the client address (from the ASGI
+    ``scope['client']`` tuple) must fall within one of the configured networks,
+    otherwise a 403 is returned. ``/health`` is exempt so health checks work
+    regardless of source. Implemented as raw ASGI (like AuthKeyMiddleware) so it
+    composes without adding a Starlette ``BaseHTTPMiddleware`` dependency.
+    Mirrors Windows-MCP's IPAllowlistMiddleware.
+    """
+
+    def __init__(self, app: Any, *, allowlist: list[ipaddress._BaseNetwork]) -> None:
+        self.app = app
+        self.allowlist = allowlist
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope["type"] not in ("http", "lifespan"):
+            await self.app(scope, receive, send)
+            return
+        if scope["type"] == "lifespan":
+            await self.app(scope, receive, send)
+            return
+        # /health is a liveness probe — always reachable so monitors work.
+        path = scope.get("path", "")
+        if path == "/health":
+            await self.app(scope, receive, send)
+            return
+        client = scope.get("client")
+        if client is None:
+            await self._forbid(send, "missing client address")
+            return
+        try:
+            client_ip = ipaddress.ip_address(client[0])
+        except (ValueError, TypeError):
+            await self._forbid(send, f"invalid client address {client[0]!r}")
+            return
+        if not any(client_ip in net for net in self.allowlist):
+            await self._forbid(send, f"{client_ip} is not in the IP allowlist")
+            return
+        await self.app(scope, receive, send)
+
+    async def _forbid(self, send: Any, reason: str) -> None:
+        body = f"Forbidden: {reason}".encode("latin-1")
+        await send({"type": "http.response.start", "status": 403,
+                    "headers": [[b"content-length", str(len(body)).encode()],
+                                [b"content-type", b"text/plain; charset=utf-8"]]})
+        await send({"type": "http.response.body", "body": body})
+
+
 def build_server() -> FastMCP:
     """Create (once) and return the FastMCP instance with all tools registered."""
     global _mcp
@@ -124,6 +206,7 @@ def run(
     auth_key: str | None = None,
     ssl_certfile: str | None = None,
     ssl_keyfile: str | None = None,
+    ip_allowlist: list | None = None,
 ) -> None:
     """Run the MCP server on the given transport.
 
@@ -131,7 +214,9 @@ def run(
     (the standard local-client transport; auth_key/ssl are ignored). For
     sse/streamable-http it binds an HTTP server on host:port; when auth_key is
     set, a bearer-token middleware gates every request (see AuthKeyMiddleware).
-    ssl_certfile/ssl_keyfile enable HTTPS.
+    ssl_certfile/ssl_keyfile enable HTTPS. ip_allowlist (a list of
+    ``ipaddress._BaseNetwork``) further restricts HTTP clients to those
+    networks (see IPAllowlistMiddleware); ignored for stdio.
     """
     if transport not in VALID_TRANSPORTS:
         raise ValueError(
@@ -158,6 +243,8 @@ def run(
     # HTTP transport: assemble middleware + TLS config.
     from starlette.middleware import Middleware
     middleware: list = []
+    if ip_allowlist:
+        middleware.append(Middleware(IPAllowlistMiddleware, allowlist=ip_allowlist))
     if auth_key:
         middleware.append(Middleware(AuthKeyMiddleware, auth_key=auth_key))
     uvicorn_config: dict = {}
