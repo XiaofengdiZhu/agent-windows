@@ -276,3 +276,44 @@ def test_multi_edit_fn_forwards_locs():
     # *_fn forwards locs + selectors(None default) verbatim (_call strips None;
     # it's mocked here). Assert method + locs; selectors passed through as None.
     m.assert_called_once_with("multi_edit", locs=[[1, 2, "hi"]], selectors=None)
+
+
+import agent_windows.mcp.tools.control as ctl
+
+
+def test_ping_fn_returns_output():
+    # the real ping handler returns {"status","message"} with NO output key —
+    # ping_fn falls back to "pong" via .get("output", "pong"). Mirror reality.
+    with patch.object(ctl, "_call", return_value={"status": "ok", "message": "pong"}):
+        assert ctl.ping_fn() == "pong"
+
+
+def test_wait_fn_sleep_mode_calls_sleep():
+    with patch.object(ctl, "_call", return_value={"output": "ok"}) as m, \
+         patch("time.sleep") as _s:
+        ctl.wait_fn(seconds=2)
+    # sleep mode: no wait_check calls
+    m.assert_not_called()
+
+
+def test_wait_fn_text_mode_polls_until_found():
+    # first check: found=False; second: found=True
+    with patch.object(ctl, "_call", side_effect=[{"found": False}, {"found": True}]) as m, \
+         patch("time.sleep"):
+        out = ctl.wait_fn(seconds=None, selector=None, text="Done", timeout=5, interval=0.01)
+    assert m.call_count == 2
+    # wait_fn forwards selector=None + text verbatim to the mocked _call.
+    m.assert_called_with("wait_check", selector=None, text="Done")
+
+
+def test_wait_fn_requires_some_arg():
+    with pytest.raises(ValueError):
+        ctl.wait_fn(seconds=0, selector=None, text="")
+
+
+def test_wait_for_fn_polls_condition():
+    with patch.object(ctl, "_call", side_effect=[{"found": False}, {"found": True}]) as m, \
+         patch("time.sleep"):
+        ctl.wait_for_fn(condition="text_exists", text="Done", window_name="",
+                        timeout=5, interval=0.01)
+    m.assert_called_with("wait_for_check", condition="text_exists", text="Done", window_name="")
