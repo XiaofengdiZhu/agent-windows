@@ -153,6 +153,18 @@ DEFAULT_CONFIG: dict[str, Any] = {
         # every attempt is also recorded in logs/shell_audit.log regardless.
         "blacklist": [],
     },
+    "mcp": {
+        # MCP server (agent-windows mcp serve/auth/install). auth_key is the
+        # bearer token HTTP clients must present; DPAPI-encrypted at rest like
+        # vlm.api_key. transport/host/port are the `serve` defaults (overridable
+        # by flags). ssl_certfile/ssl_keyfile enable HTTPS for remote access.
+        "transport": "stdio",
+        "host": "127.0.0.1",
+        "port": 8000,
+        "auth_key": "",
+        "ssl_certfile": "",
+        "ssl_keyfile": "",
+    },
 }
 
 # ── Load / Save ───────────────────────────────────────────────────
@@ -191,6 +203,13 @@ def load_config() -> dict[str, Any]:
             if isinstance(raw_key, str) and raw_key.startswith("dpapi:"):
                 g["api_key"] = _decrypt_secret(raw_key)
 
+        # Same DPAPI treatment for mcp.auth_key (the HTTP bearer token).
+        m = merged.get("mcp")
+        if isinstance(m, dict):
+            raw_mkey = m.get("auth_key", "")
+            if isinstance(raw_mkey, str) and raw_mkey.startswith("dpapi:"):
+                m["auth_key"] = _decrypt_secret(raw_mkey)
+
         # Environment variable overrides API key
         env_key = os.environ.get("AGENT_WINDOWS_VLM_API_KEY", "")
         if env_key:
@@ -228,6 +247,15 @@ def save_config(config: dict[str, Any]) -> None:
         if isinstance(key, str) and key and not key.startswith("dpapi:"):
             vlm["api_key"] = _encrypt_secret(key)
         to_write["vlm"] = vlm
+
+    # Same for mcp.auth_key.
+    mcp = to_write.get("mcp")
+    if isinstance(mcp, dict):
+        mcp = dict(mcp)
+        mkey = mcp.get("auth_key", "")
+        if isinstance(mkey, str) and mkey and not mkey.startswith("dpapi:"):
+            mcp["auth_key"] = _encrypt_secret(mkey)
+        to_write["mcp"] = mcp
 
     config_path.write_text(toml.dumps(to_write), encoding="utf-8")
     _secure_config_file(config_path)

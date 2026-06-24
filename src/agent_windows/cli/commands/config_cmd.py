@@ -35,6 +35,13 @@ def config_show() -> None:
             display_config["vlm"]["api_key"] = key[:4] + "..." + key[-4:]
         elif key:
             display_config["vlm"]["api_key"] = "***"
+    # Mask MCP auth key (same secret-class as the VLM api key)
+    if "mcp" in display_config and "auth_key" in display_config["mcp"]:
+        mkey = display_config["mcp"]["auth_key"]
+        if mkey and len(mkey) > 8:
+            display_config["mcp"]["auth_key"] = mkey[:4] + "..." + mkey[-4:]
+        elif mkey:
+            display_config["mcp"]["auth_key"] = "***"
     path = get_config_path()
     typer.echo(f"# Config file: {path}")
     typer.echo(toml.dumps(display_config))
