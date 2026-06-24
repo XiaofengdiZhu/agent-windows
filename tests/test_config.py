@@ -412,6 +412,51 @@ class TestParseValueTyped:
         assert _default_leaf_type("vlm") is None  # section, not a leaf
 
 
+class TestLoadConfigValidation:
+    """load_config rejects type-mismatched configs (TODO #10)."""
+
+    def test_bad_type_raises(self, tmp_path, monkeypatch):
+        import agent_windows.utils.config as cfg
+
+        cfg_path = tmp_path / "config.toml"
+        monkeypatch.setattr(cfg, "get_config_path", lambda: cfg_path)
+        monkeypatch.delenv("AGENT_WINDOWS_VLM_API_KEY", raising=False)
+        cfg._config_cache = None
+
+        cfg_path.write_text('[mcp]\nport = true\n', encoding="utf-8")
+        with pytest.raises(ValueError, match=r"mcp\.port"):
+            cfg.load_config()
+
+    def test_good_config_loads(self, tmp_path, monkeypatch):
+        import agent_windows.utils.config as cfg
+
+        cfg_path = tmp_path / "config.toml"
+        monkeypatch.setattr(cfg, "get_config_path", lambda: cfg_path)
+        monkeypatch.delenv("AGENT_WINDOWS_VLM_API_KEY", raising=False)
+        cfg._config_cache = None
+
+        cfg_path.write_text('[mcp]\nport = 9000\n', encoding="utf-8")
+        loaded = cfg.load_config()
+        assert loaded["mcp"]["port"] == 9000
+
+    def test_recover_after_fix(self, tmp_path, monkeypatch):
+        """A config that fails validation loads fine once corrected (mtime
+        cache does not get stuck on the bad state)."""
+        import agent_windows.utils.config as cfg
+
+        cfg_path = tmp_path / "config.toml"
+        monkeypatch.setattr(cfg, "get_config_path", lambda: cfg_path)
+        monkeypatch.delenv("AGENT_WINDOWS_VLM_API_KEY", raising=False)
+        cfg._config_cache = None
+
+        cfg_path.write_text('[mcp]\nport = true\n', encoding="utf-8")
+        with pytest.raises(ValueError):
+            cfg.load_config()
+        # Correct and rewrite with a new mtime.
+        cfg_path.write_text('[mcp]\nport = 9000\n', encoding="utf-8")
+        assert cfg.load_config()["mcp"]["port"] == 9000
+
+
 class TestCheckLeaf:
     """_check_leaf enforces the per-type rules (bool/int disambiguation etc.)."""
 

@@ -251,6 +251,12 @@ def load_config() -> dict[str, Any]:
         if env_key:
             merged.setdefault("vlm", {})["api_key"] = env_key
 
+        # Strict type validation (TODO #10): reject type-mismatched values
+        # (e.g. port = true, telemetry.enabled = "yes") before they reach the
+        # cache/consumers. Runs only when the file mtime changes (cache guard
+        # above), so there is no per-request cost.
+        _validate_config(merged)
+
         # Update cache
         _config_cache = merged
         if config_path.exists():
