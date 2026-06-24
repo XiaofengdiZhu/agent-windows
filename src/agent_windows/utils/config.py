@@ -177,17 +177,18 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "security": {
         # HTTP-transport access controls (sse / streamable-http). Both default
         # empty = no restriction beyond the auth_key / loopback guard. ip_allowlist
-        # is set via `config set security.ip_allowlist` (a TOML array of strings)
-        # or the `--ip-allowlist` flag (TODO #2). cors_origins is reserved for a
-        # later task (TODO #3).
+        # is set via the --ip-allowlist flag or a TOML array in config; cors_origins
+        # likewise (TODO #2/#3). NOTE: `config set` only writes scalars, so to set
+        # these as arrays edit config.toml directly or use the flags/env vars.
         "ip_allowlist": [],
         "cors_origins": [],
     },
     "tools": {
         # Startup tool filtering (applies to all transports). `include` is the
         # explicit whitelist enabled via --tools (overrides exclude); `exclude`
-        # removes tools via --exclude-tools. Both default empty = all tools.
-        # (TODO #4)
+        # removes tools via --exclude-tools. Both default empty = all tools. As
+        # with [security], set as TOML arrays (edit config.toml or use flags/env)
+        # since `config set` only writes scalars. (TODO #4)
         "include": [],
         "exclude": [],
     },

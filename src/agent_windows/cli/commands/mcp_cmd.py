@@ -38,6 +38,23 @@ def _parse_allowlist(entries):
         raise typer.BadParameter(f"Invalid IP allowlist: {exc}", param_hint="--ip-allowlist")
 
 
+def _as_list(value):
+    """Normalize a config list value to a list, tolerating a scalar string.
+
+    ``config set`` routes through ``_parse_value`` which only handles scalars,
+    so a TOML-array config key written via the setter lands as a bare string
+    (e.g. ``security.ip_allowlist = "10.0.0.0/8"``) rather than a list. Iterating
+    that would yield characters and corrupt parsing. Wrap any scalar in a
+    one-element list; pass lists/None through. Mirrors the defensive handling in
+    ``core.shell_runner._check_blacklist``.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    return list(value)
+
+
 @app.command()
 def serve(
     transport: str = typer.Option(
@@ -113,7 +130,7 @@ def serve(
         entries = ([e.strip() for e in raw_allowlist.split(",") if e.strip()]
                    if raw_allowlist else None)
         if not entries:
-            entries = [e for e in (security_cfg.get("ip_allowlist") or []) if e]
+            entries = [e for e in _as_list(security_cfg.get("ip_allowlist")) if e]
         parsed_allowlist = _parse_allowlist(entries)
         # CORS origins precedence: --cors-origins flag > AGENT_WINDOWS_CORS_ORIGINS
         # env > [security] cors_origins config. Empty = no CORS headers emitted.
@@ -123,7 +140,7 @@ def serve(
         parsed_cors = ([o.strip() for o in raw_cors.split(",") if o.strip()]
                        if raw_cors else None)
         if not parsed_cors:
-            cfg_cors = [o for o in (security_cfg.get("cors_origins") or []) if o]
+            cfg_cors = [o for o in _as_list(security_cfg.get("cors_origins")) if o]
             parsed_cors = cfg_cors or None
 
     # A bool flag needs a config fallback like host/port: the command-line flag
@@ -151,7 +168,11 @@ def serve(
             "  or pass --allow-insecure-remote to allow unauthenticated access (NOT recommended).",
             param_hint="--host")
 
-    if allow_insecure_remote and transport != "stdio":
+    # Only warn on a genuinely non-loopback bind: a loopback address is, by
+    # definition, only reachable from the local machine, so the "anyone who can
+    # reach this port" warning would be misleading there.
+    if (allow_insecure_remote and transport != "stdio"
+            and not is_loopback_host(host)):
         typer.echo(
             f"WARNING: binding HTTP transport to {host!r} with NO authentication. "
             "Anyone who can reach this port has full desktop control. NOT recommended.",
@@ -166,13 +187,13 @@ def serve(
     if parsed_tools is None:
         parsed_tools = _split_csv(os.environ.get("AGENT_WINDOWS_TOOLS"))
     if not parsed_tools:
-        parsed_tools = [t for t in (tools_cfg.get("include") or []) if t] or None
+        parsed_tools = [t for t in _as_list(tools_cfg.get("include")) if t] or None
 
     parsed_exclude = _split_csv(exclude_tools)
     if parsed_exclude is None:
         parsed_exclude = _split_csv(os.environ.get("AGENT_WINDOWS_EXCLUDE_TOOLS"))
     if not parsed_exclude:
-        parsed_exclude = [t for t in (tools_cfg.get("exclude") or []) if t] or None
+        parsed_exclude = [t for t in _as_list(tools_cfg.get("exclude")) if t] or None
 
     # stateless_http precedence: flag > env (AGENT_WINDOWS_STATELESS_HTTP) >
     # [mcp] stateless_http config. A bool flag wins; config/env default false.

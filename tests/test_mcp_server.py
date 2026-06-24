@@ -363,6 +363,24 @@ def test_mcp_serve_allow_insecure_remote_env_fallback(monkeypatch):
     assert "warning" in result.output.lower()
 
 
+def test_mcp_serve_allow_insecure_remote_no_warning_on_loopback():
+    """The insecure-bind warning is misleading for a loopback address (only the
+    local machine can reach it), so it must not fire there even with the flag."""
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+
+    runner = CliRunner()
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config", return_value={}):
+        result = runner.invoke(mcp_cmd.app,
+                               ["serve", "--transport", "streamable-http",
+                                "--host", "127.0.0.1", "--port", "9000",
+                                "--allow-insecure-remote"])
+    assert result.exit_code == 0, result.output
+    mock_run.assert_called_once()
+    assert "warning" not in result.output.lower()
+
+
 # ── parse_ip_allowlist + IPAllowlistMiddleware ─────────────────────────
 
 def test_parse_ip_allowlist_accepts_ips_cidrs_ipv4_ipv6():
@@ -568,6 +586,34 @@ def test_mcp_serve_empty_ip_allowlist_flag_falls_through_to_config(monkeypatch):
     assert result.exit_code == 0, result.output
     assert mock_run.call_args.kwargs["ip_allowlist"] == [
         ipaddress.ip_network("10.0.0.0/8")]
+
+
+def test_mcp_serve_config_scalar_list_value_is_normalized():
+    """`config set` writes scalars, so a list key may land as a bare string.
+    The serve reads must wrap a scalar into a one-element list rather than
+    iterating its characters (which would corrupt parsing). Regression test for
+    the config-set round-trip across all four list keys.
+    """
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+    import ipaddress
+
+    runner = CliRunner()
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config", return_value={
+             "security": {"ip_allowlist": "10.0.0.0/8",      # scalar, not a list
+                          "cors_origins": "https://c.example.com"},
+             "tools": {"include": "screenshot", "exclude": "shell"}}):
+        result = runner.invoke(mcp_cmd.app,
+                               ["serve", "--transport", "streamable-http",
+                                "--host", "127.0.0.1", "--port", "9000"])
+    assert result.exit_code == 0, result.output
+    kwargs = mock_run.call_args.kwargs
+    # scalar "10.0.0.0/8" parsed as one network, not 10 char-fragments
+    assert kwargs["ip_allowlist"] == [ipaddress.ip_network("10.0.0.0/8")]
+    assert kwargs["cors_origins"] == ["https://c.example.com"]
+    assert kwargs["tools"] == ["screenshot"]
+    assert kwargs["exclude_tools"] == ["shell"]
 
 
 # ── OptionsMiddleware + CORS wiring ────────────────────────────────────
