@@ -17,6 +17,7 @@ middleware so an unauthenticated bind to a non-loopback address is rejected.
 """
 import asyncio
 import logging
+import secrets
 from typing import Any
 
 from fastmcp import FastMCP
@@ -63,7 +64,13 @@ class AuthKeyMiddleware:
         headers = {k.decode("latin-1").lower(): v.decode("latin-1")
                    for k, v in scope.get("headers", [])}
         auth = headers.get("authorization", "")
-        if auth == f"Bearer {self._expected}":
+        # Compare in constant time: a plain ``==`` short-circuits and leaks the
+        # shared-prefix length via response timing. Strip the ``Bearer `` prefix
+        # and compare only the token with secrets.compare_digest, matching the
+        # reference implementation (Windows-MCP). A wrong scheme or prefix fails
+        # the same way a wrong token does — 401.
+        token = auth[7:] if auth[:7].lower() == "bearer " else ""
+        if token and secrets.compare_digest(token, self._expected):
             await self.app(scope, receive, send)
             return
         await send({"type": "http.response.start", "status": 401,

@@ -4,6 +4,96 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 
+# ── AuthKeyMiddleware ───────────────────────────────────────────────────
+# The middleware is the sole network security control for HTTP transports,
+# so it gets its own direct unit tests (not just "the middleware list is
+# non-empty" coverage from the run() tests). Drives the ASGI __call__ with a
+# fake downstream app + a send-capture, exercising the pass-through / 401
+# branches and the scheme/prefix handling.
+
+def _run_middleware(scope, auth_key):
+    """Drive AuthKeyMiddleware with one scope; return (downstream_called, sent)."""
+    import asyncio
+    from agent_windows.mcp.server import AuthKeyMiddleware
+
+    downstream = {"called": False}
+
+    async def app(scope, receive, send):
+        downstream["called"] = True
+
+    sent = []
+
+    async def send(msg):
+        sent.append(msg)
+
+    mw = AuthKeyMiddleware(app, auth_key)
+    asyncio.run(mw(scope, receive=lambda: None, send=send))
+    return downstream["called"], sent
+
+
+def _http_scope(headers=None):
+    """Build a minimal ASGI http scope with the given headers."""
+    raw = []
+    for k, v in (headers or {}).items():
+        raw.append([k.encode("latin-1"), v.encode("latin-1")])
+    return {"type": "http", "headers": raw}
+
+
+def test_auth_middleware_passes_valid_bearer_token():
+    called, sent = _run_middleware(
+        _http_scope({"authorization": "Bearer s3cret"}), "s3cret")
+    assert called is True          # downstream app invoked
+    assert sent == []              # no 401 response emitted
+
+
+def test_auth_middleware_rejects_missing_header():
+    called, sent = _run_middleware(_http_scope(), "s3cret")
+    assert called is False
+    assert sent[0]["status"] == 401
+    assert sent[0]["type"] == "http.response.start"
+    # www-authenticate challenge present
+    assert [b"www-authenticate", b"Bearer"] in sent[0]["headers"]
+    assert sent[1]["body"] == b"Unauthorized"
+
+
+def test_auth_middleware_rejects_wrong_token():
+    called, sent = _run_middleware(
+        _http_scope({"authorization": "Bearer wrong"}), "s3cret")
+    assert called is False
+    assert sent[0]["status"] == 401
+
+
+def test_auth_middleware_rejects_non_bearer_scheme():
+    # "Basic ..." or a bare token without the Bearer prefix must not pass.
+    called, _ = _run_middleware(
+        _http_scope({"authorization": "s3cret"}), "s3cret")
+    assert called is False
+    called2, _ = _run_middleware(
+        _http_scope({"authorization": "Basic s3cret"}), "s3cret")
+    assert called2 is False
+
+
+def test_auth_middleware_is_case_insensitive_on_header_name():
+    # ASGI servers lowercase header names, but the middleware must not depend on
+    # case from the wire — "Authorization" and "AUTHORIZATION" are the same.
+    called, _ = _run_middleware(
+        _http_scope({"Authorization": "Bearer s3cret"}), "s3cret")
+    assert called is True
+
+
+def test_auth_middleware_passes_lifespan_unauthenticated():
+    # Lifespan startup carries no request headers — must always pass through.
+    called, sent = _run_middleware({"type": "lifespan", "headers": []}, "s3cret")
+    assert called is True
+    assert sent == []
+
+
+def test_auth_middleware_passes_non_http_scope():
+    # ws / other scopes are not the middleware's concern — pass through.
+    called, _ = _run_middleware({"type": "websocket", "headers": []}, "s3cret")
+    assert called is True
+
+
 def test_build_server_returns_fastmcp_with_tools_registered():
     from agent_windows.mcp.server import build_server, reset_server
     import fastmcp
