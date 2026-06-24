@@ -317,3 +317,41 @@ def test_wait_for_fn_polls_condition():
         ctl.wait_for_fn(condition="text_exists", text="Done", window_name="",
                         timeout=5, interval=0.01)
     m.assert_called_with("wait_for_check", condition="text_exists", text="Done", window_name="")
+
+
+def test_register_all_registers_every_domain_on_a_fake_mcp():
+    """register_all calls register() on every tool module with the given mcp."""
+    from agent_windows.mcp.tools import register_all, observation, vision, input, \
+        system, batch, control
+
+    seen = []
+    class FakeMCP:
+        def tool(self, **kw):
+            def deco(fn):
+                seen.append(kw.get("name"))
+                return fn
+            return deco
+
+    register_all(FakeMCP())
+    # every expected tool name registered
+    expected = {
+        # observation
+        "screenshot", "snapshot", "observe", "get_text", "element_state",
+        "highlight", "diff", "cleanup_screenshots",
+        # vision
+        "ground", "detect", "ask_vision",
+        # input
+        "click", "dblclick", "hover", "move", "mouse_down", "mouse_up",
+        "drag", "scroll", "type", "shortcut",
+        # system
+        "app_launch", "app_switch", "app_resize", "app_list", "shell",
+        "fs_read", "fs_write", "fs_list", "fs_copy", "fs_move", "fs_delete",
+        "fs_search", "fs_info", "clipboard_get", "clipboard_set",
+        "process_list", "process_kill", "notify", "registry",
+        # batch/multi
+        "batch", "multi_select", "multi_edit",
+        # control
+        "ping", "wait", "wait_for",
+    }
+    missing = expected - set(seen)
+    assert not missing, f"missing tools: {missing}"
