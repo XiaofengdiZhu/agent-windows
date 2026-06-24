@@ -32,6 +32,16 @@ class TestDeepMerge:
         _deep_merge(base, {"a": 2})
         assert base["a"] == 1
 
+    def test_nested_base_not_aliased(self):
+        """_deep_merge must not alias base's nested dicts into the result —
+        DEFAULT_CONFIG is the validation schema and must never be mutated by a
+        caller that writes into the merged config (e.g. set_config_value)."""
+        base = {"shell": {"blacklist": []}}
+        result = _deep_merge(base, {})
+        assert result["shell"] is not base["shell"]
+        result["shell"]["blacklist"] = "contaminated"
+        assert base["shell"]["blacklist"] == []
+
 
 class TestParseValue:
     def test_bool_true(self):
@@ -341,3 +351,98 @@ class TestSetConfigAllowlist:
 
         cfg.set_config_value("shell.blacklist", "rm -rf")
         assert cfg.load_config()["shell"]["blacklist"] == "rm -rf"
+
+
+class TestCheckLeaf:
+    """_check_leaf enforces the per-type rules (bool/int disambiguation etc.)."""
+
+    def _leaf(self, default_val, actual_val):
+        from agent_windows.utils.config import _check_leaf
+        errors: list[str] = []
+        _check_leaf("k", default_val, actual_val, errors)
+        return errors
+
+    def test_bool_accepts_bool(self):
+        assert self._leaf(True, True) == []
+        assert self._leaf(False, False) == []
+
+    def test_bool_rejects_int(self):
+        assert len(self._leaf(False, 1)) == 1 and self._leaf(False, 1)[0].startswith("k")
+
+    def test_bool_rejects_str(self):
+        assert len(self._leaf(True, "yes")) == 1
+
+    def test_int_accepts_int(self):
+        assert self._leaf(8000, 8000) == []
+
+    def test_int_rejects_bool(self):
+        # TOML bool is an int subclass — must be rejected explicitly.
+        assert len(self._leaf(8000, True)) == 1
+
+    def test_int_rejects_str(self):
+        assert len(self._leaf(8000, "8000")) == 1
+
+    def test_float_accepts_int(self):
+        assert self._leaf(0.5, 1) == []  # int is acceptable for a float default
+
+    def test_float_rejects_bool(self):
+        assert len(self._leaf(0.5, True)) == 1
+
+    def test_float_rejects_str(self):
+        assert len(self._leaf(0.5, "high")) == 1
+
+    def test_str_accepts_str(self):
+        assert self._leaf("x", "y") == []
+
+    def test_str_rejects_int(self):
+        assert len(self._leaf("x", 1)) == 1
+
+    def test_list_accepts_list(self):
+        assert self._leaf([], ["a"]) == []
+
+    def test_list_rejects_str(self):
+        assert len(self._leaf([], "a")) == 1
+
+    def test_dict_accepts_dict(self):
+        assert self._leaf({"a": 1}, {"b": 2}) == []
+
+
+class TestValidateConfig:
+    """_validate_config walks DEFAULT_CONFIG and collects all type errors."""
+
+    def test_valid_default_config_passes(self):
+        from agent_windows.utils.config import _validate_config
+        import copy
+        _validate_config(copy.deepcopy(DEFAULT_CONFIG))  # must not raise
+
+    def test_empty_user_config_passes(self):
+        from agent_windows.utils.config import _validate_config
+        _validate_config({})  # all leaves missing -> skipped
+
+    def test_bool_when_int_expected_rejected(self):
+        from agent_windows.utils.config import _validate_config
+        with pytest.raises(ValueError, match=r"mcp\.port"):
+            _validate_config({"mcp": {"port": True}})
+
+    def test_str_when_list_expected_rejected(self):
+        from agent_windows.utils.config import _validate_config
+        with pytest.raises(ValueError, match=r"shell\.blacklist"):
+            _validate_config({"shell": {"blacklist": "rm -rf"}})
+
+    def test_str_when_bool_expected_rejected(self):
+        from agent_windows.utils.config import _validate_config
+        with pytest.raises(ValueError, match=r"telemetry\.enabled"):
+            _validate_config({"telemetry": {"enabled": "yes"}})
+
+    def test_unknown_key_passthrough(self):
+        from agent_windows.utils.config import _validate_config
+        # vlm.prompts and [evil] are not in DEFAULT_CONFIG -> not validated.
+        _validate_config({"vlm": {"prompts": {"x": 1}}, "evil": {"payload": 42}})
+
+    def test_collects_multiple_errors(self):
+        from agent_windows.utils.config import _validate_config
+        with pytest.raises(ValueError) as exc_info:
+            _validate_config({"mcp": {"port": True}, "telemetry": {"enabled": "yes"}})
+        msg = str(exc_info.value)
+        assert "mcp.port" in msg
+        assert "telemetry.enabled" in msg

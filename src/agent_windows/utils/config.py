@@ -411,6 +411,84 @@ def get_screenshot_save_dir() -> Path:
 
 # ── Helpers ───────────────────────────────────────────────────────
 
+# ── Strict type validation ────────────────────────────────────────
+
+_MISSING = object()
+
+
+def _check_leaf(path: str, default_val: Any, actual_val: Any, errors: list[str]) -> None:
+    """Append a descriptive error to *errors* if *actual_val* is the wrong type
+    for a leaf whose default is *default_val*.
+
+    Rules (TODO #10):
+      - bool default: accept only ``bool`` (reject int/str)
+      - int default: accept ``int`` but NOT ``bool`` (TOML bool is an int subclass)
+      - float default: accept ``int`` or ``float`` (but NOT bool)
+      - str default: accept only ``str``
+      - list default: accept only ``list`` (container-level; element types not checked)
+      - dict default: accept only ``dict``
+      - any other default type: accept (no strict rule)
+    """
+    expected = type(default_val)
+    if expected is bool:
+        ok = isinstance(actual_val, bool)
+    elif expected is int:
+        ok = isinstance(actual_val, int) and not isinstance(actual_val, bool)
+    elif expected is float:
+        ok = isinstance(actual_val, (int, float)) and not isinstance(actual_val, bool)
+    elif expected is str:
+        ok = isinstance(actual_val, str)
+    elif expected is list:
+        ok = isinstance(actual_val, list)
+    elif expected is dict:
+        ok = isinstance(actual_val, dict)
+    else:
+        ok = True
+    if not ok:
+        errors.append(
+            f"{path}: expected {expected.__name__}, "
+            f"got {type(actual_val).__name__} ({actual_val!r})"
+        )
+
+
+def _collect_type_errors(
+    prefix: str, default_node: Any, actual_node: Any, errors: list[str]
+) -> None:
+    """Recursively compare *actual_node* against the *default_node* schema,
+    appending one error per mistyped known leaf. Unknown keys are ignored."""
+    if not isinstance(default_node, dict):
+        return  # leaves are checked at the parent level
+    if not isinstance(actual_node, dict):
+        errors.append(
+            f"{prefix or '<root>'}: expected a table, "
+            f"got {type(actual_node).__name__}"
+        )
+        return
+    for key, default_val in default_node.items():
+        path = f"{prefix}.{key}" if prefix else key
+        actual_val = actual_node.get(key, _MISSING)
+        if actual_val is _MISSING:
+            continue
+        if isinstance(default_val, dict):
+            _collect_type_errors(path, default_val, actual_val, errors)
+        else:
+            _check_leaf(path, default_val, actual_val, errors)
+
+
+def _validate_config(merged: dict) -> None:
+    """Validate *merged* against :data:`DEFAULT_CONFIG` types (TODO #10).
+
+    Collects ALL type errors and raises a single ``ValueError`` listing them,
+    so a user fixing a hand-edited config sees every problem at once instead
+    of one-at-a-time. Unknown keys/sections pass through (backward compat).
+    """
+    errors: list[str] = []
+    _collect_type_errors("", DEFAULT_CONFIG, merged, errors)
+    if errors:
+        raise ValueError(
+            "Invalid config.toml — type errors:\n  " + "\n  ".join(errors)
+        )
+
 
 # ── Secret protection (DPAPI) ──────────────────────────────────────
 
@@ -539,8 +617,17 @@ def _secure_directory(path: Path) -> None:
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
-    """Merge override into base (shallow copy, recursive for nested dicts)."""
-    result = dict(base)
+    """Merge override into base (deep copy, recursive for nested dicts).
+
+    The base (DEFAULT_CONFIG) must never be mutated: it is the validation
+    schema and the merge source for every later load. A shallow top-level copy
+    would alias base's nested dicts, letting callers that mutate the merged
+    result (e.g. set_config_value writes back into the cached merge) corrupt
+    DEFAULT_CONFIG in place. So we deep-copy base on every merge. The override
+    is trusted user data, read-only here.
+    """
+    import copy
+    result = copy.deepcopy(base)
     for k, v in override.items():
         if k in result and isinstance(result[k], dict) and isinstance(v, dict):
             result[k] = _deep_merge(result[k], v)
