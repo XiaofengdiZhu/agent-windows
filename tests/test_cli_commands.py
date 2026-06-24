@@ -606,6 +606,30 @@ class TestConfigCommand:
         mock_set.assert_called_once_with("vlm.model", "gpt-4o")
         assert "vlm.model = gpt-4o" in result.output
 
+    def test_doctor_reports_config_errors(self, tmp_path, monkeypatch):
+        """config doctor reports type errors and exits 1 before the vlm probe
+        (a mistyped value would make load_config raise)."""
+        import agent_windows.utils.config as cfg
+        cfg_path = tmp_path / "config.toml"
+        monkeypatch.setattr(cfg, "get_config_path", lambda: cfg_path)
+        monkeypatch.delenv("AGENT_WINDOWS_VLM_API_KEY", raising=False)
+        cfg._config_cache = None
+        cfg_path.write_text('[mcp]\nport = true\n', encoding="utf-8")
+        result = runner.invoke(app, ["config", "doctor"])
+        assert result.exit_code == 1
+        assert "mcp.port" in result.output
+        assert "validation errors" in result.output.lower()
+
+    def test_doctor_runs_when_valid(self, tmp_path, monkeypatch):
+        """With a valid (or absent) config, doctor proceeds to the vlm probe."""
+        import agent_windows.utils.config as cfg
+        monkeypatch.setattr(cfg, "get_config_path", lambda: tmp_path / "nope.toml")
+        monkeypatch.delenv("AGENT_WINDOWS_VLM_API_KEY", raising=False)
+        cfg._config_cache = None
+        result = runner.invoke(app, ["config", "doctor"])
+        assert result.exit_code == 0
+        assert "Vision model configuration" in result.output
+
 
 # ── daemon command: start/stop/status branches ───────────────────────
 

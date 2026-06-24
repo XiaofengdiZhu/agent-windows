@@ -574,6 +574,37 @@ class TestSaveInitBehavior:
         assert cfg._config_cache is None
 
 
+class TestValidateConfigFile:
+    def test_valid_file_returns_empty(self, tmp_path, monkeypatch):
+        import agent_windows.utils.config as cfg
+
+        path = tmp_path / "config.toml"
+        monkeypatch.setattr(cfg, "get_config_path", lambda: path)
+        monkeypatch.delenv("AGENT_WINDOWS_VLM_API_KEY", raising=False)
+        cfg._config_cache = None
+        path.write_text('[vlm]\nmodel = "gpt-4o"\n', encoding="utf-8")
+        assert cfg.validate_config_file() == []
+
+    def test_bad_file_returns_errors(self, tmp_path, monkeypatch):
+        import agent_windows.utils.config as cfg
+
+        path = tmp_path / "config.toml"
+        monkeypatch.setattr(cfg, "get_config_path", lambda: path)
+        monkeypatch.delenv("AGENT_WINDOWS_VLM_API_KEY", raising=False)
+        cfg._config_cache = None
+        path.write_text('[mcp]\nport = true\n', encoding="utf-8")
+        errors = cfg.validate_config_file()
+        assert len(errors) == 1
+        assert "mcp.port" in errors[0]
+
+    def test_missing_file_returns_empty(self, tmp_path, monkeypatch):
+        import agent_windows.utils.config as cfg
+
+        monkeypatch.setattr(cfg, "get_config_path", lambda: tmp_path / "nope.toml")
+        cfg._config_cache = None
+        assert cfg.validate_config_file() == []
+
+
 class TestCheckLeaf:
     """_check_leaf enforces the per-type rules (bool/int disambiguation etc.)."""
 

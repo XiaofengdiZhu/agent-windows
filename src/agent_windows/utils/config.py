@@ -519,6 +519,25 @@ def get_config_value(key: str) -> Any:
     return d
 
 
+def validate_config_file() -> list[str]:
+    """Validate the on-disk config file, returning a list of error messages
+    (empty if valid). Does not raise — the CLI ``config doctor`` uses this to
+    report problems to the user. A missing file is treated as valid (defaults).
+
+    Unlike :func:`load_config` (which raises on a bad config), this reads the
+    file directly so it can report errors even when the cache holds a prior
+    valid state.
+    """
+    config_path = get_config_path()
+    if not config_path.exists():
+        return []
+    user_config = toml.loads(config_path.read_text(encoding="utf-8"))
+    merged = _deep_merge(DEFAULT_CONFIG, user_config)
+    errors: list[str] = []
+    _collect_type_errors("", DEFAULT_CONFIG, merged, errors)
+    return errors
+
+
 def get_api_key() -> str:
     """Get vision model API key from env var or config."""
     env_key = os.environ.get("AGENT_WINDOWS_VLM_API_KEY", "")

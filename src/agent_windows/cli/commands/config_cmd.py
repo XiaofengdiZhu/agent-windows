@@ -8,6 +8,7 @@ from agent_windows.utils.config import (
     set_config_value,
     get_config_path,
     get_api_key,
+    validate_config_file,
 )
 
 app = typer.Typer(help="Configuration management")
@@ -60,6 +61,17 @@ def config_set(
 @app.command("doctor")
 def config_doctor() -> None:
     """Check whether the vision/grounding model is configured (no network calls)."""
+    # Report config type errors first (TODO #10): a mistyped value can make
+    # load_config() raise, so check the file directly before the vlm probe.
+    errors = validate_config_file()
+    if errors:
+        typer.echo("Config validation errors:")
+        for err in errors:
+            typer.echo(f"  {err}")
+        typer.echo("")
+        typer.echo("Fix the above in config.toml, then re-run `config doctor`.")
+        raise typer.Exit(1)
+
     config = load_config()
     g = config.get("vlm", {})
     api_key = get_api_key()  # reads env var OR config (DPAPI-decrypted)
