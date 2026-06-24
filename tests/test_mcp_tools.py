@@ -7,6 +7,9 @@ from unittest.mock import patch
 
 import pytest
 
+# `agent_windows.mcp._call` is a submodule (not re-exported at the package top
+# level — see mcp/__init__.py), so this binds to the module and
+# `_call._call` / `_call._as_bool` / `_call.xy_or_selector` resolve correctly.
 from agent_windows.mcp import _call
 
 
