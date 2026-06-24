@@ -20,6 +20,10 @@ reference/
 # OS
 Thumbs.db
 .DS_Store
+# Windows reserved device name "nul": redirecting to `nul` in Git Bash
+# (e.g. `cmd > nul`) creates a real empty file instead of discarding output
+# the way cmd.exe does. Ignore it so it never pollutes the tree.
+nul
 
 # Temp
 docs/
