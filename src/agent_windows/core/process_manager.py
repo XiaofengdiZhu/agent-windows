@@ -17,10 +17,15 @@ logger = logging.getLogger(__name__)
 
 # System-critical PIDs / process names that must never be terminated via this
 # tool — killing them can force a system reboot or BSOD. (SEC3-04)
+# Lower-cased on purpose: kill_process compares ``name.lower() in
+# _CRITICAL_NAMES``, so every entry must be lowercase or the match silently
+# fails (this regressed for "System"/"Registry" before the set was normalized).
 _CRITICAL_PIDS = {0, 4}
 _CRITICAL_NAMES = {
-    "lsass", "csrss", "wininit", "services", "winlogon", "smss",
-    "System", "Registry", "winload", "clipup", "idle",
+    n.lower() for n in (
+        "lsass", "csrss", "wininit", "services", "winlogon", "smss",
+        "System", "Registry", "winload", "clipup", "idle",
+    )
 }
 
 # taskkill is always run as an argv list; this marks the safety review for the
@@ -28,6 +33,18 @@ _CRITICAL_NAMES = {
 _TRUSTED_TASKKILL = True
 
 _SORT_KEYS = ("memory", "cpu", "name")
+
+
+def _num(value: Any, default: float = 0.0) -> float:
+    """Coerce a PowerShell JSON field to float, defaulting on parse failure.
+
+    A missing/null MemMB/CpuSec (e.g. the ``System`` process where ``.CPU`` can
+    be null) must sort as 0, not crash the sort or render as literal ``None``.
+    """
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def list_processes(
@@ -88,15 +105,11 @@ def list_processes(
             pname = p.get("ProcessName", "")
             if pid is None or not pname:
                 continue  # skip malformed rows (QUAL3-01)
-            mem_disp = p.get("MemMB", "")
-            cpu_disp = p.get("CpuSec", "")
-
-            def _num(v, default=0.0):
-                try:
-                    return float(v)
-                except (TypeError, ValueError):
-                    return default
-
+            # `or ""` would clobber a legit 0 → render blank; only replace None.
+            mem_raw = p.get("MemMB")
+            cpu_raw = p.get("CpuSec")
+            mem_disp = "" if mem_raw is None else mem_raw
+            cpu_disp = "" if cpu_raw is None else cpu_raw
             cleaned.append({
                 "pid": pid, "name": pname,
                 "mem_disp": mem_disp, "cpu_disp": cpu_disp,
@@ -173,7 +186,7 @@ def kill_process(pid_or_name: str | int, force: bool = False) -> dict[str, Any]:
         argv = ["taskkill", "/PID", str(pid)]
         label = f"PID {pid}"
     else:
-        name_str = str(pid_or_name)
+        # name_str was set in the critical-name check above; reuse it.
         # taskkill /IM wants the image name with extension; our API takes bare
         # names (matching the old Stop-Process path). Append .exe if absent.
         image = name_str if name_str.lower().endswith(".exe") else f"{name_str}.exe"
@@ -194,13 +207,18 @@ def kill_process(pid_or_name: str | int, force: bool = False) -> dict[str, Any]:
     rc = result.returncode
     combined = f"{result.stdout}\n{result.stderr}".lower()
 
-    # taskkill exit codes: 0 success; 128 "not found"/"no running instance";
-    # 1 "access denied" / generic failure. Message text is the reliable signal.
-    if rc == 0 and "success" in combined:
+    # rc == 0 is the authoritative success signal for taskkill (ERROR_SUCCESS),
+    # independent of locale — taskkill emits localized text via MUI resources, so
+    # matching "success" would misreport a kill as failed on German/Japanese/…
+    # Windows. Treat rc 0 as success unconditionally.
+    if rc == 0:
         mode = "force-killed" if force else "terminated"
         return {"output": f"## Process Kill\n{label}\nStatus: {mode}"}
 
     # No such process (covers both "not found" and "no running instance of…").
+    # These English markers are best-effort sub-classification on the failure
+    # path; a non-English message simply degrades to the generic "failed" tail,
+    # which is safe (we never claim success we didn't get).
     not_found_markers = ("not found", "no running instance", "not a valid")
     if any(m in combined for m in not_found_markers):
         raise ValueError(f"No such process with {label}")

@@ -65,7 +65,11 @@ def screenshot_fn(
         result = _call("screenshot", output=output, monitor=monitor,
                        bbox=bbox, selector=selector)
         return _image_from_result(result, "path")
-    except Exception as e:
+    except (RuntimeError, OSError) as e:
+        # RuntimeError carries the daemon's JSON-RPC error code; OSError covers
+        # the Path.read_bytes failure in _image_from_result. Narrowed from a
+        # bare `except Exception` so a programming error (TypeError/AttributeError
+        # after a refactor) still surfaces instead of becoming a retry loop.
         logger.warning("screenshot tool failed", exc_info=True)
         return [f"Error capturing screenshot: {e}. Please try again."]
 
@@ -77,7 +81,7 @@ def snapshot_fn(display: list[int] | None = None) -> str:
     """
     try:
         return str(_call("snapshot", display=display).get("output", ""))
-    except Exception as e:
+    except (RuntimeError, OSError) as e:
         logger.warning("snapshot tool failed", exc_info=True)
         return f"Error capturing desktop state: {e}. Please try again."
 
@@ -103,7 +107,7 @@ def observe_fn(
         result = _call("observe", snapshot=snapshot, screenshot=screenshot,
                        ground=ground, display=display)
         return str(result.get("output", ""))
-    except Exception as e:
+    except (RuntimeError, OSError) as e:
         logger.warning("observe tool failed", exc_info=True)
         return f"Error during observation: {e}. Please try again."
 

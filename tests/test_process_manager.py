@@ -203,6 +203,24 @@ class TestKillByName:
         assert argv == ["taskkill", "/IM", "notepad.exe", "/F"]
 
     @patch("agent_windows.core.process_manager.subprocess.run")
+    def test_rc_zero_is_success_regardless_of_locale(self, mock_run):
+        """rc==0 is the authoritative taskkill success signal, independent of the
+        (locale-specific) message text. A German/Chinese stdout that lacks the
+        English word 'success' must still classify as terminated. Regression
+        lock for the locale-independent success classification."""
+        for localized_stdout in [
+            "ERFOLG: ...",          # German
+            "成功: 已终止 ...",      # Chinese
+            "",                     # empty stdout
+            "成功: プロセス ...",    # Japanese
+        ]:
+            mock_run.return_value = _completed(localized_stdout, 0)
+            result = pm.kill_process("notepad")
+            assert "Status: terminated" in result["output"], (
+                f"rc==0 must be success regardless of stdout: {localized_stdout!r}"
+            )
+
+    @patch("agent_windows.core.process_manager.subprocess.run")
     def test_name_with_exe_extension_not_doubled(self, mock_run):
         """A name already ending in .exe is passed through unchanged."""
         mock_run.return_value = _completed("SUCCESS: ...", 0)
@@ -311,6 +329,17 @@ class TestCriticalProcessProtection:
         with pytest.raises(ValueError, match="system-critical"):
             pm.kill_process(name)
 
+    @pytest.mark.parametrize("name", ["System", "Registry", "SYSTEM", "ReGiStRy"])
+    def test_refuses_capitalized_critical_name(self, name):
+        """The two capitalized entries (System/Registry) must also be refused in
+        any casing — the set is lower-cased and the lookup lower-cases input, so
+        a case mismatch here would silently bypass SEC3-04 for PID-4/Registry.
+        Regression lock for the case-normalization fix."""
+        with patch("agent_windows.core.process_manager.subprocess.run") as mock_run:
+            with pytest.raises(ValueError, match="system-critical"):
+                pm.kill_process(name)
+            mock_run.assert_not_called()
+
     @patch("agent_windows.core.process_manager.os.getpid", return_value=777)
     def test_refuses_self_pid(self, _mock):
         with pytest.raises(ValueError, match="current process"):
@@ -329,3 +358,10 @@ class TestCriticalProcessProtection:
         with pytest.raises(ValueError, match="system-critical"):
             pm.kill_process(4, force=True)
         mock_run.assert_not_called()
+
+    @pytest.mark.parametrize("bad", [True, False])
+    def test_bool_pid_or_name_rejected(self, bad):
+        """bool is an int subclass, so require()'s (str,int) check lets it through
+        (True → PID 1). kill_process rejects it explicitly — pin that guard."""
+        with pytest.raises(ValueError, match="must be a PID"):
+            pm.kill_process(bad)
