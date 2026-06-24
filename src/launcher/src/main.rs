@@ -43,22 +43,17 @@ fn main() -> ExitCode {
         return ExitCode::from(1);
     }
 
-    // `config` is delegated to the Python CLI (`agent-windows-python`). It
-    // touches only the local config file (no daemon, no COM/UIA), but porting
-    // it to Rust would mean duplicating DEFAULT_CONFIG, DPAPI encryption, the
-    // owner-only ACL, and the toml read/write path — all already tested on the
-    // Python side — for a low-frequency management command where the ~230ms
-    // Python startup is negligible. Delegating keeps a single source of truth
-    // for config schema and serialization, and the daemon reads the same file
-    // either way, so config changes still hot-apply on the next command.
-    //
-    // We intercept BEFORE `parse` so the full original argv (including global
-    // flags like --format/--debug) is forwarded verbatim — the Python Typer CLI
-    // parses those itself, exactly as if the user had typed
-    // `agent-windows-python` directly. Only the literal `config` top-level
-    // command is delegated; `config` appearing as an argument to another
-    // command can't reach here (cmd_argv[0] is the command name).
-    if cmd_argv.first().is_some_and(|c| c == "config") {
+    // `config` and `mcp` are delegated to the Python CLI (`agent-windows-python`).
+    // `config` touches only the local config file (no daemon/COM/UIA); `mcp` runs
+    // the FastMCP server, a long-lived Python process that must hold the event loop
+    // and FastMCP runtime — neither belongs in the lean Rust launcher. Porting either
+    // would mean duplicating logic already tested on the Python side. We intercept
+    // BEFORE `parse` so the full original argv (including --format/--debug globals)
+    // is forwarded verbatim, exactly as if the user had typed
+    // `agent-windows-python mcp serve ...` directly. Only the literal top-level
+    // command name is delegated; `mcp` appearing as an argument to another command
+    // can't reach here (cmd_argv[0] is the command name).
+    if cmd_argv.first().is_some_and(|c| c == "config" || c == "mcp") {
         return run_python_cli(&argv, &global);
     }
 
@@ -743,9 +738,10 @@ Commands:
 
   daemon start/stop/status         Daemon management
   config init/show/set/doctor      Configuration (delegated to the Python CLI)
+  mcp serve/auth/install/uninstall MCP server (delegated to the Python CLI)
   ping                             Daemon health check (round-trip)
 
-Native launcher (fast startup). --no-daemon and config are delegated to
+Native launcher (fast startup). --no-daemon, config, and mcp are delegated to
 agent-windows-python (the Python CLI).
 "#;
     output::print_text(help);
