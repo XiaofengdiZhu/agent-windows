@@ -112,7 +112,8 @@ def serve(
     # Lazy import of server helpers (fastmcp is an optional dep; importing it at
     # module top would break the CLI's lazy-import guard). is_loopback_host is a
     # pure-stdlib helper but lives in server.py, which imports fastmcp at top.
-    from agent_windows.mcp.server import is_loopback_host
+    from agent_windows.mcp.server import (
+        is_loopback_host, compute_allowed_hosts)
     full_cfg = load_config()
     cfg = full_cfg.get("mcp") or {}
     security_cfg = full_cfg.get("security") or {}
@@ -244,13 +245,19 @@ def serve(
         parsed_stateless = bool(cfg.get("stateless_http", False))
 
     from agent_windows.mcp import run
+    # DNS-rebinding protection: compute a Host-header allowlist from the bind
+    # address (loopback → localhost/127.0.0.1/[::1]; named host → [host];
+    # 0.0.0.0/:: → None). stdio never forwards it (local IPC, no Host header).
+    allowed_hosts = (compute_allowed_hosts(host, allow_insecure_remote)
+                     if transport != "stdio" else None)
     run(transport=transport, host=host, port=port, debug=debug,
         auth_key=auth_key, ssl_certfile=ssl_certfile, ssl_keyfile=ssl_keyfile,
         ip_allowlist=parsed_allowlist, cors_origins=parsed_cors,
         tools=parsed_tools, exclude_tools=parsed_exclude,
         stateless_http=parsed_stateless,
         oauth_client_id=oauth_client_id,
-        oauth_client_secret=oauth_client_secret)
+        oauth_client_secret=oauth_client_secret,
+        allowed_hosts=allowed_hosts)
 
 
 # ── `mcp auth` ──────────────────────────────────────────────────────────

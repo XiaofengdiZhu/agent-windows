@@ -190,7 +190,8 @@ def test_mcp_serve_delegates_explicit_flags_overriding_config():
                                      auth_key="cfgkey", ssl_certfile=None, ssl_keyfile=None,
                                      ip_allowlist=None, cors_origins=None,
                                      tools=None, exclude_tools=None, stateless_http=False,
-                                     oauth_client_id=None, oauth_client_secret=None)
+                                     oauth_client_id=None, oauth_client_secret=None,
+                                     allowed_hosts=None)
 
 
 def test_mcp_serve_defaults_come_from_config():
@@ -211,7 +212,8 @@ def test_mcp_serve_defaults_come_from_config():
                                      ssl_certfile="c.pem", ssl_keyfile="k.pem",
                                      ip_allowlist=None, cors_origins=None,
                                      tools=None, exclude_tools=None, stateless_http=False,
-                                     oauth_client_id=None, oauth_client_secret=None)
+                                     oauth_client_id=None, oauth_client_secret=None,
+                                     allowed_hosts=["1.2.3.4"])
 
 
 def test_mcp_serve_stdio_strips_auth_and_ssl():
@@ -230,7 +232,8 @@ def test_mcp_serve_stdio_strips_auth_and_ssl():
                                      auth_key=None, ssl_certfile=None, ssl_keyfile=None,
                                      ip_allowlist=None, cors_origins=None,
                                      tools=None, exclude_tools=None, stateless_http=False,
-                                     oauth_client_id=None, oauth_client_secret=None)
+                                     oauth_client_id=None, oauth_client_secret=None,
+                                     allowed_hosts=None)
 
 
 def test_mcp_serve_rejects_out_of_range_port():
@@ -710,6 +713,155 @@ def test_serve_oauth_ignored_on_stdio():
     assert result.exit_code == 0, result.output
     assert mock_run.call_args.kwargs["oauth_client_id"] is None
     assert mock_run.call_args.kwargs["oauth_client_secret"] is None
+
+
+# ── compute_allowed_hosts (DNS rebinding protection) ──────────────────
+
+def test_compute_allowed_hosts_loopback_returns_three_hosts():
+    """A loopback bind allows localhost, 127.0.0.1 and [::1]."""
+    from agent_windows.mcp.server import compute_allowed_hosts
+    expected = ["localhost", "127.0.0.1", "[::1]"]
+    for host in ("localhost", "127.0.0.1", "127.1.2.3", "::1"):
+        assert compute_allowed_hosts(host) == expected
+
+
+def test_compute_allowed_hosts_named_host_returns_singleton():
+    """A named (non-wildcard) host allows only that host."""
+    from agent_windows.mcp.server import compute_allowed_hosts
+    assert compute_allowed_hosts("myhost") == ["myhost"]
+    assert compute_allowed_hosts("192.168.1.5") == ["192.168.1.5"]
+
+
+def test_compute_allowed_hosts_wildcard_addresses_return_none():
+    """A wildcard bind can't name a trusted set, so Host validation is skipped."""
+    from agent_windows.mcp.server import compute_allowed_hosts
+    for host in ("0.0.0.0", "::", ""):
+        assert compute_allowed_hosts(host) is None
+
+
+def test_compute_allowed_hosts_allow_insecure_remote_skips_even_loopback():
+    """--allow-insecure-remote opts out of Host validation regardless of host."""
+    from agent_windows.mcp.server import compute_allowed_hosts
+    for host in ("localhost", "127.0.0.1", "myhost"):
+        assert compute_allowed_hosts(host, allow_insecure_remote=True) is None
+
+
+def test_run_http_mounts_trustedhost_when_allowed_hosts_set():
+    """run() wires TrustedHostMiddleware (after Options) when allowed_hosts given."""
+    from agent_windows.mcp import server
+    from agent_windows.mcp.server import OptionsMiddleware
+    from starlette.middleware.trustedhost import TrustedHostMiddleware
+    fake = MagicMock()
+    with patch.object(server, "build_server", return_value=fake):
+        server.run(transport="streamable-http", host="127.0.0.1", port=9000,
+                   allowed_hosts=["localhost", "127.0.0.1", "[::1]"])
+    kinds = [mw.cls for mw in fake.run.call_args.kwargs["middleware"]]
+    assert TrustedHostMiddleware in kinds
+    # Ordering: Options first (always outermost), TrustedHost right after it —
+    # preflight clears before the Host check, and a legit cross-origin preflight's
+    # Host is always the target server so it is never wrongly rejected.
+    assert kinds[0] is OptionsMiddleware
+    assert kinds[1] is TrustedHostMiddleware
+
+
+def test_run_full_middleware_ordering():
+    """All five middlewares assemble in the documented order when configured.
+
+    Options → TrustedHost → CORS → IPAllowlist → AuthKey. Pairwise tests leave
+    the TrustedHost↔CORS adjacency unverified; this locks the whole chain.
+    """
+    from agent_windows.mcp import server
+    from agent_windows.mcp.server import (OptionsMiddleware,
+        IPAllowlistMiddleware, AuthKeyMiddleware)
+    from starlette.middleware.trustedhost import TrustedHostMiddleware
+    from starlette.middleware.cors import CORSMiddleware
+    import ipaddress
+    fake = MagicMock()
+    with patch.object(server, "build_server", return_value=fake):
+        server.run(transport="streamable-http", host="127.0.0.1", port=9000,
+                   auth_key="k", cors_origins=["https://x.example.com"],
+                   ip_allowlist=[ipaddress.ip_network("10.0.0.0/8")],
+                   allowed_hosts=["localhost", "127.0.0.1", "[::1]"])
+    kinds = [mw.cls for mw in fake.run.call_args.kwargs["middleware"]]
+    assert kinds == [OptionsMiddleware, TrustedHostMiddleware,
+                     CORSMiddleware, IPAllowlistMiddleware, AuthKeyMiddleware]
+
+
+def test_run_http_omits_trustedhost_when_allowed_hosts_none():
+    """No allowed_hosts → no TrustedHostMiddleware (only Options remains)."""
+    from agent_windows.mcp import server
+    from agent_windows.mcp.server import OptionsMiddleware
+    from starlette.middleware.trustedhost import TrustedHostMiddleware
+    fake = MagicMock()
+    with patch.object(server, "build_server", return_value=fake):
+        server.run(transport="streamable-http", host="0.0.0.0", port=9000,
+                   allowed_hosts=None)
+    kinds = [mw.cls for mw in fake.run.call_args.kwargs["middleware"]]
+    assert TrustedHostMiddleware not in kinds
+    assert kinds == [OptionsMiddleware]
+
+
+def test_serve_forwards_allowed_hosts_for_loopback_http_bind():
+    """serve() computes the loopback host set and forwards it to run()."""
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config", return_value={}):
+        CliRunner().invoke(mcp_cmd.app,
+                           ["serve", "--transport", "streamable-http",
+                            "--host", "127.0.0.1"])
+    assert mock_run.call_args.kwargs["allowed_hosts"] == [
+        "localhost", "127.0.0.1", "[::1]"]
+
+
+def test_serve_forwards_allowed_hosts_for_named_http_bind():
+    """A named host bind forwards [host] as the allowed_hosts set."""
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+    # auth_key comes from config (there's no --auth-key flag); it's needed so the
+    # bare-bind guard allows the non-loopback named host.
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config",
+                      return_value={"mcp": {"auth_key": "k"}}):
+        CliRunner().invoke(mcp_cmd.app,
+                           ["serve", "--transport", "streamable-http",
+                            "--host", "myhost"])
+    assert mock_run.call_args.kwargs["allowed_hosts"] == ["myhost"]
+
+
+def test_serve_forwards_none_allowed_hosts_for_wildcard_bind():
+    """A 0.0.0.0 bind forwards None (can't name a trusted host set)."""
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config",
+                      return_value={"mcp": {"auth_key": "k"}}):
+        CliRunner().invoke(mcp_cmd.app,
+                           ["serve", "--transport", "streamable-http",
+                            "--host", "0.0.0.0"])
+    assert mock_run.call_args.kwargs["allowed_hosts"] is None
+
+
+def test_serve_forwards_none_allowed_hosts_on_stdio():
+    """stdio never forwards allowed_hosts (local IPC, no Host header)."""
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config", return_value={}):
+        CliRunner().invoke(mcp_cmd.app, ["serve", "--transport", "stdio"])
+    assert mock_run.call_args.kwargs["allowed_hosts"] is None
+
+
+def test_serve_allow_insecure_remote_forwards_none_allowed_hosts():
+    """--allow-insecure-remote skips Host validation even for a loopback bind."""
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config", return_value={}):
+        CliRunner().invoke(mcp_cmd.app,
+                           ["serve", "--transport", "streamable-http",
+                            "--host", "127.0.0.1", "--allow-insecure-remote"])
+    assert mock_run.call_args.kwargs["allowed_hosts"] is None
 
 
 # ── run() / serve() ip_allowlist wiring ────────────────────────────────

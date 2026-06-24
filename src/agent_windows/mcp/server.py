@@ -75,6 +75,33 @@ def is_loopback_host(host: str) -> bool:
         return False
 
 
+def compute_allowed_hosts(
+    host: str, allow_insecure_remote: bool = False
+) -> list[str] | None:
+    """Compute the Host-header allowlist for DNS-rebinding protection.
+
+    Returns a list of trusted hosts (for starlette ``TrustedHostMiddleware``)
+    keyed off the bind address, or ``None`` when Host validation should be
+    skipped. DNS rebinding lets an attacker point a domain they control at the
+    victim's loopback/LAN address — requests then carry the attacker's Host,
+    bypassing the browser's same-origin policy. Validating the Host header
+    against the addresses the server actually bound to closes that hole.
+
+    Branches (mirrors the reference implementation's ``computed_allowed_hosts``):
+    - ``allow_insecure_remote`` → ``None`` (user opted out of this protection).
+    - loopback bind → ``["localhost", "127.0.0.1", "[::1]"]``.
+    - a named host (not a wildcard address) → ``[host]``.
+    - ``0.0.0.0``/``::``/``""`` → ``None`` (too broad to name a trusted set).
+    """
+    if allow_insecure_remote:
+        return None
+    if is_loopback_host(host):
+        return ["localhost", "127.0.0.1", "[::1]"]
+    if host not in ("0.0.0.0", "::", ""):
+        return [host]
+    return None
+
+
 class AuthKeyMiddleware:
     """ASGI middleware: reject requests lacking a valid bearer token.
 
@@ -390,6 +417,7 @@ def run(
     stateless_http: bool = False,
     oauth_client_id: str | None = None,
     oauth_client_secret: str | None = None,
+    allowed_hosts: list[str] | None = None,
 ) -> None:
     """Run the MCP server on the given transport.
 
@@ -414,6 +442,13 @@ def run(
     endpoints are mounted and an OAuth token becomes a valid credential
     (see OAuthOnlyMiddleware, or AuthKeyMiddleware's oauth_validator
     fallback when auth_key is also set). Ignored for stdio.
+    allowed_hosts (a list of trusted Host-header values) opts in to DNS-rebinding
+    protection via starlette TrustedHostMiddleware: each request's Host header is
+    checked against the list, mismatches → 400. Note TrustedHostMiddleware also
+    validates websocket Host headers (a tighter check than AuthKey/IPAllowlist,
+    which pass websocket scopes through) — this closes DNS rebinding on the WS
+    path too. ``None``/empty disables it. Typically computed by the CLI from the
+    bind address (see compute_allowed_hosts); ignored for stdio.
     """
     if transport not in VALID_TRANSPORTS:
         raise ValueError(
@@ -468,6 +503,16 @@ def run(
     # CORS response).
     middleware.append(Middleware(OptionsMiddleware,
                                  allowed_origins=cors_origins or []))
+    # DNS-rebinding protection: validate the Host header against the addresses
+    # the server bound to. Sits after OptionsMiddleware (preflight must clear
+    # first, since it carries no Authorization header) and before CORSMiddleware
+    # (a legitimate cross-origin preflight's Host is always the target server,
+    # so it is never wrongly rejected here). A named host bind names a trusted
+    # set; a 0.0.0.0/:: bind can't, and the CLI passes None then.
+    if allowed_hosts:
+        from starlette.middleware.trustedhost import TrustedHostMiddleware
+        middleware.append(Middleware(
+            TrustedHostMiddleware, allowed_hosts=allowed_hosts))
     if cors_origins:
         from starlette.middleware.cors import CORSMiddleware
         middleware.append(Middleware(
