@@ -205,3 +205,41 @@ def test_scroll_fn_forwards_selector():
     with patch.object(inp, "_call", return_value={"output": "ok"}) as m:
         inp.scroll_fn(loc=None, selector="@e1", direction="up", amount=3)
     m.assert_called_once_with("scroll", selector="@e1", direction="up", amount=3)
+
+
+import agent_windows.mcp.tools.system as sysmod
+
+
+def test_app_launch_fn_forwards_args_list():
+    with patch.object(sysmod, "_call", return_value={"output": "launched"}) as m:
+        sysmod.app_launch_fn(name_or_path="notepad", args=["a.txt"])
+    m.assert_called_once_with("app_launch", name_or_path="notepad", args=["a.txt"])
+
+
+def test_app_resize_fn_requires_width_height():
+    with pytest.raises(ValueError):
+        sysmod.app_resize_fn(name_or_title="x", width=0, height=0)
+
+
+def test_fs_write_fn_requires_content():
+    with pytest.raises(ValueError):
+        sysmod.fs_write_fn(path="p", content=None)
+
+
+def test_registry_fn_validates_mode():
+    with pytest.raises(ValueError):
+        sysmod.registry_fn(mode="bogus", path="HKCU:\\S")
+
+
+def test_clipboard_set_fn_forwards_text():
+    with patch.object(sysmod, "_call", return_value={"output": "set"}) as m:
+        sysmod.clipboard_set_fn(text="hello")
+    # *_fn forwards every kwarg to _call (_call strips None — but it's mocked
+    # here). keyboard defaults to `_as_bool(False) or None` = None, passed through.
+    m.assert_called_once_with("clipboard_set", text="hello", keyboard=None)
+
+
+def test_process_kill_fn_accepts_int_pid():
+    with patch.object(sysmod, "_call", return_value={"output": "killed"}) as m:
+        sysmod.process_kill_fn(pid_or_name=1234)
+    m.assert_called_once_with("process_kill", pid_or_name=1234)
