@@ -17,7 +17,6 @@ from pathlib import Path
 
 import typer
 
-from agent_windows.mcp.server import is_loopback_host, parse_ip_allowlist
 from agent_windows.utils.config import load_config
 
 app = typer.Typer(help="MCP server", no_args_is_help=True)
@@ -32,6 +31,10 @@ def _parse_allowlist(entries):
     """
     if not entries:
         return None
+    # Lazy import: agent_windows.mcp.server pulls in fastmcp (the optional MCP
+    # dep), and importing it at module top would defeat the CLI's lazy-import
+    # guard (test_import_latency). Keep it local, like `serve` does for `run`.
+    from agent_windows.mcp.server import parse_ip_allowlist
     try:
         return parse_ip_allowlist(entries)
     except ValueError as exc:
@@ -98,6 +101,10 @@ def serve(
     Defaults come from the [mcp] config section; explicit flags override.
     auth_key/TLS are read from config and applied only to HTTP transports.
     """
+    # Lazy import of server helpers (fastmcp is an optional dep; importing it at
+    # module top would break the CLI's lazy-import guard). is_loopback_host is a
+    # pure-stdlib helper but lives in server.py, which imports fastmcp at top.
+    from agent_windows.mcp.server import is_loopback_host
     full_cfg = load_config()
     cfg = full_cfg.get("mcp") or {}
     security_cfg = full_cfg.get("security") or {}
