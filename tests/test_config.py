@@ -528,6 +528,52 @@ class TestWriteConfig:
         assert loaded["vlm"]["api_key"] == "sk-secret"
 
 
+class TestSaveInitBehavior:
+    def test_save_config_writes_trimmed(self, tmp_path, monkeypatch):
+        """save_config now writes only non-defaults via write_config. Pass a
+        dict that ALSO contains default values so this can't be confused with
+        a plain passthrough of a sparse dict."""
+        import agent_windows.utils.config as cfg
+        import copy
+
+        monkeypatch.setattr(cfg, "get_config_path", lambda: tmp_path / "config.toml")
+        monkeypatch.delenv("AGENT_WINDOWS_VLM_API_KEY", raising=False)
+        cfg._config_cache = None
+
+        # Full DEFAULT plus one override: only the override should land on disk.
+        full = copy.deepcopy(cfg.DEFAULT_CONFIG)
+        full["mcp"]["port"] = 9000
+        cfg.save_config(full)
+        text = (tmp_path / "config.toml").read_text(encoding="utf-8")
+        assert "port = 9000" in text
+        assert "transport" not in text  # default value dropped by trim
+        assert "[vlm]" not in text      # all-default section dropped entirely
+
+    def test_init_config_writes_full_defaults(self, tmp_path, monkeypatch):
+        """init_config keeps writing the FULL default config (discoverability),
+        NOT a trimmed/empty file."""
+        import agent_windows.utils.config as cfg
+
+        monkeypatch.setattr(cfg, "get_config_path", lambda: tmp_path / "config.toml")
+        cfg._config_cache = None
+
+        cfg.init_config()
+        text = (tmp_path / "config.toml").read_text(encoding="utf-8")
+        assert "[vlm]" in text
+        assert "[screenshot]" in text
+        assert "[mcp]" in text
+        assert "transport" in text  # full default, not trimmed
+
+    def test_save_clears_cache(self, tmp_path, monkeypatch):
+        import agent_windows.utils.config as cfg
+
+        monkeypatch.setattr(cfg, "get_config_path", lambda: tmp_path / "config.toml")
+        monkeypatch.delenv("AGENT_WINDOWS_VLM_API_KEY", raising=False)
+        cfg._config_cache = {"stale": True}
+        cfg.save_config({"mcp": {"port": 9000}})
+        assert cfg._config_cache is None
+
+
 class TestCheckLeaf:
     """_check_leaf enforces the per-type rules (bool/int disambiguation etc.)."""
 

@@ -323,49 +323,34 @@ def write_config(config: dict, path: Path) -> None:
 
 
 def save_config(config: dict[str, Any]) -> None:
-    """Save config dict to TOML file.
+    """Save config dict to TOML file, writing only non-default values (TODO #10).
 
-    The ``vlm.api_key`` is DPAPI-encrypted at rest; all other values are
-    non-secret. The file is also restricted to its owner via an ACL. The
-    caller's dict is not mutated — encryption is applied to a shallow copy used
-    only for serialization, so the in-memory config keeps the usable key.
+    The ``vlm.api_key`` and ``mcp.auth_key`` are DPAPI-encrypted at rest (handled
+    inside :func:`write_config`); all other values are non-secret. The file is
+    restricted to its owner via an ACL. The caller's dict is not mutated.
     """
     global _config_cache
     config_path = get_config_path()
-
-    # Encrypt the api_key on a copy so the caller's dict keeps the plaintext.
-    to_write = dict(config)
-    vlm = to_write.get("vlm")
-    if isinstance(vlm, dict):
-        vlm = dict(vlm)
-        key = vlm.get("api_key", "")
-        # Mirror the decrypt-side guard: only a real non-empty plaintext string
-        # gets encrypted. A pre-prefixed dpapi: blob is written through unchanged
-        # (avoids double-encryption), and a non-string key (e.g. a hand-edited
-        # ``api_key = 123``) is left as-is rather than crashing in .encode().
-        if isinstance(key, str) and key and not key.startswith("dpapi:"):
-            vlm["api_key"] = _encrypt_secret(key)
-        to_write["vlm"] = vlm
-
-    # Same for mcp.auth_key.
-    mcp = to_write.get("mcp")
-    if isinstance(mcp, dict):
-        mcp = dict(mcp)
-        mkey = mcp.get("auth_key", "")
-        if isinstance(mkey, str) and mkey and not mkey.startswith("dpapi:"):
-            mcp["auth_key"] = _encrypt_secret(mkey)
-        to_write["mcp"] = mcp
-
-    config_path.write_text(toml.dumps(to_write), encoding="utf-8")
+    write_config(config, config_path)
     _secure_config_file(config_path)
     _config_cache = None  # Clear cache
 
 
+def _write_full_config(config: dict[str, Any], path: Path) -> None:
+    """Write the FULL config (all keys, incl. defaults) to *path*.
+
+    Used by :func:`init_config` so a freshly-initialized config.toml serves as
+    discoverable documentation of every available knob — NOT a trimmed file.
+    """
+    _serialize(config, path)
+
+
 def init_config() -> Path:
-    """Initialize config file with defaults if it doesn't exist."""
+    """Initialize config file with full defaults if it doesn't exist."""
     config_path = get_config_path()
     if not config_path.exists():
-        save_config(DEFAULT_CONFIG)
+        _write_full_config(DEFAULT_CONFIG, config_path)
+        _secure_config_file(config_path)
     return config_path
 
 
