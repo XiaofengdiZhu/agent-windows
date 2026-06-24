@@ -786,6 +786,64 @@ def test_mcp_serve_reads_tools_from_env(monkeypatch):
     assert mock_run.call_args.kwargs["tools"] == ["screenshot", "click"]
 
 
+def test_mcp_serve_tools_env_overrides_config(monkeypatch):
+    """AGENT_WINDOWS_TOOLS beats [tools] include in config."""
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+
+    monkeypatch.setenv("AGENT_WINDOWS_TOOLS", "screenshot")
+    runner = CliRunner()
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config",
+                      return_value={"tools": {"include": ["shell", "registry"]}}):
+        result = runner.invoke(mcp_cmd.app, ["serve", "--transport", "stdio"])
+    assert result.exit_code == 0, result.output
+    # env wins over config
+    assert mock_run.call_args.kwargs["tools"] == ["screenshot"]
+
+
+def test_mcp_serve_tools_flag_overrides_env_and_config(monkeypatch):
+    """--tools takes precedence over both env and config."""
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+
+    monkeypatch.setenv("AGENT_WINDOWS_TOOLS", "shell")
+    runner = CliRunner()
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config",
+                      return_value={"tools": {"include": ["registry"]}}):
+        result = runner.invoke(mcp_cmd.app,
+                               ["serve", "--transport", "stdio",
+                                "--tools", "screenshot,snapshot"])
+    assert result.exit_code == 0, result.output
+    assert mock_run.call_args.kwargs["tools"] == ["screenshot", "snapshot"]
+
+
+def test_run_invokes_apply_tool_filter_when_tools_given():
+    """run() must call apply_tool_filter when tools/exclude_tools are set.
+
+    The other run() tests patch build_server with a MagicMock, so the filter
+    guard never executes against the real registry — this covers that seam.
+    """
+    from agent_windows.mcp import server
+    fake = MagicMock()
+    with patch.object(server, "build_server", return_value=fake), \
+         patch.object(server, "apply_tool_filter") as af:
+        server.run(transport="stdio", tools=["screenshot"],
+                   exclude_tools=["shell"])
+    af.assert_called_once_with(fake, ["screenshot"], ["shell"])
+
+
+def test_run_skips_apply_tool_filter_when_no_filter():
+    """No tools/exclude_tools → apply_tool_filter is never called."""
+    from agent_windows.mcp import server
+    fake = MagicMock()
+    with patch.object(server, "build_server", return_value=fake), \
+         patch.object(server, "apply_tool_filter") as af:
+        server.run(transport="stdio")
+    af.assert_not_called()
+
+
 # ── `mcp auth` ──────────────────────────────────────────────────────────
 
 def test_mcp_auth_generates_key_and_writes_config(tmp_path, monkeypatch):
