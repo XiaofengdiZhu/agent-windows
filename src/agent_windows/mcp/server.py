@@ -418,6 +418,7 @@ def run(
     oauth_client_id: str | None = None,
     oauth_client_secret: str | None = None,
     allowed_hosts: list[str] | None = None,
+    telemetry: bool = False,
 ) -> None:
     """Run the MCP server on the given transport.
 
@@ -449,6 +450,13 @@ def run(
     which pass websocket scopes through) — this closes DNS rebinding on the WS
     path too. ``None``/empty disables it. Typically computed by the CLI from the
     bind address (see compute_allowed_hosts); ignored for stdio.
+    telemetry (default False) opts in to local-only tool-call telemetry (TODO #9):
+    each tool call's source, name, success/failure and wall-clock duration are
+    appended as one line to ``~/.agent-windows/logs/telemetry.log``. Zero network,
+    zero new deps. Off by default; the CLI resolves flag/env/config precedence and
+    passes the boolean here. When True, every registered tool is wrapped with a
+    timing decorator *after* ``apply_tool_filter`` (so filtered tools aren't
+    wrapped); applies to all transports, including stdio.
     """
     if transport not in VALID_TRANSPORTS:
         raise ValueError(
@@ -470,6 +478,12 @@ def run(
     mcp = build_server()
     if tools or exclude_tools:
         apply_tool_filter(mcp, tools, exclude_tools)
+    if telemetry:
+        # Wrap every surviving tool with local-only telemetry timing. Imported
+        # lazily so the fastmcp-optional CLI path never pays for it; runs after
+        # apply_tool_filter so removed tools aren't wrapped. (TODO #9)
+        from agent_windows.telemetry import apply_tool_telemetry
+        apply_tool_telemetry(mcp, True)
     if transport == "stdio":
         mcp.run(transport="stdio", show_banner=False)
         return

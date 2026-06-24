@@ -102,7 +102,13 @@ def serve(
     oauth_client_secret: str = typer.Option(
         None, "--oauth-client-secret",
         help="OAuth client secret. Requires --oauth-client-id. "
-             "Env: AGENT_WINDOWS_OAUTH_CLIENT_SECRET"),
+        "Env: AGENT_WINDOWS_OAUTH_CLIENT_SECRET"),
+    telemetry: bool = typer.Option(
+        False, "--telemetry",
+        help="Record local-only tool-call telemetry (timestamp, source, tool "
+             "name, success/failure, duration) to "
+             "~/.agent-windows/logs/telemetry.log. No network. Default off. "
+             "Env: AGENT_WINDOWS_TELEMETRY"),
 ) -> None:
     """Run the agent-windows MCP server.
 
@@ -250,6 +256,17 @@ def serve(
     # 0.0.0.0/:: → None). stdio never forwards it (local IPC, no Host header).
     allowed_hosts = (compute_allowed_hosts(host, allow_insecure_remote)
                      if transport != "stdio" else None)
+    # Telemetry precedence: --telemetry flag > AGENT_WINDOWS_TELEMETRY env >
+    # [telemetry] enabled config. Default off. Applied to the process-local
+    # switch (so record_tool_call honors it) AND forwarded to run() so MCP tools
+    # get wrapped. Local-only, zero network. (TODO #9)
+    from agent_windows.telemetry import _parse_telemetry_enabled, configure
+    telemetry_cfg = full_cfg.get("telemetry") or {}
+    parsed_telemetry = _parse_telemetry_enabled(
+        bool(telemetry),
+        os.environ.get("AGENT_WINDOWS_TELEMETRY"),
+        telemetry_cfg.get("enabled", False))
+    configure(parsed_telemetry)
     run(transport=transport, host=host, port=port, debug=debug,
         auth_key=auth_key, ssl_certfile=ssl_certfile, ssl_keyfile=ssl_keyfile,
         ip_allowlist=parsed_allowlist, cors_origins=parsed_cors,
@@ -257,7 +274,8 @@ def serve(
         stateless_http=parsed_stateless,
         oauth_client_id=oauth_client_id,
         oauth_client_secret=oauth_client_secret,
-        allowed_hosts=allowed_hosts)
+        allowed_hosts=allowed_hosts,
+        telemetry=parsed_telemetry)
 
 
 # ── `mcp auth` ──────────────────────────────────────────────────────────

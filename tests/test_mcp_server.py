@@ -191,7 +191,7 @@ def test_mcp_serve_delegates_explicit_flags_overriding_config():
                                      ip_allowlist=None, cors_origins=None,
                                      tools=None, exclude_tools=None, stateless_http=False,
                                      oauth_client_id=None, oauth_client_secret=None,
-                                     allowed_hosts=None)
+                                     allowed_hosts=None, telemetry=False)
 
 
 def test_mcp_serve_defaults_come_from_config():
@@ -213,7 +213,7 @@ def test_mcp_serve_defaults_come_from_config():
                                      ip_allowlist=None, cors_origins=None,
                                      tools=None, exclude_tools=None, stateless_http=False,
                                      oauth_client_id=None, oauth_client_secret=None,
-                                     allowed_hosts=["1.2.3.4"])
+                                     allowed_hosts=["1.2.3.4"], telemetry=False)
 
 
 def test_mcp_serve_stdio_strips_auth_and_ssl():
@@ -233,7 +233,7 @@ def test_mcp_serve_stdio_strips_auth_and_ssl():
                                      ip_allowlist=None, cors_origins=None,
                                      tools=None, exclude_tools=None, stateless_http=False,
                                      oauth_client_id=None, oauth_client_secret=None,
-                                     allowed_hosts=None)
+                                     allowed_hosts=None, telemetry=False)
 
 
 def test_mcp_serve_rejects_out_of_range_port():
@@ -1394,6 +1394,77 @@ def test_run_stdio_with_stateless_http_does_not_forward_to_mcp_run():
     kwargs = fake.run.call_args.kwargs
     assert kwargs["transport"] == "stdio"
     assert "stateless_http" not in kwargs
+
+
+# ── telemetry (TODO #9) ────────────────────────────────────────────────
+
+
+def _serve_telemetry_kwargs(runner, mcp_cmd, extra_args, monkeypatch=None,
+                            config=None):
+    """Invoke `mcp serve` and return the run() kwargs (telemetry coverage)."""
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config",
+                      return_value=config or {}):
+        runner.invoke(mcp_cmd.app, ["serve", "--transport", "stdio", *extra_args])
+    return mock_run.call_args.kwargs
+
+
+def test_serve_telemetry_flag_forwarded():
+    """--telemetry forwards telemetry=True to run()."""
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+    kwargs = _serve_telemetry_kwargs(
+        CliRunner(), mcp_cmd, ["--telemetry"])
+    assert kwargs["telemetry"] is True
+
+
+def test_serve_telemetry_defaults_false():
+    """No flag/env/config → telemetry=False (default off)."""
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+    kwargs = _serve_telemetry_kwargs(CliRunner(), mcp_cmd, [])
+    assert kwargs["telemetry"] is False
+
+
+def test_serve_telemetry_from_env(monkeypatch):
+    """AGENT_WINDOWS_TELEMETRY=true enables telemetry without a flag."""
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+    monkeypatch.setenv("AGENT_WINDOWS_TELEMETRY", "true")
+    kwargs = _serve_telemetry_kwargs(CliRunner(), mcp_cmd, [])
+    assert kwargs["telemetry"] is True
+
+
+def test_serve_telemetry_from_config():
+    """[telemetry] enabled=true in config enables telemetry."""
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+    kwargs = _serve_telemetry_kwargs(
+        CliRunner(), mcp_cmd, [],
+        config={"telemetry": {"enabled": True}})
+    assert kwargs["telemetry"] is True
+
+
+def test_serve_telemetry_flag_overrides_env_and_config(monkeypatch):
+    """--telemetry wins over env (false) and config (false)."""
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+    monkeypatch.setenv("AGENT_WINDOWS_TELEMETRY", "false")
+    kwargs = _serve_telemetry_kwargs(
+        CliRunner(), mcp_cmd, ["--telemetry"],
+        config={"telemetry": {"enabled": False}})
+    assert kwargs["telemetry"] is True
+
+
+def test_serve_telemetry_env_overrides_config(monkeypatch):
+    """AGENT_WINDOWS_TELEMETRY=true beats [telemetry] enabled=false."""
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+    monkeypatch.setenv("AGENT_WINDOWS_TELEMETRY", "true")
+    kwargs = _serve_telemetry_kwargs(
+        CliRunner(), mcp_cmd, [],
+        config={"telemetry": {"enabled": False}})
+    assert kwargs["telemetry"] is True
 
 
 # ── `mcp auth` ──────────────────────────────────────────────────────────

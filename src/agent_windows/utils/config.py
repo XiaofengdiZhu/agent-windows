@@ -192,6 +192,15 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "include": [],
         "exclude": [],
     },
+    "telemetry": {
+        # Local-only tool-call telemetry (TODO #9). When enabled, each tool
+        # call (source mcp|cli, tool name, success/failure, duration_ms) is
+        # appended as one line to logs/telemetry.log. Zero network, zero new
+        # deps. Default off — opt in via --telemetry / AGENT_WINDOWS_TELEMETRY
+        # env / this config. write_config writes only non-defaults, so false
+        # never lands in config.toml.
+        "enabled": False,
+    },
 }
 
 # ── Load / Save ───────────────────────────────────────────────────
