@@ -68,14 +68,17 @@ def wait_for_fn(
 def register(mcp) -> None:
     _REG = ToolAnnotations
 
-    @mcp.tool(name="ping", description="Daemon health check (single IPC round-trip).",
-              annotations=_REG(title="Ping", readOnlyHint=True, idempotentHint=True, openWorldHint=False))
+    @mcp.tool(name="ping", description=(
+        "Daemon health check (single IPC round-trip). "
+        "Keywords: ping, health, health check, alive, status."
+    ), annotations=_REG(title="Ping", readOnlyHint=True, idempotentHint=True, openWorldHint=False))
     def _ping() -> str:
         return ping_fn()
 
     @mcp.tool(name="wait", description=(
         "Wait for a duration, an element (@eN selector) to appear, or text to "
-        "appear in an interactive element's name. Provide seconds for a plain "
+        "appear in an interactive element's name. Keywords: wait, sleep, delay, "
+        "wait for element, wait for text, pause. Provide seconds for a plain "
         "sleep, OR a selector, OR text. timeout bounds the poll (default 30s); "
         "interval is the poll period (default 0.5s)."
     ), annotations=_REG(title="Wait", readOnlyHint=True, idempotentHint=True, openWorldHint=False))
@@ -86,7 +89,8 @@ def register(mcp) -> None:
                        timeout=timeout, interval=interval)
 
     @mcp.tool(name="wait_for", description=(
-        "Wait until a UI condition holds. condition: text_exists / "
+        "Wait until a UI condition holds. Keywords: wait for condition, wait "
+        "for window, wait until, expect, synchronize. condition: text_exists / "
         "active_window / element_exists / element_enabled / focused_element "
         "(aliases text/window/element/enabled/focused). Provide text and/or "
         "window_name per the condition. Polls the UIA tree until matched or "

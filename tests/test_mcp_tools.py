@@ -111,6 +111,37 @@ def test_observe_fn_defaults_to_snapshot_plus_screenshot():
     assert out == "x"
 
 
+# ── error resilience (TODO #12): failures return retryable text, not raise ──
+
+
+def test_screenshot_fn_returns_retryable_text_on_failure():
+    """A daemon error must not crash the tool — return retryable [text] instead.
+    (TODO #12)"""
+    with patch.object(obs, "_call", side_effect=RuntimeError("backend not ready [-1999]")):
+        out = obs.screenshot_fn()
+    assert isinstance(out, list)
+    assert len(out) == 1
+    # retryable framing AND carries the underlying message (informative, not vague)
+    assert "Please try again" in out[0]
+    assert "backend not ready" in out[0]
+
+
+def test_snapshot_fn_returns_retryable_text_on_failure():
+    with patch.object(obs, "_call", side_effect=RuntimeError("UIA init failed [-1003]")):
+        out = obs.snapshot_fn()
+    assert isinstance(out, str)
+    assert "Please try again" in out
+    assert "UIA init failed" in out
+
+
+def test_observe_fn_returns_retryable_text_on_failure():
+    with patch.object(obs, "_call", side_effect=RuntimeError("observe error")):
+        out = obs.observe_fn()
+    assert isinstance(out, str)
+    assert "Please try again" in out
+    assert "observe error" in out
+
+
 def test_get_text_fn_requires_selector():
     with pytest.raises(ValueError):
         obs.get_text_fn(selector="")

@@ -87,8 +87,9 @@ def shortcut_fn(keys: str) -> str:
 def register(mcp) -> None:
     @mcp.tool(name="click", description=(
         "Mouse click at [x, y] or at a UI element (@eN selector from a prior "
-        "snapshot). right=True for a context-menu click, double=True for a "
-        "double-click. Provide either loc OR selector."
+        "snapshot). Keywords: click, tap, press, mouse click, left click, "
+        "select, left-click. right=True for a context-menu click, double=True "
+        "for a double-click. Provide either loc OR selector."
     ), annotations=ToolAnnotations(title="Click", readOnlyHint=False,
                                    destructiveHint=True, openWorldHint=False))
     def _click(loc: list[int] | None = None, selector: str | None = None,
@@ -96,7 +97,8 @@ def register(mcp) -> None:
         return click_fn(loc=loc, selector=selector, right=right, double=double)
 
     @mcp.tool(name="dblclick", description=(
-        "Double-click at [x, y] or at a UI element (@eN)."
+        "Double-click at [x, y] or at a UI element (@eN). "
+        "Keywords: double click, double-click, open, launch, two clicks."
     ), annotations=ToolAnnotations(title="Double Click", readOnlyHint=False,
                                    destructiveHint=True, openWorldHint=False))
     def _dblclick(loc: list[int] | None = None, selector: str | None = None,
@@ -104,14 +106,16 @@ def register(mcp) -> None:
         return dblclick_fn(loc=loc, selector=selector, right=right)
 
     @mcp.tool(name="hover", description=(
-        "Hover at [x, y] or @eN to trigger tooltips/highlights."
+        "Hover at [x, y] or @eN to trigger tooltips/highlights. "
+        "Keywords: hover, mouse over, tooltip, mouse hover."
     ), annotations=ToolAnnotations(title="Hover", readOnlyHint=False,
                                    destructiveHint=False, openWorldHint=False))
     def _hover(loc: list[int] | None = None, selector: str | None = None) -> str:
         return hover_fn(loc=loc, selector=selector)
 
     @mcp.tool(name="move", description=(
-        "Move the mouse cursor to [x, y] or @eN (without clicking)."
+        "Move the mouse cursor to [x, y] or @eN (without clicking). "
+        "Keywords: move mouse, cursor, mouse position, point."
     ), annotations=ToolAnnotations(title="Move", readOnlyHint=False,
                                    destructiveHint=False, openWorldHint=False))
     def _move(loc: list[int] | None = None, selector: str | None = None) -> str:
@@ -119,6 +123,7 @@ def register(mcp) -> None:
 
     @mcp.tool(name="mouse_down", description=(
         "Press and hold a mouse button at [x, y] or @eN. "
+        "Keywords: mouse down, press button, hold, drag start. "
         "button: left/right/middle. Pair with mouse_up."
     ), annotations=ToolAnnotations(title="Mouse Down", readOnlyHint=False,
                                    destructiveHint=True, openWorldHint=False))
@@ -127,7 +132,9 @@ def register(mcp) -> None:
         return mouse_down_fn(loc=loc, selector=selector, button=button)
 
     @mcp.tool(name="mouse_up", description=(
-        "Release a mouse button at [x, y] or @eN. button: left/right/middle."
+        "Release a mouse button at [x, y] or @eN. "
+        "Keywords: mouse up, release button, drop, drag end. "
+        "button: left/right/middle."
     ), annotations=ToolAnnotations(title="Mouse Up", readOnlyHint=False,
                                    destructiveHint=False, openWorldHint=False))
     def _mouse_up(loc: list[int] | None = None, selector: str | None = None,
@@ -135,14 +142,16 @@ def register(mcp) -> None:
         return mouse_up_fn(loc=loc, selector=selector, button=button)
 
     @mcp.tool(name="drag", description=(
-        "Drag from (x1,y1) to (x2,y2). right=True for a right-button drag."
+        "Drag from (x1,y1) to (x2,y2). Keywords: drag, move item, drop, "
+        "drag and drop, slide. right=True for a right-button drag."
     ), annotations=ToolAnnotations(title="Drag", readOnlyHint=False,
                                    destructiveHint=True, openWorldHint=False))
     def _drag(x1: int, y1: int, x2: int, y2: int, right: bool = False) -> str:
         return drag_fn(x1=x1, y1=y1, x2=x2, y2=y2, right=right)
 
     @mcp.tool(name="scroll", description=(
-        "Scroll at [x, y] or @eN. direction: up/down. amount is wheel ticks "
+        "Scroll at [x, y] or @eN. Keywords: scroll, mouse wheel, page down, "
+        "page up, swipe. direction: up/down. amount is wheel ticks "
         "(~3-5 lines each)."
     ), annotations=ToolAnnotations(title="Scroll", readOnlyHint=False,
                                    destructiveHint=False, openWorldHint=False))
@@ -151,10 +160,11 @@ def register(mcp) -> None:
         return scroll_fn(loc=loc, selector=selector, direction=direction, amount=amount)
 
     @mcp.tool(name="type", description=(
-        "Type text using Unicode direct input (bypasses IME). Optionally click "
-        "a target first via loc=[x,y] or at_selector=@eN. enter=True presses "
-        "Enter after; clear=True select-all+deletes first; caret_position: "
-        "start|idle|end."
+        "Type text using Unicode direct input (bypasses IME). Keywords: type, "
+        "enter text, input text, write text, keyboard, fill field. Optionally "
+        "click a target first via loc=[x,y] or at_selector=@eN. enter=True "
+        "presses Enter after; clear=True select-all+deletes first; "
+        "caret_position: start|idle|end."
     ), annotations=ToolAnnotations(title="Type", readOnlyHint=False,
                                    destructiveHint=True, openWorldHint=False))
     def _type(text: str, loc: list[int] | None = None,
@@ -165,7 +175,9 @@ def register(mcp) -> None:
                        clear=clear, caret_position=caret_position)
 
     @mcp.tool(name="shortcut", description=(
-        'Send a keyboard shortcut, e.g. "ctrl+c", "alt+tab", "win+r".'
+        'Send a keyboard shortcut, e.g. "ctrl+c", "alt+tab", "win+r". '
+        'Keywords: shortcut, hotkey, key combination, keyboard shortcut, '
+        'ctrl, alt, ctrl+c, paste.'
     ), annotations=ToolAnnotations(title="Shortcut", readOnlyHint=False,
                                    destructiveHint=True, openWorldHint=False))
     def _shortcut(keys: str) -> str:

@@ -4,7 +4,15 @@ element_state, highlight, diff, cleanup.
 Each ``*_fn`` is a plain function (unit-testable) that forwards to the daemon
 via ``_call``. ``register(mcp)`` decorates each as a FastMCP tool with a
 description and ToolAnnotations.
+
+The high-frequency read-only tools (screenshot/snapshot/observe) catch
+exceptions and return a retryable error string instead of letting the tool call
+crash — an agent can then retry or adjust. The error text carries the daemon's
+underlying message (which holds the JSON-RPC code), so it's both retryable and
+informative. The daemon/router and CLI ``--format json`` paths are unchanged,
+so programmatic consumers still get structured error codes. (TODO #12)
 """
+import logging
 from pathlib import Path
 from typing import Any, Literal
 
@@ -12,6 +20,8 @@ from fastmcp.utilities.types import Image
 from mcp.types import ToolAnnotations
 
 from agent_windows.mcp._call import _call
+
+logger = logging.getLogger(__name__)
 
 
 def _image_from_result(result: dict[str, Any], path_key: str = "path") -> list:
@@ -46,15 +56,30 @@ def screenshot_fn(
     bbox: list[int] | None = None,
     selector: str | None = None,
 ) -> list:
-    """Capture a screenshot. Returns the metadata text plus the image."""
-    result = _call("screenshot", output=output, monitor=monitor,
-                   bbox=bbox, selector=selector)
-    return _image_from_result(result, "path")
+    """Capture a screenshot. Returns the metadata text plus the image.
+
+    On failure returns ``[error_text]`` (retryable) instead of raising, so the
+    agent can recover — e.g. when the capture backend isn't ready yet. (TODO #12)
+    """
+    try:
+        result = _call("screenshot", output=output, monitor=monitor,
+                       bbox=bbox, selector=selector)
+        return _image_from_result(result, "path")
+    except Exception as e:
+        logger.warning("screenshot tool failed", exc_info=True)
+        return [f"Error capturing screenshot: {e}. Please try again."]
 
 
 def snapshot_fn(display: list[int] | None = None) -> str:
-    """Traverse the UIA tree and return a semantic snapshot."""
-    return str(_call("snapshot", display=display).get("output", ""))
+    """Traverse the UIA tree and return a semantic snapshot.
+
+    On failure returns a retryable error string instead of raising. (TODO #12)
+    """
+    try:
+        return str(_call("snapshot", display=display).get("output", ""))
+    except Exception as e:
+        logger.warning("snapshot tool failed", exc_info=True)
+        return f"Error capturing desktop state: {e}. Please try again."
 
 
 def observe_fn(
@@ -74,9 +99,13 @@ def observe_fn(
     if not snapshot and not screenshot and not ground:
         snapshot = True
         screenshot = True
-    result = _call("observe", snapshot=snapshot, screenshot=screenshot,
-                   ground=ground, display=display)
-    return str(result.get("output", ""))
+    try:
+        result = _call("observe", snapshot=snapshot, screenshot=screenshot,
+                       ground=ground, display=display)
+        return str(result.get("output", ""))
+    except Exception as e:
+        logger.warning("observe tool failed", exc_info=True)
+        return f"Error during observation: {e}. Please try again."
 
 
 def get_text_fn(selector: str) -> str:
@@ -127,6 +156,7 @@ def cleanup_screenshots_fn() -> str:
 def register(mcp) -> None:
     @mcp.tool(name="screenshot", description=(
         "Capture a screenshot of the screen (or a region/monitor/element). "
+        "Keywords: screenshot, screen capture, see screen, image, take picture. "
         "Returns the image plus metadata (path, size, region, backend, "
         "coordinate_scale when downscaled). Use monitor=-1 for full virtual "
         "desktop, or selector=@eN to crop to a UI element's bounding box."
@@ -140,7 +170,9 @@ def register(mcp) -> None:
         "Return a semantic snapshot of the UIA accessibility tree: focused "
         "window, open windows, and interactive/scrollable elements with their "
         "bounding boxes and @eN labels. Pixel-precise; use before clicking. "
-        "Optionally filter to specific displays, e.g. display=[0]."
+        "Keywords: accessibility tree, UI elements, inspect, what's on screen, "
+        "read UI, element ids. Optionally filter to specific displays, e.g. "
+        "display=[0]."
     ), annotations=ToolAnnotations(title="Snapshot", readOnlyHint=True,
                                    idempotentHint=True, openWorldHint=False))
     def _snapshot(display: list[int] | None = None) -> str:
@@ -149,9 +181,11 @@ def register(mcp) -> None:
     @mcp.tool(name="observe", description=(
         "Combined observation: snapshot + screenshot (+ optional visual "
         "grounding), returned as text. With no flags, returns both the UIA "
-        "tree and a screenshot description. Pass ground='the taskbar' to also "
-        "locate an element by description. For a client-rendered image, call "
-        "`screenshot` directly (this tool's screenshot path is embedded in text)."
+        "tree and a screenshot description. "
+        "Keywords: observe, look at screen, inspect desktop, snapshot, screenshot, "
+        "understand UI. Pass ground='the taskbar' to also locate an element by "
+        "description. For a client-rendered image, call `screenshot` directly "
+        "(this tool's screenshot path is embedded in text)."
     ), annotations=ToolAnnotations(title="Observe", readOnlyHint=True,
                                    idempotentHint=True, openWorldHint=False))
     def _observe(snapshot: bool = False, screenshot: bool = False,
@@ -161,7 +195,8 @@ def register(mcp) -> None:
 
     @mcp.tool(name="get_text", description=(
         "Return the text/name of a UIA element identified by its @eN selector "
-        "from a prior snapshot."
+        "from a prior snapshot. Keywords: read text, element text, get name, "
+        "label, caption."
     ), annotations=ToolAnnotations(title="Get Text", readOnlyHint=True,
                                    idempotentHint=True, openWorldHint=False))
     def _get_text(selector: str) -> str:
@@ -169,7 +204,8 @@ def register(mcp) -> None:
 
     @mcp.tool(name="element_state", description=(
         "Check whether a UIA element (@eN) is visible or enabled. "
-        "check='visible' or check='enabled'."
+        "check='visible' or check='enabled'. Keywords: element state, is visible, "
+        "is enabled, is disabled, control state."
     ), annotations=ToolAnnotations(title="Element State", readOnlyHint=True,
                                    idempotentHint=True, openWorldHint=False))
     def _element_state(selector: str, check: Literal["visible", "enabled"]) -> str:
@@ -177,7 +213,8 @@ def register(mcp) -> None:
 
     @mcp.tool(name="highlight", description=(
         "Draw a labeled rectangle over a region [x1,y1,x2,y2] on a screenshot "
-        "and return the marked image. Useful for confirming a target before "
+        "and return the marked image. Keywords: highlight, mark region, draw box, "
+        "annotate, confirm target. Useful for confirming a target before "
         "clicking. Optionally pass image=<path> to annotate an existing file."
     ), annotations=ToolAnnotations(title="Highlight", readOnlyHint=True,
                                    idempotentHint=True, openWorldHint=False))
@@ -189,8 +226,9 @@ def register(mcp) -> None:
 
     @mcp.tool(name="diff", description=(
         "Pixel-level diff between a baseline screenshot and another image "
-        "(or a fresh capture when compare is omitted). Returns diff stats and "
-        "the diff image."
+        "(or a fresh capture when compare is omitted). Keywords: diff, compare "
+        "images, pixel diff, what changed, visual difference. Returns diff stats "
+        "and the diff image."
     ), annotations=ToolAnnotations(title="Diff", readOnlyHint=True,
                                    idempotentHint=True, openWorldHint=False))
     def _diff(baseline: str, compare: str | None = None,
@@ -200,7 +238,8 @@ def register(mcp) -> None:
 
     @mcp.tool(name="cleanup_screenshots", description=(
         "Delete old/oversized screenshots from the agent-windows data dir "
-        "(~/.agent-windows/screenshots)."
+        "(~/.agent-windows/screenshots). Keywords: cleanup, delete screenshots, "
+        "free disk space, clear images."
     ), annotations=ToolAnnotations(title="Cleanup Screenshots", readOnlyHint=False,
                                    idempotentHint=True, openWorldHint=False))
     def _cleanup_screenshots() -> str:

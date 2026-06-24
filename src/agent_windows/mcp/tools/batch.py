@@ -43,18 +43,20 @@ def register(mcp) -> None:
     _REG = ToolAnnotations
 
     @mcp.tool(name="batch", description=(
-        "Execute multiple daemon commands in one IPC round-trip. commands is a "
-        "list of {\"method\": str, \"params\": dict}. stop_on_error (default "
-        "true) halts on the first error; delay is seconds between commands. "
-        "Nested batch is not allowed."
+        "Execute multiple daemon commands in one IPC round-trip. "
+        "Keywords: batch, multiple commands, sequence, script, run several. "
+        "commands is a list of {\"method\": str, \"params\": dict}. "
+        "stop_on_error (default true) halts on the first error; delay is "
+        "seconds between commands. Nested batch is not allowed."
     ), annotations=_REG(title="Batch", readOnlyHint=False, destructiveHint=True, openWorldHint=False))
     def _batch(commands: list[dict], stop_on_error: bool = True, delay: float = 0.0) -> str:
         return batch_fn(commands=commands, stop_on_error=stop_on_error, delay=delay)
 
     @mcp.tool(name="multi_select", description=(
-        "Click multiple targets in one call. Provide locs=[[x,y],...] OR "
-        "selectors=[\"@e1\",...]. press_ctrl (default true) holds Ctrl so each "
-        "click toggles selection."
+        "Click multiple targets in one call. Keywords: multi select, select "
+        "multiple, several clicks, ctrl-click, multi-select items. Provide "
+        "locs=[[x,y],...] OR selectors=[\"@e1\",...]. press_ctrl (default true) "
+        "holds Ctrl so each click toggles selection."
     ), annotations=_REG(title="Multi Select", readOnlyHint=False, destructiveHint=True, openWorldHint=False))
     def _multi_select(locs: list[list[int]] | None = None,
                       selectors: list[str] | None = None,
@@ -62,8 +64,10 @@ def register(mcp) -> None:
         return multi_select_fn(locs=locs, selectors=selectors, press_ctrl=press_ctrl)
 
     @mcp.tool(name="multi_edit", description=(
-        "Type into multiple fields in one call. Provide locs=[[x,y,text],...] "
-        "OR selectors=[[@eN,text],...]. Each field is clicked, cleared, typed."
+        "Type into multiple fields in one call. Keywords: multi edit, fill form, "
+        "type multiple, batch type, fill several fields. Provide "
+        "locs=[[x,y,text],...] OR selectors=[[@eN,text],...]. Each field is "
+        "clicked, cleared, typed."
     ), annotations=_REG(title="Multi Edit", readOnlyHint=False, destructiveHint=True, openWorldHint=False))
     def _multi_edit(locs: list[list] | None = None,
                     selectors: list[list] | None = None) -> str:

@@ -53,7 +53,8 @@ def register(mcp) -> None:
     @mcp.tool(name="ground", description=(
         "Locate a UI element by natural-language description and return "
         "click-ready coordinates [x, y], confidence, and a marked screenshot. "
-        "Uses the configured vision model (vlm.* in config.toml). "
+        "Keywords: ground, find element, locate, where is, click point, visual "
+        "search. Uses the configured vision model (vlm.* in config.toml). "
         "Set single_pass=True for one API call (~2x faster, lower precision). "
         "Precision is ~±100px; prefer snapshot for named controls."
     ), annotations=ToolAnnotations(title="Ground", readOnlyHint=True,
@@ -63,8 +64,9 @@ def register(mcp) -> None:
 
     @mcp.tool(name="detect", description=(
         "Detect multiple targets matching a description and return a bounding "
-        "box per match (plus a marked screenshot). max_targets caps the count. "
-        "Use ground when you need a single click point."
+        "box per match (plus a marked screenshot). Keywords: detect, find all, "
+        "multiple targets, bounding boxes, count occurrences. max_targets caps "
+        "the count. Use ground when you need a single click point."
     ), annotations=ToolAnnotations(title="Detect", readOnlyHint=True,
                                    idempotentHint=False, openWorldHint=False))
     def _detect(description: str, max_targets: int = 20,
@@ -75,8 +77,10 @@ def register(mcp) -> None:
 
     @mcp.tool(name="ask_vision", description=(
         "Free-form visual Q&A: send a screenshot (or a supplied image) plus a "
-        "prompt to the vision model and return its textual answer. Use for "
-        "understanding icons/states, not for precise coordinates (use ground)."
+        "prompt to the vision model and return its textual answer. Keywords: "
+        "ask vision, image question, what is this, describe, understand icon, "
+        "read chart. Use for understanding icons/states, not for precise "
+        "coordinates (use ground)."
     ), annotations=ToolAnnotations(title="Ask Vision", readOnlyHint=True,
                                    idempotentHint=False, openWorldHint=False))
     def _ask_vision(prompt: str, image: str | None = None,
