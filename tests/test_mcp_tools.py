@@ -121,3 +121,39 @@ def test_element_state_fn_validates_check():
 def test_cleanup_fn_returns_output():
     with patch.object(obs, "_call", return_value={"output": "done"}):
         assert obs.cleanup_screenshots_fn() == "done"
+
+
+import agent_windows.mcp.tools.vision as vis
+
+
+def test_ground_fn_forwards_single_pass_as_bool():
+    with patch.object(vis, "_call", return_value={"output": "g", "screenshot_path": "p"}) as m, \
+         patch("pathlib.Path.read_bytes", return_value=_PNG):
+        vis.ground_fn(description="taskbar", single_pass="true")
+    sent = m.call_args.kwargs
+    assert sent["single_pass"] is True
+    assert sent["description"] == "taskbar"
+
+
+def test_detect_fn_forwards_max_targets_and_image_path():
+    with patch.object(vis, "_call", return_value={"output": "d", "screenshot_path": "p",
+                                                  "count": 2, "targets": []}) as m, \
+         patch("pathlib.Path.read_bytes", return_value=_PNG):
+        out = vis.detect_fn(description="icons", max_targets=5, image=None, model=None, output=None)
+    # *_fn forwards every kwarg to _call (the *_fn layer doesn't strip None —
+    # _call itself does, and here _call is mocked). Assert method + the args
+    # the test cares about; image/model/output are passed through as None.
+    assert m.call_args.args == ("detect",)
+    assert m.call_args.kwargs["description"] == "icons"
+    assert m.call_args.kwargs["max_targets"] == 5
+    assert isinstance(out, list)
+
+
+def test_ask_vision_fn_requires_prompt():
+    with pytest.raises(ValueError):
+        vis.ask_vision_fn(prompt="")
+
+
+def test_ground_fn_requires_description():
+    with pytest.raises(ValueError):
+        vis.ground_fn(description="")
