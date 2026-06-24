@@ -16,6 +16,7 @@ request must carry `Authorization: Bearer <key>`, enforced by an ASGI
 middleware so an unauthenticated bind to a non-loopback address is rejected.
 """
 import asyncio
+import ipaddress
 import logging
 import secrets
 from typing import Any
@@ -39,6 +40,26 @@ INSTRUCTIONS = (
 )
 
 VALID_TRANSPORTS = ("stdio", "sse", "streamable-http")
+
+
+def is_loopback_host(host: str) -> bool:
+    """Return True if ``host`` refers only to a loopback interface.
+
+    The footgun guard for bare non-loopback HTTP binds: ``serve`` refuses to
+    bind an HTTP transport to a non-loopback address unless an auth_key is set
+    or the user explicitly opts in with --allow-insecure-remote. This prevents
+    accidental LAN exposure when someone runs ``--host 0.0.0.0`` with no
+    auth_key configured — a bare bind there exposes the full MCP toolset
+    (screenshots, shell, registry, file I/O) to anyone who can reach the port.
+    A hostname that isn't an IP literal (e.g. ``myhost``) is treated as
+    non-loopback, matching the reference implementation.
+    """
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 class AuthKeyMiddleware:

@@ -164,6 +164,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "auth_key": "",
         "ssl_certfile": "",
         "ssl_keyfile": "",
+        # Opt-in to allow an unauthenticated HTTP bind to a non-loopback host
+        # (the footgun guard refuses this unless set). Default off — a bare
+        # non-loopback bind with no auth_key is insecure. (TODO #1)
+        "allow_insecure_remote": False,
     },
 }
 

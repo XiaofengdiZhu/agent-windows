@@ -223,6 +223,88 @@ def test_mcp_serve_rejects_out_of_range_port():
 
 
 
+# ── is_loopback_host + non-loopback bind guard ──────────────────────────
+
+def test_is_loopback_host_recognizes_loopback_addresses():
+    from agent_windows.mcp.server import is_loopback_host
+    assert is_loopback_host("localhost") is True
+    assert is_loopback_host("LOCALHOST") is True          # case-insensitive
+    assert is_loopback_host("127.0.0.1") is True
+    assert is_loopback_host("::1") is True
+
+
+def test_is_loopback_host_rejects_non_loopback():
+    from agent_windows.mcp.server import is_loopback_host
+    assert is_loopback_host("0.0.0.0") is False
+    assert is_loopback_host("192.168.1.5") is False
+    assert is_loopback_host("myhost") is False            # non-IP string → False
+
+
+def test_mcp_serve_refuses_bare_non_loopback_http_bind():
+    """Non-loopback host, no auth_key, no flag → serve aborts before run()."""
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+
+    runner = CliRunner()
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config", return_value={}):
+        result = runner.invoke(mcp_cmd.app,
+                               ["serve", "--transport", "streamable-http",
+                                "--host", "0.0.0.0", "--port", "9000"])
+    assert result.exit_code != 0
+    out = result.output.lower()
+    assert "refus" in out or "insecure" in out
+    mock_run.assert_not_called()
+
+
+def test_mcp_serve_non_loopback_with_auth_key_proceeds():
+    """auth_key set → non-loopback bind is allowed."""
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+
+    runner = CliRunner()
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config",
+                      return_value={"mcp": {"auth_key": "k"}}):
+        result = runner.invoke(mcp_cmd.app,
+                               ["serve", "--transport", "streamable-http",
+                                "--host", "0.0.0.0", "--port", "9000"])
+    assert result.exit_code == 0, result.output
+    mock_run.assert_called_once()
+
+
+def test_mcp_serve_non_loopback_with_allow_insecure_remote_proceeds_with_warning():
+    """--allow-insecure-remote opts in and prints a loud WARNING."""
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+
+    runner = CliRunner()
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config", return_value={}):
+        result = runner.invoke(mcp_cmd.app,
+                               ["serve", "--transport", "streamable-http",
+                                "--host", "0.0.0.0", "--port", "9000",
+                                "--allow-insecure-remote"])
+    assert result.exit_code == 0, result.output
+    mock_run.assert_called_once()
+    assert "warning" in result.output.lower()
+
+
+def test_mcp_serve_loopback_host_needs_no_auth():
+    """127.0.0.1 with no auth_key is fine — loopback only."""
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+
+    runner = CliRunner()
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config", return_value={}):
+        result = runner.invoke(mcp_cmd.app,
+                               ["serve", "--transport", "streamable-http",
+                                "--host", "127.0.0.1", "--port", "9000"])
+    assert result.exit_code == 0, result.output
+    mock_run.assert_called_once()
+
+
 # ── `mcp auth` ──────────────────────────────────────────────────────────
 
 def test_mcp_auth_generates_key_and_writes_config(tmp_path, monkeypatch):

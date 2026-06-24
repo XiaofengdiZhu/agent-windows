@@ -16,6 +16,7 @@ from pathlib import Path
 
 import typer
 
+from agent_windows.mcp.server import is_loopback_host
 from agent_windows.utils.config import load_config
 
 app = typer.Typer(help="MCP server", no_args_is_help=True)
@@ -31,6 +32,9 @@ def serve(
     port: int = typer.Option(
         None, "--port", help="Port to bind (sse/streamable-http)"),
     debug: bool = typer.Option(False, "--debug", help="Verbose logging"),
+    allow_insecure_remote: bool = typer.Option(
+        False, "--allow-insecure-remote",
+        help="Allow an unauthenticated HTTP bind to a non-loopback host (NOT recommended)"),
 ) -> None:
     """Run the agent-windows MCP server.
 
@@ -56,6 +60,33 @@ def serve(
         auth_key = cfg.get("auth_key") or None
         ssl_certfile = cfg.get("ssl_certfile") or None
         ssl_keyfile = cfg.get("ssl_keyfile") or None
+
+    # A bool flag needs a config fallback like host/port: the command-line flag
+    # wins; otherwise [mcp] allow_insecure_remote (default false).
+    allow_insecure_remote = allow_insecure_remote or bool(
+        cfg.get("allow_insecure_remote", False))
+
+    # Footgun guard: refuse a bare non-loopback HTTP bind. Binding 0.0.0.0 (or
+    # any LAN/private address) with no auth_key exposes the full MCP toolset —
+    # screenshots, shell, registry, file I/O — to anyone who can reach the port.
+    # Require either a bearer token (set via `mcp auth`) or an explicit
+    # --allow-insecure-remote opt-in. stdio is exempt (local IPC, no network
+    # surface). OAuth is not in this build, so the only remedies are auth_key or
+    # the explicit opt-in flag.
+    if (transport != "stdio"
+            and not is_loopback_host(host)
+            and not auth_key
+            and not allow_insecure_remote):
+        raise typer.BadParameter(
+            f"Refusing to bind HTTP transport to {host!r} without authentication.\n"
+            "  Run `agent-windows mcp auth` to set a bearer token (auth_key),\n"
+            "  or pass --allow-insecure-remote to allow unauthenticated access (NOT recommended).",
+            param_hint="--host")
+
+    if allow_insecure_remote and transport != "stdio":
+        typer.echo(
+            f"WARNING: binding HTTP transport to {host!r} with NO authentication. "
+            "Anyone who can reach this port has full desktop control. NOT recommended.")
 
     from agent_windows.mcp import run
     run(transport=transport, host=host, port=port, debug=debug,
