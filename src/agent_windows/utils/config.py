@@ -171,9 +171,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "security": {
         # HTTP-transport access controls (sse / streamable-http). Both default
-        # empty = no restriction beyond the auth_key / loopback guard. Set via
-        # `config set security.ip_allowlist ...` (a TOML array of strings) or the
-        # `--ip-allowlist` / `--cors-origins` flags. (TODO #2/#3)
+        # empty = no restriction beyond the auth_key / loopback guard. ip_allowlist
+        # is set via `config set security.ip_allowlist` (a TOML array of strings)
+        # or the `--ip-allowlist` flag (TODO #2). cors_origins is reserved for a
+        # later task (TODO #3).
         "ip_allowlist": [],
         "cors_origins": [],
     },

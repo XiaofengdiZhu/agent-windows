@@ -11,32 +11,46 @@ import pytest
 # fake downstream app + a send-capture, exercising the pass-through / 401
 # branches and the scheme/prefix handling.
 
-def _run_middleware(scope, auth_key):
-    """Drive AuthKeyMiddleware with one scope; return (downstream_called, sent)."""
+def _drive(middleware_factory, scope):
+    """Drive a raw-ASGI middleware with one scope; return (downstream_called, sent).
+
+    Shared harness for the security middlewares. ``middleware_factory`` receives
+    the fake downstream app and returns the middleware instance. A tracking app
+    records whether the middleware called through; a send-capture collects the
+    response messages it emits (e.g. the 401/403 start+body).
+    """
     import asyncio
-    from agent_windows.mcp.server import AuthKeyMiddleware
 
     downstream = {"called": False}
 
-    async def app(scope, receive, send):
+    async def tracking_app(scope, receive, send):
         downstream["called"] = True
 
+    mw = middleware_factory(tracking_app)
     sent = []
 
     async def send(msg):
         sent.append(msg)
 
-    mw = AuthKeyMiddleware(app, auth_key)
     asyncio.run(mw(scope, receive=lambda: None, send=send))
     return downstream["called"], sent
 
 
-def _http_scope(headers=None):
-    """Build a minimal ASGI http scope with the given headers."""
+def _run_middleware(scope, auth_key):
+    """Drive AuthKeyMiddleware with one scope; return (downstream_called, sent)."""
+    from agent_windows.mcp.server import AuthKeyMiddleware
+    return _drive(lambda app: AuthKeyMiddleware(app, auth_key), scope)
+
+
+def _http_scope(headers=None, client=None, path="/mcp"):
+    """Build a minimal ASGI http scope with the given headers/client/path."""
     raw = []
     for k, v in (headers or {}).items():
         raw.append([k.encode("latin-1"), v.encode("latin-1")])
-    return {"type": "http", "headers": raw}
+    scope = {"type": "http", "headers": raw, "path": path}
+    if client is not None:
+        scope["client"] = client
+    return scope
 
 
 def test_auth_middleware_passes_valid_bearer_token():
@@ -338,10 +352,11 @@ def test_parse_ip_allowlist_accepts_ips_cidrs_ipv4_ipv6():
 
 
 def test_parse_ip_allowlist_ignores_blank_strips_whitespace():
+    import ipaddress
     from agent_windows.mcp.server import parse_ip_allowlist
 
     assert parse_ip_allowlist(["  10.0.0.0/8  ", "", "  "]) == [
-        __import__("ipaddress").ip_network("10.0.0.0/8")]
+        ipaddress.ip_network("10.0.0.0/8")]
 
 
 def test_parse_ip_allowlist_raises_naming_bad_entries():
@@ -354,42 +369,21 @@ def test_parse_ip_allowlist_raises_naming_bad_entries():
 
 def _run_ip_middleware(scope, allowlist):
     """Drive IPAllowlistMiddleware; return (downstream_called, sent)."""
-    import asyncio
     from agent_windows.mcp.server import IPAllowlistMiddleware, parse_ip_allowlist
-
-    downstream = {"called": False}
-
-    async def app(scope, receive, send):
-        downstream["called"] = True
-
-    sent = []
-
-    async def send(msg):
-        sent.append(msg)
-
     nets = parse_ip_allowlist(allowlist)
-    mw = IPAllowlistMiddleware(app, allowlist=nets)
-    asyncio.run(mw(scope, receive=lambda: None, send=send))
-    return downstream["called"], sent
-
-
-def _client_scope(client, path="/mcp", headers=None):
-    raw = []
-    for k, v in (headers or {}).items():
-        raw.append([k.encode("latin-1"), v.encode("latin-1")])
-    return {"type": "http", "headers": raw, "client": client, "path": path}
+    return _drive(lambda app: IPAllowlistMiddleware(app, allowlist=nets), scope)
 
 
 def test_ip_allowlist_middleware_passes_allowed_client():
     called, sent = _run_ip_middleware(
-        _client_scope(("192.168.1.5", 12345)), ["192.168.1.0/24"])
+        _http_scope(client=("192.168.1.5", 12345)), ["192.168.1.0/24"])
     assert called is True
     assert sent == []
 
 
 def test_ip_allowlist_middleware_rejects_disallowed_client():
     called, sent = _run_ip_middleware(
-        _client_scope(("8.8.8.8", 12345)), ["192.168.1.0/24"])
+        _http_scope(client=("8.8.8.8", 12345)), ["192.168.1.0/24"])
     assert called is False
     assert sent[0]["status"] == 403
 
@@ -397,13 +391,13 @@ def test_ip_allowlist_middleware_rejects_disallowed_client():
 def test_ip_allowlist_middleware_exempts_health():
     # /health must always pass regardless of source (liveness probes).
     called, _ = _run_ip_middleware(
-        _client_scope(("8.8.8.8", 12345), path="/health"), ["192.168.1.0/24"])
+        _http_scope(client=("8.8.8.8", 12345), path="/health"), ["192.168.1.0/24"])
     assert called is True
 
 
 def test_ip_allowlist_middleware_rejects_missing_client():
     called, sent = _run_ip_middleware(
-        _client_scope(None), ["192.168.1.0/24"])
+        _http_scope(), ["192.168.1.0/24"])
     assert called is False
     assert sent[0]["status"] == 403
 
@@ -420,24 +414,25 @@ def test_ip_allowlist_middleware_passes_lifespan():
 
 def test_run_http_forwards_ip_allowlist_as_middleware():
     from agent_windows.mcp import server
+    from agent_windows.mcp.server import IPAllowlistMiddleware, AuthKeyMiddleware
     import ipaddress
     fake = MagicMock()
     nets = [ipaddress.ip_network("10.0.0.0/8")]
+    # Pass both ip_allowlist and auth_key so both middlewares are assembled and
+    # we can assert ordering: IPAllowlistMiddleware sits outermost (first), so a
+    # blocked IP never reaches the auth challenge.
     with patch.object(server, "build_server", return_value=fake):
         server.run(transport="streamable-http", host="127.0.0.1", port=9000,
-                   ip_allowlist=nets)
+                   auth_key="k", ip_allowlist=nets)
     kwargs = fake.run.call_args.kwargs
-    assert "middleware" in kwargs and kwargs["middleware"]
-    # IPAllowlistMiddleware is present (before AuthKeyMiddleware)
-    from starlette.middleware import Middleware
     kinds = [mw.cls for mw in kwargs["middleware"]]
-    from agent_windows.mcp.server import IPAllowlistMiddleware
-    assert IPAllowlistMiddleware in kinds
+    assert kinds == [IPAllowlistMiddleware, AuthKeyMiddleware]
 
 
 def test_mcp_serve_forwards_ip_allowlist_flag():
     from typer.testing import CliRunner
     from agent_windows.cli.commands import mcp_cmd
+    import ipaddress
 
     runner = CliRunner()
     with patch("agent_windows.mcp.run") as mock_run, \
@@ -447,9 +442,10 @@ def test_mcp_serve_forwards_ip_allowlist_flag():
                                 "--host", "127.0.0.1", "--port", "9000",
                                 "--ip-allowlist", "10.0.0.0/8,192.168.1.5"])
     assert result.exit_code == 0, result.output
-    kwargs = mock_run.call_args.kwargs
-    assert kwargs["ip_allowlist"] is not None
-    assert len(kwargs["ip_allowlist"]) == 2
+    nets = mock_run.call_args.kwargs["ip_allowlist"]
+    # value-level check: bare IP became /32, CIDR passed through
+    assert nets == [ipaddress.ip_network("10.0.0.0/8"),
+                    ipaddress.ip_network("192.168.1.5/32")]
 
 
 def test_mcp_serve_rejects_invalid_ip_allowlist():
@@ -471,6 +467,7 @@ def test_mcp_serve_rejects_invalid_ip_allowlist():
 def test_mcp_serve_reads_ip_allowlist_from_config():
     from typer.testing import CliRunner
     from agent_windows.cli.commands import mcp_cmd
+    import ipaddress
 
     runner = CliRunner()
     with patch("agent_windows.mcp.run") as mock_run, \
@@ -480,7 +477,72 @@ def test_mcp_serve_reads_ip_allowlist_from_config():
                                ["serve", "--transport", "streamable-http",
                                 "--host", "127.0.0.1", "--port", "9000"])
     assert result.exit_code == 0, result.output
-    assert mock_run.call_args.kwargs["ip_allowlist"] is not None
+    assert mock_run.call_args.kwargs["ip_allowlist"] == [
+        ipaddress.ip_network("10.0.0.0/8")]
+
+
+def test_mcp_serve_reads_ip_allowlist_from_env(monkeypatch):
+    """AGENT_WINDOWS_IP_ALLOWLIST sits between the flag and config in precedence."""
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+    import ipaddress
+
+    monkeypatch.setenv("AGENT_WINDOWS_IP_ALLOWLIST", "172.16.0.0/12")
+    runner = CliRunner()
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config",
+                      return_value={"security": {"ip_allowlist": ["10.0.0.0/8"]}}):
+        result = runner.invoke(mcp_cmd.app,
+                               ["serve", "--transport", "streamable-http",
+                                "--host", "127.0.0.1", "--port", "9000"])
+    assert result.exit_code == 0, result.output
+    # env wins over config
+    assert mock_run.call_args.kwargs["ip_allowlist"] == [
+        ipaddress.ip_network("172.16.0.0/12")]
+
+
+def test_mcp_serve_ip_allowlist_flag_overrides_env_and_config(monkeypatch):
+    """The --ip-allowlist flag takes precedence over env and config."""
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+    import ipaddress
+
+    monkeypatch.setenv("AGENT_WINDOWS_IP_ALLOWLIST", "172.16.0.0/12")
+    runner = CliRunner()
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config",
+                      return_value={"security": {"ip_allowlist": ["10.0.0.0/8"]}}):
+        result = runner.invoke(mcp_cmd.app,
+                               ["serve", "--transport", "streamable-http",
+                                "--host", "127.0.0.1", "--port", "9000",
+                                "--ip-allowlist", "192.168.0.0/16"])
+    assert result.exit_code == 0, result.output
+    assert mock_run.call_args.kwargs["ip_allowlist"] == [
+        ipaddress.ip_network("192.168.0.0/16")]
+
+
+def test_mcp_serve_empty_ip_allowlist_flag_falls_through_to_config(monkeypatch):
+    """An empty --ip-allowlist value is treated as unset and falls to config.
+
+    Pinning the chosen behavior: empty does not mean "disable" — it means "no
+    value here, consult the next-lower precedence layer."
+    """
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+    import ipaddress
+
+    monkeypatch.delenv("AGENT_WINDOWS_IP_ALLOWLIST", raising=False)
+    runner = CliRunner()
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config",
+                      return_value={"security": {"ip_allowlist": ["10.0.0.0/8"]}}):
+        result = runner.invoke(mcp_cmd.app,
+                               ["serve", "--transport", "streamable-http",
+                                "--host", "127.0.0.1", "--port", "9000",
+                                "--ip-allowlist", ""])
+    assert result.exit_code == 0, result.output
+    assert mock_run.call_args.kwargs["ip_allowlist"] == [
+        ipaddress.ip_network("10.0.0.0/8")]
 
 
 # ── `mcp auth` ──────────────────────────────────────────────────────────
