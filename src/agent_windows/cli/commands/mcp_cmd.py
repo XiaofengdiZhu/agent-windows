@@ -95,6 +95,14 @@ def serve(
         help="Run streamable-http without Mcp-Session-Id / per-connection state "
              "(survives server restarts, scales behind a load balancer). "
              "Streamable-http only. Env: AGENT_WINDOWS_STATELESS_HTTP"),
+    oauth_client_id: str = typer.Option(
+        None, "--oauth-client-id",
+        help="OAuth client ID (pre-provisioned confidential client). "
+             "Requires --oauth-client-secret. Env: AGENT_WINDOWS_OAUTH_CLIENT_ID"),
+    oauth_client_secret: str = typer.Option(
+        None, "--oauth-client-secret",
+        help="OAuth client secret. Requires --oauth-client-id. "
+             "Env: AGENT_WINDOWS_OAUTH_CLIENT_SECRET"),
 ) -> None:
     """Run the agent-windows MCP server.
 
@@ -125,6 +133,8 @@ def serve(
         ssl_keyfile = None
         parsed_allowlist = None
         parsed_cors = None
+        oauth_client_id = None
+        oauth_client_secret = None
     else:
         auth_key = cfg.get("auth_key") or None
         ssl_certfile = cfg.get("ssl_certfile") or None
@@ -150,6 +160,17 @@ def serve(
             cfg_cors = [o for o in _as_list(security_cfg.get("cors_origins")) if o]
             parsed_cors = cfg_cors or None
 
+        # OAuth precedence: --oauth-client-id flag > AGENT_WINDOWS_OAUTH_CLIENT_ID
+        # env > [security] oauth_client_id config. Secret mirrors it. Both must
+        # be set together (mutual-exclusion checked below).
+        oauth_client_id = oauth_client_id or os.environ.get("AGENT_WINDOWS_OAUTH_CLIENT_ID")
+        if not oauth_client_id:
+            oauth_client_id = security_cfg.get("oauth_client_id") or None
+        oauth_client_secret = oauth_client_secret or os.environ.get(
+            "AGENT_WINDOWS_OAUTH_CLIENT_SECRET")
+        if not oauth_client_secret:
+            oauth_client_secret = security_cfg.get("oauth_client_secret") or None
+
     # A bool flag needs a config fallback like host/port: the command-line flag
     # wins; otherwise AGENT_WINDOWS_ALLOW_INSECURE_REMOTE env > [mcp]
     # allow_insecure_remote config (default false).
@@ -161,17 +182,19 @@ def serve(
     # Footgun guard: refuse a bare non-loopback HTTP bind. Binding 0.0.0.0 (or
     # any LAN/private address) with no auth_key exposes the full MCP toolset —
     # screenshots, shell, registry, file I/O — to anyone who can reach the port.
-    # Require either a bearer token (set via `mcp auth`) or an explicit
-    # --allow-insecure-remote opt-in. stdio is exempt (local IPC, no network
-    # surface). OAuth is not in this build, so the only remedies are auth_key or
-    # the explicit opt-in flag.
+    # Require either a bearer token (set via `mcp auth`), a configured OAuth
+    # client, or an explicit --allow-insecure-remote opt-in. stdio is exempt
+    # (local IPC, no network surface).
+    configured_oauth = bool(oauth_client_id and oauth_client_secret)
     if (transport != "stdio"
             and not is_loopback_host(host)
             and not auth_key
+            and not configured_oauth
             and not allow_insecure_remote):
         raise typer.BadParameter(
             f"Refusing to bind HTTP transport to {host!r} without authentication.\n"
             "  Run `agent-windows mcp auth` to set a bearer token (auth_key),\n"
+            "  or configure OAuth (--oauth-client-id/--oauth-client-secret),\n"
             "  or pass --allow-insecure-remote to allow unauthenticated access (NOT recommended).",
             param_hint="--host")
 
@@ -184,6 +207,13 @@ def serve(
             f"WARNING: binding HTTP transport to {host!r} with NO authentication. "
             "Anyone who can reach this port has full desktop control. NOT recommended.",
             err=True)
+
+    # OAuth client id/secret must be set together (one without the other is a
+    # misconfiguration, not a partial setup).
+    if bool(oauth_client_id) != bool(oauth_client_secret):
+        raise typer.BadParameter(
+            "OAuth requires both --oauth-client-id and --oauth-client-secret "
+            "(provide both or neither).", param_hint="--oauth-client-id")
 
     # Tool filtering (applies to all transports). Precedence: flag > env > config.
     # --tools is an explicit whitelist and overrides --exclude-tools when both set.
@@ -216,7 +246,9 @@ def serve(
         auth_key=auth_key, ssl_certfile=ssl_certfile, ssl_keyfile=ssl_keyfile,
         ip_allowlist=parsed_allowlist, cors_origins=parsed_cors,
         tools=parsed_tools, exclude_tools=parsed_exclude,
-        stateless_http=parsed_stateless)
+        stateless_http=parsed_stateless,
+        oauth_client_id=oauth_client_id,
+        oauth_client_secret=oauth_client_secret)
 
 
 # ── `mcp auth` ──────────────────────────────────────────────────────────

@@ -41,6 +41,19 @@ INSTRUCTIONS = (
 
 VALID_TRANSPORTS = ("stdio", "sse", "streamable-http")
 
+# Paths reachable before authentication. /health is a liveness probe; the OAuth
+# endpoints must be reachable so a client can discover metadata and start the
+# flow unauthenticated (the protected resources /mcp, tools, etc. are still
+# gated). Shared by AuthKeyMiddleware, OAuthOnlyMiddleware and
+# IPAllowlistMiddleware so the three never disagree about what's public.
+_PUBLIC_PATHS = frozenset({
+    "/health",
+    "/.well-known/oauth-authorization-server",
+    "/oauth/register",
+    "/oauth/authorize",
+    "/oauth/token",
+})
+
 
 def is_loopback_host(host: str) -> bool:
     """Return True if ``host`` refers only to a loopback interface.
@@ -67,12 +80,18 @@ class AuthKeyMiddleware:
 
     Only applied to HTTP transports when an auth_key is configured. A request
     with ``Authorization: Bearer <key>`` matching the configured key is passed
-    through; everything else gets 401. Mirrors Windows-MCP's AuthKeyMiddleware.
+    through; otherwise, when an ``oauth_validator`` is provided, a valid OAuth
+    access token is also accepted as a fallback. Paths in ``_PUBLIC_PATHS``
+    (``/health`` and the OAuth endpoints) are always reachable so a client can
+    discover/initiate the OAuth flow unauthenticated. Everything else gets 401.
+    Mirrors Windows-MCP's AuthKeyMiddleware.
     """
 
-    def __init__(self, app: Any, auth_key: str) -> None:
+    def __init__(self, app: Any, *, auth_key: str,
+                 oauth_validator: Any = None) -> None:
         self.app = app
         self._expected = auth_key
+        self._oauth_validator = oauth_validator
 
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
         if scope["type"] not in ("http", "lifespan"):
@@ -80,6 +99,11 @@ class AuthKeyMiddleware:
             return
         # Lifespan startup must pass through unauthenticated (no request headers).
         if scope["type"] == "lifespan":
+            await self.app(scope, receive, send)
+            return
+        # Public paths (OAuth endpoints + /health) are reachable before auth:
+        # a client must be able to discover metadata and start the flow.
+        if scope.get("path", "") in _PUBLIC_PATHS:
             await self.app(scope, receive, send)
             return
         headers = {k.decode("latin-1").lower(): v.decode("latin-1")
@@ -92,6 +116,45 @@ class AuthKeyMiddleware:
         # the same way a wrong token does — 401.
         token = auth[7:] if auth[:7].lower() == "bearer " else ""
         if token and secrets.compare_digest(token, self._expected):
+            await self.app(scope, receive, send)
+            return
+        if token and self._oauth_validator and self._oauth_validator(token):
+            await self.app(scope, receive, send)
+            return
+        await send({"type": "http.response.start", "status": 401,
+                    "headers": [[b"content-length", b"0"],
+                                [b"www-authenticate", b"Bearer"]]})
+        await send({"type": "http.response.body", "body": b"Unauthorized"})
+
+
+class OAuthOnlyMiddleware:
+    """ASGI middleware: authenticate via OAuth Bearer tokens only.
+
+    Used when OAuth is configured but no static ``auth_key`` is. A request
+    with a valid (non-expired) OAuth access token — as decided by
+    ``oauth_validator`` — passes through; everything else gets 401. Paths in
+    ``_PUBLIC_PATHS`` are reachable without a token so the OAuth flow can run.
+    """
+
+    def __init__(self, app: Any, *, oauth_validator: Any) -> None:
+        self.app = app
+        self._oauth_validator = oauth_validator
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope["type"] not in ("http", "lifespan"):
+            await self.app(scope, receive, send)
+            return
+        if scope["type"] == "lifespan":
+            await self.app(scope, receive, send)
+            return
+        if scope.get("path", "") in _PUBLIC_PATHS:
+            await self.app(scope, receive, send)
+            return
+        headers = {k.decode("latin-1").lower(): v.decode("latin-1")
+                   for k, v in scope.get("headers", [])}
+        auth = headers.get("authorization", "")
+        token = auth[7:] if auth[:7].lower() == "bearer " else ""
+        if token and self._oauth_validator(token):
             await self.app(scope, receive, send)
             return
         await send({"type": "http.response.start", "status": 401,
@@ -155,9 +218,11 @@ class IPAllowlistMiddleware:
         if scope["type"] == "lifespan":
             await self.app(scope, receive, send)
             return
-        # /health is a liveness probe — always reachable so monitors work.
-        path = scope.get("path", "")
-        if path == "/health":
+        # Public paths (health probe + OAuth endpoints) are always reachable:
+        # health checks must work regardless of source, and OAuth endpoints
+        # must be reachable for a remote client so OAuth + IP-allowlist can
+        # coexist (the protected resources /mcp, tools, etc. are still gated).
+        if scope.get("path", "") in _PUBLIC_PATHS:
             await self.app(scope, receive, send)
             return
         client = scope.get("client")
@@ -320,6 +385,8 @@ def run(
     tools: list[str] | None = None,
     exclude_tools: list[str] | None = None,
     stateless_http: bool = False,
+    oauth_client_id: str | None = None,
+    oauth_client_secret: str | None = None,
 ) -> None:
     """Run the MCP server on the given transport.
 
@@ -339,6 +406,11 @@ def run(
     per-connection session state, so a reconnecting client survives a server
     restart and the server scales behind a load balancer; only meaningful for
     streamable-http, ignored otherwise.
+    oauth_client_id / oauth_client_secret (when both set) enable the OAuth
+    2.0 authorization-code + PKCE flow on HTTP transports: the 4 OAuth
+    endpoints are mounted and an OAuth token becomes a valid credential
+    (see OAuthOnlyMiddleware, or AuthKeyMiddleware's oauth_validator
+    fallback when auth_key is also set). Ignored for stdio.
     """
     if transport not in VALID_TRANSPORTS:
         raise ValueError(
@@ -366,6 +438,24 @@ def run(
 
     # HTTP transport: assemble middleware + TLS config.
     from starlette.middleware import Middleware
+
+    # OAuth (HTTP only): mount the 4 endpoints and build a token validator
+    # used as an auth fallback. No persistence — the store lives in this
+    # process and is lost on restart (clients re-authenticate).
+    oauth_validator = None
+    if oauth_client_id and oauth_client_secret:
+        from agent_windows.mcp.oauth import (
+            OAuthStore, build_oauth_routes, validate_oauth_token,
+        )
+        _oauth_store = OAuthStore()
+        scheme = "https" if (ssl_certfile and ssl_keyfile) else "http"
+        _issuer = f"{scheme}://{host}:{port}"
+        for path, (handler, methods) in build_oauth_routes(
+            _oauth_store, _issuer, oauth_client_id, oauth_client_secret,
+        ).items():
+            mcp.custom_route(path, methods=methods)(handler)
+        oauth_validator = lambda tok: validate_oauth_token(_oauth_store, tok)  # noqa: E731
+
     middleware: list = []
     # OptionsMiddleware is always present: with an empty allowlist (the default)
     # it returns a bare 200 to preflight with no CORS headers, so Same-Origin
@@ -390,7 +480,10 @@ def run(
     if ip_allowlist:
         middleware.append(Middleware(IPAllowlistMiddleware, allowlist=ip_allowlist))
     if auth_key:
-        middleware.append(Middleware(AuthKeyMiddleware, auth_key=auth_key))
+        middleware.append(Middleware(
+            AuthKeyMiddleware, auth_key=auth_key, oauth_validator=oauth_validator))
+    elif oauth_validator:
+        middleware.append(Middleware(OAuthOnlyMiddleware, oauth_validator=oauth_validator))
     uvicorn_config: dict = {}
     if ssl_certfile and ssl_keyfile:
         uvicorn_config["ssl_certfile"] = ssl_certfile

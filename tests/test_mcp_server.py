@@ -39,7 +39,7 @@ def _drive(middleware_factory, scope):
 def _run_middleware(scope, auth_key):
     """Drive AuthKeyMiddleware with one scope; return (downstream_called, sent)."""
     from agent_windows.mcp.server import AuthKeyMiddleware
-    return _drive(lambda app: AuthKeyMiddleware(app, auth_key), scope)
+    return _drive(lambda app: AuthKeyMiddleware(app, auth_key=auth_key), scope)
 
 
 def _http_scope(headers=None, client=None, path="/mcp"):
@@ -189,7 +189,8 @@ def test_mcp_serve_delegates_explicit_flags_overriding_config():
                                      port=9000, debug=True,
                                      auth_key="cfgkey", ssl_certfile=None, ssl_keyfile=None,
                                      ip_allowlist=None, cors_origins=None,
-                                     tools=None, exclude_tools=None, stateless_http=False)
+                                     tools=None, exclude_tools=None, stateless_http=False,
+                                     oauth_client_id=None, oauth_client_secret=None)
 
 
 def test_mcp_serve_defaults_come_from_config():
@@ -209,7 +210,8 @@ def test_mcp_serve_defaults_come_from_config():
                                      port=7000, debug=False, auth_key="k",
                                      ssl_certfile="c.pem", ssl_keyfile="k.pem",
                                      ip_allowlist=None, cors_origins=None,
-                                     tools=None, exclude_tools=None, stateless_http=False)
+                                     tools=None, exclude_tools=None, stateless_http=False,
+                                     oauth_client_id=None, oauth_client_secret=None)
 
 
 def test_mcp_serve_stdio_strips_auth_and_ssl():
@@ -227,7 +229,8 @@ def test_mcp_serve_stdio_strips_auth_and_ssl():
                                      port=8000, debug=False,
                                      auth_key=None, ssl_certfile=None, ssl_keyfile=None,
                                      ip_allowlist=None, cors_origins=None,
-                                     tools=None, exclude_tools=None, stateless_http=False)
+                                     tools=None, exclude_tools=None, stateless_http=False,
+                                     oauth_client_id=None, oauth_client_secret=None)
 
 
 def test_mcp_serve_rejects_out_of_range_port():
@@ -450,6 +453,263 @@ def test_ip_allowlist_middleware_passes_lifespan():
         {"type": "lifespan", "headers": []}, ["192.168.1.0/24"])
     assert called is True
     assert sent == []
+
+
+# ── _PUBLIC_PATHS + IPAllowlist reuse ───────────────────────────────────
+
+
+def test_public_paths_includes_oauth_endpoints():
+    from agent_windows.mcp.server import _PUBLIC_PATHS
+    for p in ("/health", "/.well-known/oauth-authorization-server",
+              "/oauth/register", "/oauth/authorize", "/oauth/token"):
+        assert p in _PUBLIC_PATHS
+
+
+def test_ip_allowlist_middleware_exempts_oauth_endpoints():
+    # OAuth endpoints must be reachable for a remote client even when an IP
+    # allowlist is set, otherwise OAuth + IP-allowlist cannot coexist.
+    for p in ("/oauth/authorize", "/oauth/token", "/oauth/register",
+              "/.well-known/oauth-authorization-server"):
+        called, _ = _run_ip_middleware(
+            _http_scope(client=("8.8.8.8", 12345), path=p), ["192.168.1.0/24"])
+        assert called is True, f"{p} should be exempt from IP allowlist"
+
+
+# ── AuthKeyMiddleware oauth fallback + OAuthOnlyMiddleware ──────────────
+
+
+def _run_auth_middleware_oauth(scope, auth_key, oauth_validator=None):
+    """Drive AuthKeyMiddleware with optional oauth_validator."""
+    from agent_windows.mcp.server import AuthKeyMiddleware
+    return _drive(
+        lambda app: AuthKeyMiddleware(app, auth_key=auth_key,
+                                      oauth_validator=oauth_validator),
+        scope)
+
+
+def test_auth_middleware_oauth_validator_accepts_oauth_token():
+    # static key mismatch but oauth validator says valid → pass through.
+    validator = lambda tok: tok == "oauth-tok"  # noqa: E731
+    called, sent = _run_auth_middleware_oauth(
+        _http_scope({"authorization": "Bearer oauth-tok"}),
+        "static-key", oauth_validator=validator)
+    assert called is True and sent == []
+
+
+def test_auth_middleware_oauth_validator_rejects_when_both_invalid():
+    validator = lambda tok: False  # noqa: E731
+    called, sent = _run_auth_middleware_oauth(
+        _http_scope({"authorization": "Bearer nope"}),
+        "static-key", oauth_validator=validator)
+    assert called is False
+    assert sent[0]["status"] == 401
+
+
+def test_auth_middleware_bypasses_public_paths_without_token():
+    # OAuth endpoints must be reachable before auth (no Authorization header).
+    for p in ("/oauth/authorize", "/oauth/token", "/oauth/register",
+              "/.well-known/oauth-authorization-server", "/health"):
+        called, sent = _run_auth_middleware_oauth(_http_scope(path=p), "k")
+        assert called is True, f"{p} should be a public path"
+        assert sent == []
+
+
+def test_auth_middleware_oauth_validator_none_still_works():
+    # Backward compat: oauth_validator=None (default) → static key still enforced.
+    called, sent = _run_auth_middleware_oauth(
+        _http_scope({"authorization": "Bearer s3cret"}), "s3cret")
+    assert called is True and sent == []
+
+
+def _run_oauth_only_middleware(scope, validator):
+    """Drive OAuthOnlyMiddleware."""
+    from agent_windows.mcp.server import OAuthOnlyMiddleware
+    return _drive(lambda app: OAuthOnlyMiddleware(app, oauth_validator=validator),
+                  scope)
+
+
+def test_oauth_only_middleware_accepts_valid_oauth_token():
+    validator = lambda tok: tok == "good"  # noqa: E731
+    called, sent = _run_oauth_only_middleware(
+        _http_scope({"authorization": "Bearer good"}), validator)
+    assert called is True and sent == []
+
+
+def test_oauth_only_middleware_rejects_missing_or_invalid():
+    validator = lambda tok: tok == "good"  # noqa: E731
+    # missing
+    called, sent = _run_oauth_only_middleware(_http_scope(), validator)
+    assert called is False and sent[0]["status"] == 401
+    # invalid
+    called, sent = _run_oauth_only_middleware(
+        _http_scope({"authorization": "Bearer bad"}), validator)
+    assert called is False and sent[0]["status"] == 401
+
+
+def test_oauth_only_middleware_bypasses_public_paths():
+    validator = lambda tok: False  # noqa: E731
+    for p in ("/oauth/authorize", "/oauth/token", "/health"):
+        called, sent = _run_oauth_only_middleware(_http_scope(path=p), validator)
+        assert called is True, f"{p} should be public"
+
+
+def test_oauth_only_middleware_passes_lifespan_and_ws():
+    validator = lambda tok: True  # noqa: E731
+    called, sent = _run_oauth_only_middleware(
+        {"type": "lifespan", "headers": []}, validator)
+    assert called is True and sent == []
+    called, _ = _run_oauth_only_middleware(
+        {"type": "websocket", "headers": []}, validator)
+    assert called is True
+
+
+# ── run() OAuth wiring ──────────────────────────────────────────────────
+
+
+def test_run_oauth_mounts_routes_and_oauthonly_middleware():
+    from agent_windows.mcp import server
+    from agent_windows.mcp.server import OAuthOnlyMiddleware
+    fake = MagicMock()
+    fake.custom_route = MagicMock()
+    with patch.object(server, "build_server", return_value=fake):
+        server.run(transport="streamable-http", host="localhost", port=8000,
+                   oauth_client_id="cid", oauth_client_secret="sec")
+    # 4 OAuth routes mounted via custom_route
+    paths = {c.args[0] for c in fake.custom_route.call_args_list}
+    assert paths == {"/.well-known/oauth-authorization-server",
+                     "/oauth/register", "/oauth/authorize", "/oauth/token"}
+    kwargs = fake.run.call_args.kwargs
+    kinds = [mw.cls for mw in kwargs["middleware"]]
+    # No auth_key → OAuthOnlyMiddleware is the inner auth layer.
+    assert OAuthOnlyMiddleware in kinds
+
+
+def test_run_oauth_with_auth_key_uses_authkey_with_validator():
+    from agent_windows.mcp import server
+    from agent_windows.mcp.server import AuthKeyMiddleware
+    fake = MagicMock()
+    fake.custom_route = MagicMock()
+    with patch.object(server, "build_server", return_value=fake):
+        server.run(transport="streamable-http", host="localhost", port=8000,
+                   auth_key="k", oauth_client_id="cid", oauth_client_secret="sec")
+    kwargs = fake.run.call_args.kwargs
+    auth_mw = [mw for mw in kwargs["middleware"] if mw.cls is AuthKeyMiddleware]
+    assert len(auth_mw) == 1
+    # oauth_validator was passed (a callable)
+    assert callable(auth_mw[0].kwargs.get("oauth_validator"))
+
+
+def test_run_oauth_routes_not_mounted_when_not_configured():
+    from agent_windows.mcp import server
+    fake = MagicMock()
+    with patch.object(server, "build_server", return_value=fake):
+        server.run(transport="streamable-http", host="localhost", port=8000)
+    # No OAuth configured → no custom_route calls, no OAuthOnlyMiddleware.
+    fake.custom_route.assert_not_called()
+    from agent_windows.mcp.server import OAuthOnlyMiddleware
+    kwargs = fake.run.call_args.kwargs
+    assert OAuthOnlyMiddleware not in [mw.cls for mw in kwargs["middleware"]]
+
+
+def test_run_oauth_ignored_on_stdio():
+    from agent_windows.mcp import server
+    fake = MagicMock()
+    with patch.object(server, "build_server", return_value=fake):
+        server.run(transport="stdio", oauth_client_id="cid",
+                   oauth_client_secret="sec")
+    # stdio never mounts OAuth routes.
+    fake.custom_route.assert_not_called()
+    fake.run.assert_called_once()
+
+
+# ── serve() OAuth flags / precedence / guard ────────────────────────────
+
+
+def test_serve_oauth_flags_forwarded():
+    """--oauth-client-id/--secret are forwarded to run()."""
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config", return_value={}):
+        result = CliRunner().invoke(mcp_cmd.app, [
+            "serve", "--transport", "streamable-http", "--host", "0.0.0.0",
+            "--port", "9000", "--oauth-client-id", "cid",
+            "--oauth-client-secret", "sec"])
+    assert result.exit_code == 0, result.output
+    assert mock_run.call_args.kwargs["oauth_client_id"] == "cid"
+    assert mock_run.call_args.kwargs["oauth_client_secret"] == "sec"
+
+
+def test_serve_oauth_from_config():
+    """[security] oauth_client_id/secret satisfy the guard + forward."""
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config",
+                      return_value={"security": {"oauth_client_id": "cid",
+                                                 "oauth_client_secret": "sec"}}):
+        result = CliRunner().invoke(mcp_cmd.app, [
+            "serve", "--transport", "streamable-http", "--host", "0.0.0.0",
+            "--port", "9000"])
+    assert result.exit_code == 0, result.output
+    assert mock_run.call_args.kwargs["oauth_client_id"] == "cid"
+
+
+def test_serve_oauth_env_precedence(monkeypatch):
+    """AGENT_WINDOWS_OAUTH_CLIENT_ID env satisfies the guard."""
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+    monkeypatch.setenv("AGENT_WINDOWS_OAUTH_CLIENT_ID", "cid")
+    monkeypatch.setenv("AGENT_WINDOWS_OAUTH_CLIENT_SECRET", "sec")
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config", return_value={}):
+        result = CliRunner().invoke(mcp_cmd.app, [
+            "serve", "--transport", "streamable-http", "--host", "0.0.0.0",
+            "--port", "9000"])
+    assert result.exit_code == 0, result.output
+    assert mock_run.call_args.kwargs["oauth_client_id"] == "cid"
+
+
+def test_serve_oauth_mutual_exclusion_rejects_id_only():
+    """Only --oauth-client-id (no secret) → BadParameter, run() not called."""
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config", return_value={}):
+        result = CliRunner().invoke(mcp_cmd.app, [
+            "serve", "--transport", "streamable-http", "--host", "127.0.0.1",
+            "--port", "9000", "--oauth-client-id", "cid"])
+    assert result.exit_code != 0
+    assert "both" in result.output.lower()
+    mock_run.assert_not_called()
+
+
+def test_serve_oauth_satisfies_bare_bind_guard():
+    """Non-loopback bind with OAuth configured does NOT abort."""
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config", return_value={}):
+        result = CliRunner().invoke(mcp_cmd.app, [
+            "serve", "--transport", "streamable-http", "--host", "0.0.0.0",
+            "--port", "9000", "--oauth-client-id", "cid",
+            "--oauth-client-secret", "sec"])
+    assert result.exit_code == 0, result.output
+    mock_run.assert_called_once()
+
+
+def test_serve_oauth_ignored_on_stdio():
+    """stdio transport ignores OAuth flags."""
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config", return_value={}):
+        result = CliRunner().invoke(mcp_cmd.app, [
+            "serve", "--transport", "stdio",
+            "--oauth-client-id", "cid", "--oauth-client-secret", "sec"])
+    assert result.exit_code == 0, result.output
+    assert mock_run.call_args.kwargs["oauth_client_id"] is None
+    assert mock_run.call_args.kwargs["oauth_client_secret"] is None
 
 
 # ── run() / serve() ip_allowlist wiring ────────────────────────────────
