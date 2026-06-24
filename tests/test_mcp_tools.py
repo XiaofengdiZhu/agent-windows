@@ -63,3 +63,61 @@ def test_xy_or_selector_selector_wins():
 
 def test_xy_or_selector_coords():
     assert _call.xy_or_selector([100, 200], None) == {"x": 100, "y": 200}
+
+
+# ── Observation tools: call the plain functions, daemon mocked ─────────
+import base64
+from unittest.mock import patch, MagicMock
+
+import agent_windows.mcp.tools.observation as obs
+
+
+_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
+)
+
+
+def test_screenshot_fn_forwards_params_and_returns_image_list():
+    result = {"output": "## Screenshot\nPath: C:\\s.png", "path": "C:\\s.png",
+              "width": 1, "height": 1, "coord_scale": 1.0}
+    with patch.object(obs, "_call", return_value=result) as m, \
+         patch("pathlib.Path.read_bytes", return_value=_PNG):
+        out = obs.screenshot_fn(output="C:\\s.png", monitor=0, bbox=None, selector=None)
+    # screenshot_fn forwards every kwarg to _call (the *_fn layer doesn't strip
+    # None — _call itself does, and here _call is mocked). Assert the method +
+    # the explicit args; monitor/bbox/selector are passed through verbatim.
+    m.assert_called_once_with("screenshot", output="C:\\s.png", monitor=0,
+                              bbox=None, selector=None)
+    # FastMCP tools that return an image return a list [text, Image]
+    assert isinstance(out, list)
+    assert out[0].startswith("## Screenshot")
+
+
+def test_snapshot_fn_forwards_display():
+    with patch.object(obs, "_call", return_value={"output": "tree"}) as m:
+        out = obs.snapshot_fn(display=[0, 1])
+    m.assert_called_once_with("snapshot", display=[0, 1])
+    assert out == "tree"
+
+
+def test_observe_fn_defaults_to_snapshot_plus_screenshot():
+    with patch.object(obs, "_call", return_value={"output": "x"}) as m:
+        out = obs.observe_fn()
+    sent = m.call_args.kwargs
+    assert sent["snapshot"] is True and sent["screenshot"] is True
+    assert out == "x"
+
+
+def test_get_text_fn_requires_selector():
+    with pytest.raises(ValueError):
+        obs.get_text_fn(selector="")
+
+
+def test_element_state_fn_validates_check():
+    with pytest.raises(ValueError):
+        obs.element_state_fn(selector="@e1", check="bogus")
+
+
+def test_cleanup_fn_returns_output():
+    with patch.object(obs, "_call", return_value={"output": "done"}):
+        assert obs.cleanup_screenshots_fn() == "done"
