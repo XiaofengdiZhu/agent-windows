@@ -353,6 +353,45 @@ class TestSetConfigAllowlist:
         assert cfg.load_config()["shell"]["blacklist"] == ["rm -rf"]
 
 
+class TestSetConfigRoundTrip:
+    """Every value set_config_value writes must round-trip through load_config's
+    strict validation — the read/write consistency contract (spec §6). Locks the
+    one class of regression the feature is meant to prevent."""
+
+    @pytest.mark.parametrize("key,raw,expected", [
+        # int key: "0" -> 0 (not False), "9000" -> 9000
+        ("ipc.read_timeout_seconds", "0", 0),
+        ("mcp.port", "9000", 9000),
+        # bool key
+        ("vlm.enabled", "yes", True),
+        ("vlm.single_pass", "0", False),
+        # float key (int string accepted)
+        ("wait.poll_interval", "1", 1.0),
+        ("wait.poll_interval", "0.25", 0.25),
+        # str key: "true" stays a string, not coerced to bool
+        ("vlm.model", "true", "true"),
+        ("vlm.engine", "openai", "openai"),
+        # list key: scalar wrapped into one-element list
+        ("shell.blacklist", "rm -rf", ["rm -rf"]),
+    ])
+    def test_write_then_load_round_trips(self, key, raw, expected, tmp_path, monkeypatch):
+        import agent_windows.utils.config as cfg
+
+        monkeypatch.setattr(cfg, "get_config_path", lambda: tmp_path / "config.toml")
+        monkeypatch.delenv("AGENT_WINDOWS_VLM_API_KEY", raising=False)
+        cfg._config_cache = None
+
+        cfg.set_config_value(key, raw)
+        # load_config runs _validate_config — if the written type mismatches,
+        # this raises. Then confirm the value came back as the right type.
+        parts = key.split(".")
+        node = cfg.load_config()
+        for part in parts:
+            node = node[part]
+        assert node == expected
+        assert type(node) is type(expected)
+
+
 class TestParseValueTyped:
     """_parse_value_typed parses a CLI string by the key's expected type."""
 
@@ -369,6 +408,18 @@ class TestParseValueTyped:
         from agent_windows.utils.config import _parse_value_typed
         with pytest.raises(ValueError):
             _parse_value_typed("abc", int)
+
+    def test_int_rejects_float_string_with_clear_message(self):
+        # int("1.5") would raise an opaque "invalid literal" — translated to a
+        # clear message so `config set <int-key> 1.5` is self-explanatory.
+        from agent_windows.utils.config import _parse_value_typed
+        with pytest.raises(ValueError, match="expected an integer"):
+            _parse_value_typed("1.5", int)
+
+    def test_float_rejects_non_number_with_clear_message(self):
+        from agent_windows.utils.config import _parse_value_typed
+        with pytest.raises(ValueError, match="expected a float"):
+            _parse_value_typed("not-a-num", float)
 
     def test_bool_variants(self):
         from agent_windows.utils.config import _parse_value_typed

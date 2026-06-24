@@ -4,6 +4,7 @@ Config file: ~/.agent-windows/config.toml
 Data directory: ~/.agent-windows/
 """
 
+import copy
 import logging
 import os
 import threading
@@ -787,7 +788,6 @@ def _deep_merge(base: dict, override: dict) -> dict:
     DEFAULT_CONFIG in place. So we deep-copy base on every merge. The override
     is trusted user data, read-only here.
     """
-    import copy
     result = copy.deepcopy(base)
     for k, v in override.items():
         if k in result and isinstance(result[k], dict) and isinstance(v, dict):
@@ -845,9 +845,18 @@ def _parse_value_typed(value: str, expected_type: type | None) -> Any:
             return False
         raise ValueError(f"expected bool, got {value!r}")
     if expected_type is int:
-        return int(value)  # raises ValueError on non-numeric
+        # int("1.5") raises an opaque "invalid literal" ValueError — translate
+        # to a clear message so `config set <int-key> 1.5` explains the problem
+        # rather than dumping a raw int() traceback.
+        try:
+            return int(value)
+        except ValueError:
+            raise ValueError(f"expected an integer, got {value!r}")
     if expected_type is float:
-        return float(value)
+        try:
+            return float(value)
+        except ValueError:
+            raise ValueError(f"expected a float, got {value!r}")
     if expected_type is list:
         return [value]
     if expected_type is str:
