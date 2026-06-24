@@ -69,3 +69,73 @@ def test_config_show_masks_mcp_auth_key(tmp_path, monkeypatch):
     # the full key must not appear; the masked form (first4...last4) should
     assert "1234567890abcdef" not in result.output
     assert "1234" in result.output and "cdef" in result.output
+
+
+class TestDataclassDefaults:
+    """Dataclass defaults must equal DEFAULT_CONFIG sections byte-for-byte
+    (drift guard — they are the source of truth for both)."""
+
+    def test_server_config_matches(self):
+        from agent_windows.utils.config import ServerConfig
+        s = ServerConfig()
+        d = cfgmod.DEFAULT_CONFIG["mcp"]
+        assert s.transport == d["transport"]
+        assert s.host == d["host"]
+        assert s.port == d["port"]
+        assert s.auth_key == d["auth_key"]
+        assert s.ssl_certfile == d["ssl_certfile"]
+        assert s.ssl_keyfile == d["ssl_keyfile"]
+        assert s.allow_insecure_remote == d["allow_insecure_remote"]
+        assert s.stateless_http == d["stateless_http"]
+
+    def test_security_config_matches(self):
+        from agent_windows.utils.config import SecurityConfig
+        s = SecurityConfig()
+        d = cfgmod.DEFAULT_CONFIG["security"]
+        assert s.ip_allowlist == d["ip_allowlist"]
+        assert s.cors_origins == d["cors_origins"]
+
+    def test_tools_config_matches(self):
+        from agent_windows.utils.config import ToolsConfig
+        t = ToolsConfig()
+        d = cfgmod.DEFAULT_CONFIG["tools"]
+        assert t.include == d["include"]
+        assert t.exclude == d["exclude"]
+
+
+class TestBuildMcpConfig:
+    def test_defaults_from_empty(self):
+        from agent_windows.utils.config import build_mcp_config, ServerConfig
+        view = build_mcp_config({})
+        assert isinstance(view.server, ServerConfig)
+        assert view.server.port == 8000
+        assert view.security.ip_allowlist == []
+        assert view.tools.include == []
+
+    def test_maps_custom_values(self):
+        from agent_windows.utils.config import build_mcp_config
+        view = build_mcp_config({
+            "mcp": {"port": 9000, "host": "0.0.0.0", "stateless_http": True},
+            "security": {"ip_allowlist": ["10.0.0.0/8"], "cors_origins": ["https://x"]},
+            "tools": {"include": ["screenshot"], "exclude": ["shell"]},
+        })
+        assert view.server.port == 9000
+        assert view.server.host == "0.0.0.0"
+        assert view.server.stateless_http is True
+        assert view.security.ip_allowlist == ["10.0.0.0/8"]
+        assert view.security.cors_origins == ["https://x"]
+        assert view.tools.include == ["screenshot"]
+        assert view.tools.exclude == ["shell"]
+
+    def test_oauth_optional_fields(self):
+        from agent_windows.utils.config import build_mcp_config
+        view = build_mcp_config({"security": {"oauth_client_id": "abc", "oauth_client_secret": "def"}})
+        assert view.security.oauth_client_id == "abc"
+        assert view.security.oauth_client_secret == "def"
+
+    def test_list_fields_are_lists(self):
+        """Even if a section is missing, list fields are real lists."""
+        from agent_windows.utils.config import build_mcp_config
+        view = build_mcp_config({})
+        assert isinstance(view.security.ip_allowlist, list)
+        assert isinstance(view.tools.include, list)

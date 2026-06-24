@@ -10,6 +10,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
+from dataclasses import dataclass, field
 
 import toml
 
@@ -202,6 +203,83 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "enabled": False,
     },
 }
+
+# ── MCP typed view (TODO #10) ─────────────────────────────────────
+# Typed dataclasses mirroring the [mcp]/[security]/[tools] sections of
+# DEFAULT_CONFIG. Field defaults MUST stay byte-identical to DEFAULT_CONFIG
+# (test_mcp_config.TestDataclassDefaults enforces this). build_mcp_config
+# constructs them from a validated config dict for type-safe access in
+# mcp_cmd.serve(); load_config itself still returns a plain dict so the
+# ~20 other consumers are untouched.
+
+
+@dataclass
+class ServerConfig:
+    transport: str = "stdio"
+    host: str = "127.0.0.1"
+    port: int = 8000
+    auth_key: str = ""
+    ssl_certfile: str = ""
+    ssl_keyfile: str = ""
+    allow_insecure_remote: bool = False
+    stateless_http: bool = False
+
+
+@dataclass
+class SecurityConfig:
+    ip_allowlist: list[str] = field(default_factory=list)
+    cors_origins: list[str] = field(default_factory=list)
+    # Not in DEFAULT_CONFIG (optional reads); default empty.
+    oauth_client_id: str = ""
+    oauth_client_secret: str = ""
+
+
+@dataclass
+class ToolsConfig:
+    include: list[str] = field(default_factory=list)
+    exclude: list[str] = field(default_factory=list)
+
+
+@dataclass
+class MCPConfig:
+    server: ServerConfig = field(default_factory=ServerConfig)
+    security: SecurityConfig = field(default_factory=SecurityConfig)
+    tools: ToolsConfig = field(default_factory=ToolsConfig)
+
+
+def build_mcp_config(config: dict) -> MCPConfig:
+    """Build a typed :class:`MCPConfig` view from a validated config dict.
+
+    Reads the [mcp]/[security]/[tools] sections with the same defaults as the
+    dataclasses (== DEFAULT_CONFIG). Call after load_config() (already
+    type-validated).
+    """
+    mcp = config.get("mcp", {}) or {}
+    sec = config.get("security", {}) or {}
+    tools = config.get("tools", {}) or {}
+    return MCPConfig(
+        server=ServerConfig(
+            transport=mcp.get("transport", "stdio"),
+            host=mcp.get("host", "127.0.0.1"),
+            port=mcp.get("port", 8000),
+            auth_key=mcp.get("auth_key", ""),
+            ssl_certfile=mcp.get("ssl_certfile", ""),
+            ssl_keyfile=mcp.get("ssl_keyfile", ""),
+            allow_insecure_remote=mcp.get("allow_insecure_remote", False),
+            stateless_http=mcp.get("stateless_http", False),
+        ),
+        security=SecurityConfig(
+            ip_allowlist=list(sec.get("ip_allowlist", []) or []),
+            cors_origins=list(sec.get("cors_origins", []) or []),
+            oauth_client_id=sec.get("oauth_client_id", "") or "",
+            oauth_client_secret=sec.get("oauth_client_secret", "") or "",
+        ),
+        tools=ToolsConfig(
+            include=list(tools.get("include", []) or []),
+            exclude=list(tools.get("exclude", []) or []),
+        ),
+    )
+
 
 # ── Load / Save ───────────────────────────────────────────────────
 
