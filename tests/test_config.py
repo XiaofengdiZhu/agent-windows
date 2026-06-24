@@ -350,7 +350,66 @@ class TestSetConfigAllowlist:
         cfg._config_cache = None
 
         cfg.set_config_value("shell.blacklist", "rm -rf")
-        assert cfg.load_config()["shell"]["blacklist"] == "rm -rf"
+        assert cfg.load_config()["shell"]["blacklist"] == ["rm -rf"]
+
+
+class TestParseValueTyped:
+    """_parse_value_typed parses a CLI string by the key's expected type."""
+
+    def test_int_zero_is_int_not_false(self):
+        from agent_windows.utils.config import _parse_value_typed
+        assert _parse_value_typed("0", int) == 0
+        assert _parse_value_typed("0", int) is not False
+
+    def test_int_value(self):
+        from agent_windows.utils.config import _parse_value_typed
+        assert _parse_value_typed("8000", int) == 8000
+
+    def test_int_rejects_non_number(self):
+        from agent_windows.utils.config import _parse_value_typed
+        with pytest.raises(ValueError):
+            _parse_value_typed("abc", int)
+
+    def test_bool_variants(self):
+        from agent_windows.utils.config import _parse_value_typed
+        assert _parse_value_typed("true", bool) is True
+        assert _parse_value_typed("yes", bool) is True
+        assert _parse_value_typed("1", bool) is True
+        assert _parse_value_typed("false", bool) is False
+        assert _parse_value_typed("no", bool) is False
+        assert _parse_value_typed("0", bool) is False
+
+    def test_bool_rejects_garbage(self):
+        from agent_windows.utils.config import _parse_value_typed
+        with pytest.raises(ValueError):
+            _parse_value_typed("maybe", bool)
+
+    def test_float_accepts_int_string(self):
+        from agent_windows.utils.config import _parse_value_typed
+        assert _parse_value_typed("1", float) == 1.0
+
+    def test_str_not_coerced(self):
+        # Regression: "true" must stay a string for a str key, NOT become bool.
+        from agent_windows.utils.config import _parse_value_typed
+        assert _parse_value_typed("true", str) == "true"
+        assert _parse_value_typed("42", str) == "42"
+
+    def test_list_wraps_scalar(self):
+        from agent_windows.utils.config import _parse_value_typed
+        assert _parse_value_typed("rm -rf", list) == ["rm -rf"]
+
+    def test_unknown_type_falls_back(self):
+        # None expected type (optional key like screenshot.dir) -> legacy _parse_value.
+        from agent_windows.utils.config import _parse_value_typed
+        assert _parse_value_typed("/tmp/x", None) == "/tmp/x"
+
+    def test_default_leaf_type_lookup(self):
+        from agent_windows.utils.config import _default_leaf_type
+        assert _default_leaf_type("mcp.port") is int
+        assert _default_leaf_type("vlm.enabled") is bool
+        assert _default_leaf_type("shell.blacklist") is list
+        assert _default_leaf_type("screenshot.dir") is None  # optional, unknown
+        assert _default_leaf_type("vlm") is None  # section, not a leaf
 
 
 class TestCheckLeaf:

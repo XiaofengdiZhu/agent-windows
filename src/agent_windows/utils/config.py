@@ -360,8 +360,10 @@ def set_config_value(key: str, value: str) -> None:
         if part not in d:
             d[part] = {}
         d = d[part]
-    # Set the leaf value
-    d[parts[-1]] = _parse_value(value)
+    # Parse the value by the key's schema type so the written value passes
+    # _validate_config on the next load (TODO #10). Optional/unknown keys fall
+    # back to the legacy heuristic parser.
+    d[parts[-1]] = _parse_value_typed(value, _default_leaf_type(key))
     save_config(config)
 
 
@@ -651,3 +653,44 @@ def _parse_value(value: str) -> Any:
     except ValueError:
         pass
     return value
+
+
+def _default_leaf_type(key: str) -> type | None:
+    """Return the type of a dotted key's default value in DEFAULT_CONFIG.
+
+    Returns ``None`` for unknown keys and for section names (non-leaf paths).
+    Used by :func:`set_config_value` to parse the CLI string into the right
+    type so a written value is always accepted by :func:`_validate_config`.
+    """
+    node: Any = DEFAULT_CONFIG
+    for part in key.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return None
+        node = node[part]
+    return None if isinstance(node, dict) else type(node)
+
+
+def _parse_value_typed(value: str, expected_type: type | None) -> Any:
+    """Parse a CLI string according to *expected_type* (TODO #10 / S3).
+
+    Unlike the legacy :func:`_parse_value`, this never bool-coerces a value
+    destined for an int/str key (so ``"0"`` -> ``0`` not ``False``, and
+    ``"true"`` -> ``"true"`` for a str key), and wraps a scalar for a list
+    key. Unknown/optional keys (``expected_type is None``) fall back to
+    :func:`_parse_value` for backward compatibility.
+    """
+    if expected_type is bool:
+        if value.lower() in ("true", "yes", "1"):
+            return True
+        if value.lower() in ("false", "no", "0"):
+            return False
+        raise ValueError(f"expected bool, got {value!r}")
+    if expected_type is int:
+        return int(value)  # raises ValueError on non-numeric
+    if expected_type is float:
+        return float(value)
+    if expected_type is list:
+        return [value]
+    if expected_type is str:
+        return value  # never coerce a string key's value
+    return _parse_value(value)
