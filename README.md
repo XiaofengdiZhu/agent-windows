@@ -207,6 +207,35 @@ The printed client snippet already includes the `Authorization: Bearer <key>` he
 
 > **Security:** `auth_key` is **DPAPI-encrypted at rest** (same protection as `vlm.api_key`) and masked in `config show`. TLS keys are written to `~/.agent-windows/` under an owner-only ACL. For stdio none of this applies — there's no network surface.
 
+### HTTP security & scaling options
+
+A bare `mcp serve --transport streamable-http --host 0.0.0.0` with no `auth_key` is refused — it would expose the full desktop toolset to the LAN. Set an auth key (`mcp auth`) or pass `--allow-insecure-remote` to opt in. Additional HTTP-only controls (all settable via flag, `AGENT_WINDOWS_*` env var, or `[security]`/`[mcp]`/`[tools]` config; flag > env > config):
+
+| Option | Purpose |
+|---|---|
+| `--allow-insecure-remote` | Allow an unauthenticated non-loopback bind (prints a warning; not recommended). |
+| `--ip-allowlist 10.0.0.0/8,192.168.1.5` | Restrict HTTP clients to the given IPs/CIDRs (IPv4+IPv6); others get 403. `/health` is exempt. |
+| `--cors-origins https://my-client.example.com` | Allow cross-origin browser access. **Default: none** — no CORS headers are emitted, so Same-Origin Policy blocks cross-origin requests. |
+| `--tools screenshot,click,snapshot` | Enable only these tools (whitelist); removes all others. Overrides `--exclude-tools`. |
+| `--exclude-tools shell,registry` | Remove these tools from the active set. |
+| `--stateless-http` | Run streamable-http without `Mcp-Session-Id` / per-connection state — reconnecting clients survive a server restart, and the server scales behind a load balancer. Streamable-http only. |
+
+Config equivalents (in `~/.agent-windows/config.toml`):
+
+```toml
+[mcp]
+allow_insecure_remote = false   # opt into an insecure non-loopback bind
+stateless_http = false          # stateless streamable-http
+
+[security]
+ip_allowlist = ["10.0.0.0/8"]   # CIDR/IP list; empty = no restriction
+cors_origins = ["https://my-client.example.com"]   # empty = no CORS headers
+
+[tools]
+include = ["screenshot", "snapshot"]   # whitelist (overrides exclude)
+exclude = ["shell", "registry"]        # blacklist
+```
+
 ### Transports
 
 | Transport | Command | Use case |

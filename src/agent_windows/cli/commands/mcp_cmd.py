@@ -69,6 +69,11 @@ def serve(
         None, "--exclude-tools",
         help="Comma-separated list of tools to REMOVE from the active set "
              "(e.g. 'shell,registry'). Env: AGENT_WINDOWS_EXCLUDE_TOOLS"),
+    stateless_http: bool = typer.Option(
+        False, "--stateless-http",
+        help="Run streamable-http without Mcp-Session-Id / per-connection state "
+             "(survives server restarts, scales behind a load balancer). "
+             "Streamable-http only. Env: AGENT_WINDOWS_STATELESS_HTTP"),
 ) -> None:
     """Run the agent-windows MCP server.
 
@@ -165,11 +170,21 @@ def serve(
     if not parsed_exclude:
         parsed_exclude = [t for t in (tools_cfg.get("exclude") or []) if t] or None
 
+    # stateless_http precedence: flag > env (AGENT_WINDOWS_STATELESS_HTTP) >
+    # [mcp] stateless_http config. A bool flag wins; config/env default false.
+    parsed_stateless = bool(stateless_http)
+    if not parsed_stateless:
+        parsed_stateless = os.environ.get(
+            "AGENT_WINDOWS_STATELESS_HTTP", "").lower() in ("1", "true", "yes")
+    if not parsed_stateless:
+        parsed_stateless = bool(cfg.get("stateless_http", False))
+
     from agent_windows.mcp import run
     run(transport=transport, host=host, port=port, debug=debug,
         auth_key=auth_key, ssl_certfile=ssl_certfile, ssl_keyfile=ssl_keyfile,
         ip_allowlist=parsed_allowlist, cors_origins=parsed_cors,
-        tools=parsed_tools, exclude_tools=parsed_exclude)
+        tools=parsed_tools, exclude_tools=parsed_exclude,
+        stateless_http=parsed_stateless)
 
 
 # ── `mcp auth` ──────────────────────────────────────────────────────────

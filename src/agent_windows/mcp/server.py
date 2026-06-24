@@ -313,6 +313,7 @@ def run(
     cors_origins: list[str] | None = None,
     tools: list[str] | None = None,
     exclude_tools: list[str] | None = None,
+    stateless_http: bool = False,
 ) -> None:
     """Run the MCP server on the given transport.
 
@@ -327,7 +328,11 @@ def run(
     OptionsMiddleware + CORSMiddleware); empty/None = no CORS headers emitted
     (Same-Origin Policy blocks cross-origin requests). Ignored for stdio.
     tools (a whitelist) / exclude_tools (a blacklist) trim the registered tools
-    at startup (see apply_tool_filter) — applied to all transports.
+    at startup (see apply_tool_filter) — applied to all transports. stateless_http
+    runs the streamable-http transport without a Mcp-Session-Id and without
+    per-connection session state, so a reconnecting client survives a server
+    restart and the server scales behind a load balancer; only meaningful for
+    streamable-http, ignored otherwise.
     """
     if transport not in VALID_TRANSPORTS:
         raise ValueError(
@@ -386,5 +391,9 @@ def run(
         uvicorn_config["ssl_keyfile"] = ssl_keyfile
     # The middleware list is always non-empty for HTTP (OptionsMiddleware is
     # always added); stdio ignores the middleware kwarg entirely.
+    # stateless_http is forwarded only for HTTP (FastMCP's stdio run doesn't
+    # accept the kwarg); it suppresses the Mcp-Session-Id + per-connection
+    # session state so reconnecting clients survive a restart.
     mcp.run(transport=transport, host=host, port=port, show_banner=False,
-            middleware=middleware, uvicorn_config=uvicorn_config or None)
+            middleware=middleware, uvicorn_config=uvicorn_config or None,
+            stateless_http=stateless_http)

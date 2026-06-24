@@ -189,7 +189,7 @@ def test_mcp_serve_delegates_explicit_flags_overriding_config():
                                      port=9000, debug=True,
                                      auth_key="cfgkey", ssl_certfile=None, ssl_keyfile=None,
                                      ip_allowlist=None, cors_origins=None,
-                                     tools=None, exclude_tools=None)
+                                     tools=None, exclude_tools=None, stateless_http=False)
 
 
 def test_mcp_serve_defaults_come_from_config():
@@ -209,7 +209,7 @@ def test_mcp_serve_defaults_come_from_config():
                                      port=7000, debug=False, auth_key="k",
                                      ssl_certfile="c.pem", ssl_keyfile="k.pem",
                                      ip_allowlist=None, cors_origins=None,
-                                     tools=None, exclude_tools=None)
+                                     tools=None, exclude_tools=None, stateless_http=False)
 
 
 def test_mcp_serve_stdio_strips_auth_and_ssl():
@@ -227,7 +227,7 @@ def test_mcp_serve_stdio_strips_auth_and_ssl():
                                      port=8000, debug=False,
                                      auth_key=None, ssl_certfile=None, ssl_keyfile=None,
                                      ip_allowlist=None, cors_origins=None,
-                                     tools=None, exclude_tools=None)
+                                     tools=None, exclude_tools=None, stateless_http=False)
 
 
 def test_mcp_serve_rejects_out_of_range_port():
@@ -842,6 +842,70 @@ def test_run_skips_apply_tool_filter_when_no_filter():
          patch.object(server, "apply_tool_filter") as af:
         server.run(transport="stdio")
     af.assert_not_called()
+
+
+# ── stateless-http mode ────────────────────────────────────────────────
+
+def test_run_http_forwards_stateless_http():
+    from agent_windows.mcp import server
+    fake = MagicMock()
+    with patch.object(server, "build_server", return_value=fake):
+        server.run(transport="streamable-http", host="127.0.0.1", port=9000,
+                   stateless_http=True)
+    assert fake.run.call_args.kwargs["stateless_http"] is True
+
+
+def test_run_http_defaults_stateless_http_false():
+    from agent_windows.mcp import server
+    fake = MagicMock()
+    with patch.object(server, "build_server", return_value=fake):
+        server.run(transport="streamable-http", host="127.0.0.1", port=9000)
+    assert fake.run.call_args.kwargs["stateless_http"] is False
+
+
+def test_mcp_serve_stateless_http_flag():
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+
+    runner = CliRunner()
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config", return_value={}):
+        result = runner.invoke(mcp_cmd.app,
+                               ["serve", "--transport", "streamable-http",
+                                "--host", "127.0.0.1", "--port", "9000",
+                                "--stateless-http"])
+    assert result.exit_code == 0, result.output
+    assert mock_run.call_args.kwargs["stateless_http"] is True
+
+
+def test_mcp_serve_reads_stateless_http_from_config():
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+
+    runner = CliRunner()
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config",
+                      return_value={"mcp": {"stateless_http": True}}):
+        result = runner.invoke(mcp_cmd.app,
+                               ["serve", "--transport", "streamable-http",
+                                "--host", "127.0.0.1", "--port", "9000"])
+    assert result.exit_code == 0, result.output
+    assert mock_run.call_args.kwargs["stateless_http"] is True
+
+
+def test_mcp_serve_stateless_http_from_env(monkeypatch):
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+
+    monkeypatch.setenv("AGENT_WINDOWS_STATELESS_HTTP", "true")
+    runner = CliRunner()
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config", return_value={}):
+        result = runner.invoke(mcp_cmd.app,
+                               ["serve", "--transport", "streamable-http",
+                                "--host", "127.0.0.1", "--port", "9000"])
+    assert result.exit_code == 0, result.output
+    assert mock_run.call_args.kwargs["stateless_http"] is True
 
 
 # ── `mcp auth` ──────────────────────────────────────────────────────────

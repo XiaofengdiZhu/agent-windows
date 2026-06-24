@@ -168,6 +168,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
         # (the footgun guard refuses this unless set). Default off — a bare
         # non-loopback bind with no auth_key is insecure. (TODO #1)
         "allow_insecure_remote": False,
+        # Run the streamable-http transport statelessly (no Mcp-Session-Id,
+        # no per-connection session state) so reconnecting clients survive a
+        # server restart and the server scales behind a load balancer.
+        # streamable-http only; default off. (TODO #5)
+        "stateless_http": False,
     },
     "security": {
         # HTTP-transport access controls (sse / streamable-http). Both default
