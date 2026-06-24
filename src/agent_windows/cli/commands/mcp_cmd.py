@@ -55,6 +55,11 @@ def serve(
         None, "--ip-allowlist",
         help="Comma-separated client IPs/CIDRs to allow on HTTP (e.g. '10.0.0.0/8,192.168.1.5'). "
              "Env: AGENT_WINDOWS_IP_ALLOWLIST"),
+    cors_origins: str = typer.Option(
+        None, "--cors-origins",
+        help="Comma-separated origins allowed cross-origin browser access (e.g. "
+             "'https://my-client.example.com'). Default: none (no CORS headers; "
+             "Same-Origin Policy blocks cross-origin requests). Env: AGENT_WINDOWS_CORS_ORIGINS"),
 ) -> None:
     """Run the agent-windows MCP server.
 
@@ -79,6 +84,7 @@ def serve(
         ssl_certfile = None
         ssl_keyfile = None
         parsed_allowlist = None
+        parsed_cors = None
     else:
         auth_key = cfg.get("auth_key") or None
         ssl_certfile = cfg.get("ssl_certfile") or None
@@ -93,6 +99,16 @@ def serve(
         if not entries:
             entries = [e for e in (security_cfg.get("ip_allowlist") or []) if e]
         parsed_allowlist = _parse_allowlist(entries)
+        # CORS origins precedence: --cors-origins flag > AGENT_WINDOWS_CORS_ORIGINS
+        # env > [security] cors_origins config. Empty = no CORS headers emitted.
+        raw_cors = cors_origins
+        if raw_cors is None:
+            raw_cors = os.environ.get("AGENT_WINDOWS_CORS_ORIGINS")
+        parsed_cors = ([o.strip() for o in raw_cors.split(",") if o.strip()]
+                       if raw_cors else None)
+        if not parsed_cors:
+            cfg_cors = [o for o in (security_cfg.get("cors_origins") or []) if o]
+            parsed_cors = cfg_cors or None
 
     # A bool flag needs a config fallback like host/port: the command-line flag
     # wins; otherwise [mcp] allow_insecure_remote (default false).
@@ -125,7 +141,7 @@ def serve(
     from agent_windows.mcp import run
     run(transport=transport, host=host, port=port, debug=debug,
         auth_key=auth_key, ssl_certfile=ssl_certfile, ssl_keyfile=ssl_keyfile,
-        ip_allowlist=parsed_allowlist)
+        ip_allowlist=parsed_allowlist, cors_origins=parsed_cors)
 
 
 # ── `mcp auth` ──────────────────────────────────────────────────────────

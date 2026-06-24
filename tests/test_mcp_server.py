@@ -144,15 +144,19 @@ def test_run_http_forwards_host_port_and_auth_middleware():
     assert "middleware" in kwargs and kwargs["middleware"]
 
 
-def test_run_http_without_auth_key_has_no_middleware():
+def test_run_http_without_auth_key_only_has_options_middleware():
     from agent_windows.mcp import server
+    from agent_windows.mcp.server import OptionsMiddleware
     fake = MagicMock()
     with patch.object(server, "build_server", return_value=fake):
         server.run(transport="streamable-http", host="127.0.0.1", port=9000,
                    auth_key=None)
     kwargs = fake.run.call_args.kwargs
-    # no auth_key → no middleware (bare localhost bind, no auth)
-    assert not kwargs.get("middleware")
+    # No auth_key and no CORS → OptionsMiddleware is the ONLY middleware (with
+    # an empty allowlist it emits no CORS headers, so SOP blocks cross-origin).
+    # AuthKeyMiddleware / IPAllowlistMiddleware / CORSMiddleware are absent.
+    kinds = [mw.cls for mw in kwargs["middleware"]]
+    assert kinds == [OptionsMiddleware]
 
 
 def test_run_rejects_unknown_transport():
@@ -184,7 +188,7 @@ def test_mcp_serve_delegates_explicit_flags_overriding_config():
     mock_run.assert_called_once_with(transport="streamable-http", host="0.0.0.0",
                                      port=9000, debug=True,
                                      auth_key="cfgkey", ssl_certfile=None, ssl_keyfile=None,
-                                     ip_allowlist=None)
+                                     ip_allowlist=None, cors_origins=None)
 
 
 def test_mcp_serve_defaults_come_from_config():
@@ -203,7 +207,7 @@ def test_mcp_serve_defaults_come_from_config():
     mock_run.assert_called_once_with(transport="streamable-http", host="1.2.3.4",
                                      port=7000, debug=False, auth_key="k",
                                      ssl_certfile="c.pem", ssl_keyfile="k.pem",
-                                     ip_allowlist=None)
+                                     ip_allowlist=None, cors_origins=None)
 
 
 def test_mcp_serve_stdio_strips_auth_and_ssl():
@@ -220,7 +224,7 @@ def test_mcp_serve_stdio_strips_auth_and_ssl():
     mock_run.assert_called_once_with(transport="stdio", host="127.0.0.1",
                                      port=8000, debug=False,
                                      auth_key=None, ssl_certfile=None, ssl_keyfile=None,
-                                     ip_allowlist=None)
+                                     ip_allowlist=None, cors_origins=None)
 
 
 def test_mcp_serve_rejects_out_of_range_port():
@@ -419,14 +423,15 @@ def test_run_http_forwards_ip_allowlist_as_middleware():
     fake = MagicMock()
     nets = [ipaddress.ip_network("10.0.0.0/8")]
     # Pass both ip_allowlist and auth_key so both middlewares are assembled and
-    # we can assert ordering: IPAllowlistMiddleware sits outermost (first), so a
-    # blocked IP never reaches the auth challenge.
+    # we can assert ordering: OptionsMiddleware (always outermost), then
+    # IPAllowlistMiddleware, then AuthKeyMiddleware — a blocked IP never reaches
+    # the auth challenge.
     with patch.object(server, "build_server", return_value=fake):
         server.run(transport="streamable-http", host="127.0.0.1", port=9000,
                    auth_key="k", ip_allowlist=nets)
     kwargs = fake.run.call_args.kwargs
     kinds = [mw.cls for mw in kwargs["middleware"]]
-    assert kinds == [IPAllowlistMiddleware, AuthKeyMiddleware]
+    assert kinds[1:] == [IPAllowlistMiddleware, AuthKeyMiddleware]
 
 
 def test_mcp_serve_forwards_ip_allowlist_flag():
@@ -543,6 +548,126 @@ def test_mcp_serve_empty_ip_allowlist_flag_falls_through_to_config(monkeypatch):
     assert result.exit_code == 0, result.output
     assert mock_run.call_args.kwargs["ip_allowlist"] == [
         ipaddress.ip_network("10.0.0.0/8")]
+
+
+# ── OptionsMiddleware + CORS wiring ────────────────────────────────────
+
+def _run_options_middleware(scope, allowed_origins):
+    """Drive OptionsMiddleware; return (downstream_called, sent)."""
+    from agent_windows.mcp.server import OptionsMiddleware
+    return _drive(lambda app: OptionsMiddleware(app, allowed_origins=allowed_origins),
+                  scope)
+
+
+def _options_scope(origin=None):
+    """An OPTIONS preflight scope with optional Origin header."""
+    headers = {}
+    if origin is not None:
+        headers["origin"] = origin
+    return _http_scope(headers=headers).copy() | {"method": "OPTIONS"}
+
+
+def test_options_middleware_empty_allowlist_emits_no_cors_headers():
+    # No allowlist → 200 OK with no access-control-* headers (SOP blocks).
+    called, sent = _run_options_middleware(_options_scope("https://x.example.com"), [])
+    assert called is False                       # preflight handled, not passed down
+    start = sent[0]
+    assert start["status"] == 200
+    header_names = [h[0] for h in start["headers"]]
+    assert not any(n.startswith(b"access-control") for n in header_names)
+
+
+def test_options_middleware_matching_origin_emits_cors_headers():
+    called, sent = _run_options_middleware(
+        _options_scope("https://client.example.com"), ["https://client.example.com"])
+    assert called is False
+    start = sent[0]
+    assert start["status"] == 200
+    hdrs = dict(start["headers"])
+    assert hdrs[b"access-control-allow-origin"] == b"https://client.example.com"
+    assert hdrs[b"access-control-allow-methods"] == b"GET, POST, OPTIONS"
+    assert b"authorization" in hdrs[b"access-control-allow-headers"]
+    assert hdrs[b"vary"] == b"Origin"
+
+
+def test_options_middleware_non_matching_origin_emits_no_cors_headers():
+    # Allowlist set but Origin not in it → bare 200, browser still blocks.
+    called, sent = _run_options_middleware(
+        _options_scope("https://evil.example.com"), ["https://client.example.com"])
+    assert called is False
+    assert sent[0]["status"] == 200
+    header_names = [h[0] for h in sent[0]["headers"]]
+    assert not any(n.startswith(b"access-control") for n in header_names)
+
+
+def test_options_middleware_passes_through_non_options():
+    # A GET must reach the downstream app untouched.
+    scope = _http_scope().copy() | {"method": "GET"}
+    called, sent = _run_options_middleware(scope, ["https://client.example.com"])
+    assert called is True
+    assert sent == []
+
+
+def test_run_http_cors_configured_adds_both_middlewares():
+    from agent_windows.mcp import server
+    from agent_windows.mcp.server import OptionsMiddleware
+    from starlette.middleware.cors import CORSMiddleware
+    fake = MagicMock()
+    with patch.object(server, "build_server", return_value=fake):
+        server.run(transport="streamable-http", host="127.0.0.1", port=9000,
+                   cors_origins=["https://client.example.com"])
+    kinds = [mw.cls for mw in fake.run.call_args.kwargs["middleware"]]
+    # OptionsMiddleware (always) + CORSMiddleware (origins configured)
+    assert OptionsMiddleware in kinds
+    assert CORSMiddleware in kinds
+
+
+def test_mcp_serve_forwards_cors_origins_flag():
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+
+    runner = CliRunner()
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config", return_value={}):
+        result = runner.invoke(mcp_cmd.app,
+                               ["serve", "--transport", "streamable-http",
+                                "--host", "127.0.0.1", "--port", "9000",
+                                "--cors-origins", "https://a.example.com,https://b.example.com"])
+    assert result.exit_code == 0, result.output
+    assert mock_run.call_args.kwargs["cors_origins"] == [
+        "https://a.example.com", "https://b.example.com"]
+
+
+def test_mcp_serve_reads_cors_origins_from_config():
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+
+    runner = CliRunner()
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config",
+                      return_value={"security": {"cors_origins": ["https://c.example.com"]}}):
+        result = runner.invoke(mcp_cmd.app,
+                               ["serve", "--transport", "streamable-http",
+                                "--host", "127.0.0.1", "--port", "9000"])
+    assert result.exit_code == 0, result.output
+    assert mock_run.call_args.kwargs["cors_origins"] == ["https://c.example.com"]
+
+
+def test_mcp_serve_reads_cors_origins_from_env(monkeypatch):
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+
+    monkeypatch.setenv("AGENT_WINDOWS_CORS_ORIGINS", "https://env.example.com")
+    runner = CliRunner()
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config",
+                      return_value={"security": {"cors_origins": ["https://c.example.com"]}}):
+        result = runner.invoke(mcp_cmd.app,
+                               ["serve", "--transport", "streamable-http",
+                                "--host", "127.0.0.1", "--port", "9000"])
+    assert result.exit_code == 0, result.output
+    # env wins over config
+    assert mock_run.call_args.kwargs["cors_origins"] == ["https://env.example.com"]
 
 
 # ── `mcp auth` ──────────────────────────────────────────────────────────

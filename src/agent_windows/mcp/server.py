@@ -182,6 +182,46 @@ class IPAllowlistMiddleware:
         await send({"type": "http.response.body", "body": body})
 
 
+class OptionsMiddleware:
+    """ASGI middleware that intercepts OPTIONS preflight requests.
+
+    With an empty allowlist (the default) it returns 200 OK with NO CORS headers,
+    so browsers block cross-origin access via Same-Origin Policy — the secure
+    default. When an explicit origin allowlist is configured, an OPTIONS request
+    carrying a matching ``Origin`` header gets the CORS preflight response
+    (allow-origin/methods/headers); a non-matching origin still gets a bare 200
+    (no CORS headers), so it's blocked by the browser. Non-OPTIONS requests pass
+    through untouched. Mirrors Windows-MCP's OptionsMiddleware.
+    """
+
+    def __init__(self, app: Any, *, allowed_origins: list[str] | None = None) -> None:
+        self.app = app
+        self._allowed: frozenset[str] = frozenset(allowed_origins or [])
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope["type"] == "http" and scope.get("method") == "OPTIONS":
+            headers: list[list[bytes]] = [[b"content-length", b"0"]]
+            if self._allowed:
+                origin = next(
+                    (v.decode("latin-1") for k, v in scope.get("headers", [])
+                     if k == b"origin"),
+                    None,
+                )
+                if origin and origin in self._allowed:
+                    headers += [
+                        [b"access-control-allow-origin", origin.encode("latin-1")],
+                        [b"access-control-allow-methods", b"GET, POST, OPTIONS"],
+                        [b"access-control-allow-headers",
+                         b"content-type, authorization, mcp-session-id"],
+                        [b"vary", b"Origin"],
+                    ]
+            await send({"type": "http.response.start", "status": 200,
+                        "headers": headers})
+            await send({"type": "http.response.body", "body": b""})
+            return
+        await self.app(scope, receive, send)
+
+
 def build_server() -> FastMCP:
     """Create (once) and return the FastMCP instance with all tools registered."""
     global _mcp
@@ -207,6 +247,7 @@ def run(
     ssl_certfile: str | None = None,
     ssl_keyfile: str | None = None,
     ip_allowlist: list | None = None,
+    cors_origins: list[str] | None = None,
 ) -> None:
     """Run the MCP server on the given transport.
 
@@ -216,7 +257,10 @@ def run(
     set, a bearer-token middleware gates every request (see AuthKeyMiddleware).
     ssl_certfile/ssl_keyfile enable HTTPS. ip_allowlist (a list of
     ``ipaddress._BaseNetwork``) further restricts HTTP clients to those
-    networks (see IPAllowlistMiddleware); ignored for stdio.
+    networks (see IPAllowlistMiddleware); ignored for stdio. cors_origins
+    (a list of origin strings) opts in to cross-origin browser access (see
+    OptionsMiddleware + CORSMiddleware); empty/None = no CORS headers emitted
+    (Same-Origin Policy blocks cross-origin requests). Ignored for stdio.
     """
     if transport not in VALID_TRANSPORTS:
         raise ValueError(
@@ -243,6 +287,23 @@ def run(
     # HTTP transport: assemble middleware + TLS config.
     from starlette.middleware import Middleware
     middleware: list = []
+    # OptionsMiddleware is always present: with an empty allowlist (the default)
+    # it returns a bare 200 to preflight with no CORS headers, so Same-Origin
+    # Policy blocks cross-origin access. It sits outermost so a preflight never
+    # reaches the auth/IP gates (preflight requests carry no Authorization
+    # header and would otherwise be 401'd before the browser could read the
+    # CORS response).
+    middleware.append(Middleware(OptionsMiddleware,
+                                 allowed_origins=cors_origins or []))
+    if cors_origins:
+        from starlette.middleware.cors import CORSMiddleware
+        middleware.append(Middleware(
+            CORSMiddleware,
+            allow_origins=cors_origins,
+            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_headers=["Content-Type", "Authorization", "Mcp-Session-Id"],
+            allow_credentials=False,
+        ))
     if ip_allowlist:
         middleware.append(Middleware(IPAllowlistMiddleware, allowlist=ip_allowlist))
     if auth_key:
@@ -252,4 +313,4 @@ def run(
         uvicorn_config["ssl_certfile"] = ssl_certfile
         uvicorn_config["ssl_keyfile"] = ssl_keyfile
     mcp.run(transport=transport, host=host, port=port, show_banner=False,
-            middleware=middleware or None, uvicorn_config=uvicorn_config or None)
+            middleware=middleware, uvicorn_config=uvicorn_config or None)
