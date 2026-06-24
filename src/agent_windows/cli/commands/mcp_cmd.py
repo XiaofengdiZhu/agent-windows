@@ -41,6 +41,11 @@ def serve(
     transport = transport or cfg.get("transport", "stdio")
     host = host or cfg.get("host", "127.0.0.1")
     port = port if port is not None else int(cfg.get("port", 8000))
+    if not 1 <= port <= 65535:
+        # Fail fast with a clear message rather than letting uvicorn raise an
+        # opaque bind error. Applies to both the --port flag and [mcp] port.
+        raise typer.BadParameter(
+            f"port must be between 1 and 65535 (got {port})", param_hint="--port")
 
     # auth_key / TLS are HTTP-only — stdio ignores them (local IPC, no network).
     if transport == "stdio":

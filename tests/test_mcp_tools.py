@@ -322,6 +322,54 @@ def test_wait_for_fn_polls_condition():
     m.assert_called_with("wait_for_check", condition="text_exists", text="Done", window_name="")
 
 
+def test_wait_fn_times_out_when_never_found():
+    """wait_fn raises TimeoutError when the element never appears within timeout."""
+    with patch.object(ctl, "_call", return_value={"found": False}) as m, \
+         patch("time.sleep"), \
+         pytest.raises(TimeoutError, match="not found"):
+        ctl.wait_fn(seconds=None, selector="@e9", text=None, timeout=0.1, interval=0.01)
+    # at least one poll happened
+    assert m.call_count >= 1
+
+
+def test_wait_for_fn_times_out_with_detail():
+    """wait_for_fn surfaces the daemon's detail string on timeout."""
+    with patch.object(ctl, "_call", return_value={"found": False, "detail": "no match"}) as m, \
+         patch("time.sleep"), \
+         pytest.raises(TimeoutError, match="no match"):
+        ctl.wait_for_fn(condition="element_exists", text="X", window_name="",
+                        timeout=0.1, interval=0.01)
+    assert m.call_count >= 1
+
+
+# ── _image_from_result edge paths ───────────────────────────────────────
+
+def test_image_from_result_returns_text_only_when_path_missing():
+    """No path key in the result → just [text], no Image (no crash)."""
+    out = obs._image_from_result({"output": "no image here"})
+    assert isinstance(out, list) and len(out) == 1
+    assert out[0] == "no image here"
+
+
+def test_image_from_result_returns_text_only_on_unreadable_path():
+    """A path that can't be read (OSError) degrades gracefully to [text]."""
+    with patch("pathlib.Path.read_bytes", side_effect=OSError("gone")):
+        out = obs._image_from_result({"output": "x", "path": "C:\\missing.png"})
+    assert isinstance(out, list) and len(out) == 1
+    assert out[0] == "x"
+
+
+def test_image_from_result_detects_jpeg_format():
+    """A non-.png path yields a jpeg Image (not png)."""
+    with patch("pathlib.Path.read_bytes", return_value=_PNG):
+        out = obs._image_from_result({"output": "shot", "path": "C:\\s.jpg"})
+    assert isinstance(out, list) and len(out) == 2
+    img = out[1]
+    # FastMCP Image stores the format as a private _format / derived _mime_type
+    # (no public .format attribute). Assert the mime type the transport sees.
+    assert img._mime_type == "image/jpeg"
+
+
 def test_register_all_registers_every_domain_on_a_fake_mcp():
     """register_all calls register() on every tool module with the given mcp."""
     from agent_windows.mcp.tools import register_all, observation, vision, input, \

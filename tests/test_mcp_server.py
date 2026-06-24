@@ -206,6 +206,23 @@ def test_mcp_serve_stdio_strips_auth_and_ssl():
                                      auth_key=None, ssl_certfile=None, ssl_keyfile=None)
 
 
+def test_mcp_serve_rejects_out_of_range_port():
+    """A --port outside 1..65535 fails with a clear error instead of reaching uvicorn."""
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+
+    runner = CliRunner()
+    for bad in ("-1", "0", "70000"):
+        with patch("agent_windows.mcp.run") as mock_run, \
+             patch.object(mcp_cmd, "load_config", return_value={}):
+            result = runner.invoke(mcp_cmd.app,
+                                   ["serve", "--transport", "streamable-http", "--port", bad])
+        assert result.exit_code != 0, f"--port {bad} should be rejected"
+        assert "port" in result.output.lower()
+        mock_run.assert_not_called()  # never reach the server
+
+
+
 # ── `mcp auth` ──────────────────────────────────────────────────────────
 
 def test_mcp_auth_generates_key_and_writes_config(tmp_path, monkeypatch):
