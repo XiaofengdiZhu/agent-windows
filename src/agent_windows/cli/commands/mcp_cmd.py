@@ -60,6 +60,15 @@ def serve(
         help="Comma-separated origins allowed cross-origin browser access (e.g. "
              "'https://my-client.example.com'). Default: none (no CORS headers; "
              "Same-Origin Policy blocks cross-origin requests). Env: AGENT_WINDOWS_CORS_ORIGINS"),
+    tools: str = typer.Option(
+        None, "--tools",
+        help="Comma-separated explicit list of tools to ENABLE (e.g. "
+             "'screenshot,click,snapshot'). All others are removed. Overrides "
+             "--exclude-tools. Env: AGENT_WINDOWS_TOOLS"),
+    exclude_tools: str = typer.Option(
+        None, "--exclude-tools",
+        help="Comma-separated list of tools to REMOVE from the active set "
+             "(e.g. 'shell,registry'). Env: AGENT_WINDOWS_EXCLUDE_TOOLS"),
 ) -> None:
     """Run the agent-windows MCP server.
 
@@ -69,6 +78,7 @@ def serve(
     full_cfg = load_config()
     cfg = full_cfg.get("mcp") or {}
     security_cfg = full_cfg.get("security") or {}
+    tools_cfg = full_cfg.get("tools") or {}
     transport = transport or cfg.get("transport", "stdio")
     host = host or cfg.get("host", "127.0.0.1")
     port = port if port is not None else int(cfg.get("port", 8000))
@@ -138,10 +148,28 @@ def serve(
             "Anyone who can reach this port has full desktop control. NOT recommended.",
             err=True)
 
+    # Tool filtering (applies to all transports). Precedence: flag > env > config.
+    # --tools is an explicit whitelist and overrides --exclude-tools when both set.
+    def _split_csv(raw):
+        return [t.strip() for t in raw.split(",") if t.strip()] if raw else None
+
+    parsed_tools = _split_csv(tools)
+    if parsed_tools is None:
+        parsed_tools = _split_csv(os.environ.get("AGENT_WINDOWS_TOOLS"))
+    if not parsed_tools:
+        parsed_tools = [t for t in (tools_cfg.get("include") or []) if t] or None
+
+    parsed_exclude = _split_csv(exclude_tools)
+    if parsed_exclude is None:
+        parsed_exclude = _split_csv(os.environ.get("AGENT_WINDOWS_EXCLUDE_TOOLS"))
+    if not parsed_exclude:
+        parsed_exclude = [t for t in (tools_cfg.get("exclude") or []) if t] or None
+
     from agent_windows.mcp import run
     run(transport=transport, host=host, port=port, debug=debug,
         auth_key=auth_key, ssl_certfile=ssl_certfile, ssl_keyfile=ssl_keyfile,
-        ip_allowlist=parsed_allowlist, cors_origins=parsed_cors)
+        ip_allowlist=parsed_allowlist, cors_origins=parsed_cors,
+        tools=parsed_tools, exclude_tools=parsed_exclude)
 
 
 # ── `mcp auth` ──────────────────────────────────────────────────────────

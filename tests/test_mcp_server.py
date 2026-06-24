@@ -188,7 +188,8 @@ def test_mcp_serve_delegates_explicit_flags_overriding_config():
     mock_run.assert_called_once_with(transport="streamable-http", host="0.0.0.0",
                                      port=9000, debug=True,
                                      auth_key="cfgkey", ssl_certfile=None, ssl_keyfile=None,
-                                     ip_allowlist=None, cors_origins=None)
+                                     ip_allowlist=None, cors_origins=None,
+                                     tools=None, exclude_tools=None)
 
 
 def test_mcp_serve_defaults_come_from_config():
@@ -207,7 +208,8 @@ def test_mcp_serve_defaults_come_from_config():
     mock_run.assert_called_once_with(transport="streamable-http", host="1.2.3.4",
                                      port=7000, debug=False, auth_key="k",
                                      ssl_certfile="c.pem", ssl_keyfile="k.pem",
-                                     ip_allowlist=None, cors_origins=None)
+                                     ip_allowlist=None, cors_origins=None,
+                                     tools=None, exclude_tools=None)
 
 
 def test_mcp_serve_stdio_strips_auth_and_ssl():
@@ -224,7 +226,8 @@ def test_mcp_serve_stdio_strips_auth_and_ssl():
     mock_run.assert_called_once_with(transport="stdio", host="127.0.0.1",
                                      port=8000, debug=False,
                                      auth_key=None, ssl_certfile=None, ssl_keyfile=None,
-                                     ip_allowlist=None, cors_origins=None)
+                                     ip_allowlist=None, cors_origins=None,
+                                     tools=None, exclude_tools=None)
 
 
 def test_mcp_serve_rejects_out_of_range_port():
@@ -669,6 +672,118 @@ def test_mcp_serve_reads_cors_origins_from_env(monkeypatch):
     assert result.exit_code == 0, result.output
     # env wins over config
     assert mock_run.call_args.kwargs["cors_origins"] == ["https://env.example.com"]
+
+
+# ── apply_tool_filter + tool filtering wiring ──────────────────────────
+
+def _registered_tool_names(mcp):
+    """Read the current registered tool names from a FastMCP instance."""
+    comps = mcp._local_provider._components
+    return {getattr(v, "name", None) or k.split(":", 1)[1].split("@", 1)[0]
+            for k, v in comps.items()
+            if isinstance(k, str) and k.startswith("tool:")}
+
+
+def test_apply_tool_filter_exclude_removes_named_tools():
+    from agent_windows.mcp.server import build_server, reset_server, apply_tool_filter
+    reset_server()
+    mcp = build_server()
+    before = _registered_tool_names(mcp)
+    assert "shell" in before and "registry" in before
+    apply_tool_filter(mcp, explicit_tools=None, exclude_tools=["shell", "registry"])
+    after = _registered_tool_names(mcp)
+    assert "shell" not in after and "registry" not in after
+    # the rest remain
+    assert (before - {"shell", "registry"}) <= after
+    reset_server()
+
+
+def test_apply_tool_filter_explicit_keeps_only_whitelist():
+    from agent_windows.mcp.server import build_server, reset_server, apply_tool_filter
+    reset_server()
+    mcp = build_server()
+    apply_tool_filter(mcp, explicit_tools=["screenshot", "snapshot"],
+                      exclude_tools=None)
+    after = _registered_tool_names(mcp)
+    assert after == {"screenshot", "snapshot"}
+    reset_server()
+
+
+def test_apply_tool_filter_explicit_overrides_exclude():
+    from agent_windows.mcp.server import build_server, reset_server, apply_tool_filter
+    reset_server()
+    mcp = build_server()
+    # explicit wins: even though exclude lists screenshot, explicit keeps it
+    apply_tool_filter(mcp, explicit_tools=["screenshot"],
+                      exclude_tools=["screenshot", "shell"])
+    after = _registered_tool_names(mcp)
+    assert after == {"screenshot"}
+    reset_server()
+
+
+def test_apply_tool_filter_ignores_unknown_names():
+    from agent_windows.mcp.server import build_server, reset_server, apply_tool_filter
+    reset_server()
+    mcp = build_server()
+    before = _registered_tool_names(mcp)
+    # unknown names are silently ignored, not an error
+    apply_tool_filter(mcp, explicit_tools=None, exclude_tools=["does_not_exist"])
+    assert _registered_tool_names(mcp) == before
+    reset_server()
+
+
+def test_mcp_serve_forwards_exclude_tools_flag():
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+
+    runner = CliRunner()
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config", return_value={}):
+        result = runner.invoke(mcp_cmd.app,
+                               ["serve", "--transport", "stdio",
+                                "--exclude-tools", "shell,registry"])
+    assert result.exit_code == 0, result.output
+    assert mock_run.call_args.kwargs["exclude_tools"] == ["shell", "registry"]
+
+
+def test_mcp_serve_forwards_tools_flag():
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+
+    runner = CliRunner()
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config", return_value={}):
+        result = runner.invoke(mcp_cmd.app,
+                               ["serve", "--transport", "stdio",
+                                "--tools", "screenshot,snapshot"])
+    assert result.exit_code == 0, result.output
+    assert mock_run.call_args.kwargs["tools"] == ["screenshot", "snapshot"]
+
+
+def test_mcp_serve_reads_exclude_tools_from_config():
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+
+    runner = CliRunner()
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config",
+                      return_value={"tools": {"exclude": ["shell"]}}):
+        result = runner.invoke(mcp_cmd.app, ["serve", "--transport", "stdio"])
+    assert result.exit_code == 0, result.output
+    assert mock_run.call_args.kwargs["exclude_tools"] == ["shell"]
+
+
+def test_mcp_serve_reads_tools_from_env(monkeypatch):
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+
+    monkeypatch.setenv("AGENT_WINDOWS_TOOLS", "screenshot,click")
+    runner = CliRunner()
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config", return_value={}):
+        result = runner.invoke(mcp_cmd.app, ["serve", "--transport", "stdio"])
+    assert result.exit_code == 0, result.output
+    assert mock_run.call_args.kwargs["tools"] == ["screenshot", "click"]
 
 
 # ── `mcp auth` ──────────────────────────────────────────────────────────

@@ -178,6 +178,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "ip_allowlist": [],
         "cors_origins": [],
     },
+    "tools": {
+        # Startup tool filtering (applies to all transports). `include` is the
+        # explicit whitelist enabled via --tools (overrides exclude); `exclude`
+        # removes tools via --exclude-tools. Both default empty = all tools.
+        # (TODO #4)
+        "include": [],
+        "exclude": [],
+    },
 }
 
 # ── Load / Save ───────────────────────────────────────────────────

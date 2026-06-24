@@ -222,6 +222,69 @@ class OptionsMiddleware:
         await self.app(scope, receive, send)
 
 
+def apply_tool_filter(
+    mcp: FastMCP,
+    explicit_tools: list[str] | None,
+    exclude_tools: list[str] | None,
+) -> None:
+    """Remove disabled tools from the MCP registry.
+
+    ``explicit_tools`` (a whitelist) wins over ``exclude_tools``: when set,
+    every registered tool NOT in the list is removed. Otherwise ``exclude_tools``
+    removes just the named tools. Unknown names are silently ignored (the tool
+    simply isn't there to remove) — this keeps typos from crashing startup.
+
+    FastMCP has changed its internal registry across versions: older releases
+    expose ``_tool_manager._tools``; 3.x stores components on
+    ``_local_provider._components`` keyed ``"tool:<name>@"`` → ``FunctionTool``
+    objects. Both shapes are handled so this survives a FastMCP upgrade.
+    Ported/adapted from the reference implementation (Windows-MCP).
+    """
+    tool_mgr = getattr(mcp, "_tool_manager", None)
+    tools_dict = getattr(tool_mgr, "_tools", None)
+    if tools_dict is None:
+        provider = getattr(mcp, "_local_provider", None)
+        components = getattr(provider, "_components", {})
+        tools_dict = {
+            (getattr(v, "name", None) or k.split(":", 1)[1].split("@", 1)[0]): k
+            for k, v in components.items()
+            if isinstance(k, str) and k.startswith("tool:")
+        }
+
+        def _remove(name: str) -> None:
+            keys = [
+                k
+                for k, v in components.items()
+                if isinstance(k, str)
+                and k.startswith("tool:")
+                and (
+                    getattr(components[k], "name", None) == name
+                    or k.split(":", 1)[1].split("@", 1)[0] == name
+                )
+            ]
+            for k in keys:
+                components.pop(k, None)
+
+        registered = set(tools_dict.keys())
+    else:
+
+        def _remove(name: str) -> None:
+            tools_dict.pop(name, None)
+
+        registered = set(tools_dict.keys())
+
+    if explicit_tools:
+        keep = {t for t in explicit_tools if t in registered}
+        for name in registered - keep:
+            _remove(name)
+    elif exclude_tools:
+        for name in exclude_tools:
+            if name in registered:
+                _remove(name)
+    logger.debug("Tool filter applied: explicit=%s exclude=%s",
+                 explicit_tools, exclude_tools)
+
+
 def build_server() -> FastMCP:
     """Create (once) and return the FastMCP instance with all tools registered."""
     global _mcp
@@ -248,6 +311,8 @@ def run(
     ssl_keyfile: str | None = None,
     ip_allowlist: list | None = None,
     cors_origins: list[str] | None = None,
+    tools: list[str] | None = None,
+    exclude_tools: list[str] | None = None,
 ) -> None:
     """Run the MCP server on the given transport.
 
@@ -261,6 +326,8 @@ def run(
     (a list of origin strings) opts in to cross-origin browser access (see
     OptionsMiddleware + CORSMiddleware); empty/None = no CORS headers emitted
     (Same-Origin Policy blocks cross-origin requests). Ignored for stdio.
+    tools (a whitelist) / exclude_tools (a blacklist) trim the registered tools
+    at startup (see apply_tool_filter) — applied to all transports.
     """
     if transport not in VALID_TRANSPORTS:
         raise ValueError(
@@ -280,6 +347,8 @@ def run(
         os.environ.setdefault("NO_COLOR", "1")  # keep the stdio stream clean
 
     mcp = build_server()
+    if tools or exclude_tools:
+        apply_tool_filter(mcp, tools, exclude_tools)
     if transport == "stdio":
         mcp.run(transport="stdio", show_banner=False)
         return
