@@ -157,3 +157,51 @@ def test_ask_vision_fn_requires_prompt():
 def test_ground_fn_requires_description():
     with pytest.raises(ValueError):
         vis.ground_fn(description="")
+
+
+import agent_windows.mcp.tools.input as inp
+
+
+def test_click_fn_with_coords():
+    with patch.object(inp, "_call", return_value={"output": "clicked"}) as m:
+        out = inp.click_fn(loc=[10, 20], selector=None, right=True, double=False)
+    m.assert_called_once_with("click", x=10, y=20, right=True, double=False)
+    assert out == "clicked"
+
+
+def test_click_fn_with_selector():
+    with patch.object(inp, "_call", return_value={"output": "ok"}) as m:
+        inp.click_fn(loc=None, selector="@e5", right=False, double=False)
+    m.assert_called_once_with("click", selector="@e5", right=False, double=False)
+
+
+def test_click_fn_requires_loc_or_selector():
+    with pytest.raises(ValueError):
+        inp.click_fn(loc=None, selector=None)
+
+
+def test_type_fn_forwards_at_selector():
+    with patch.object(inp, "_call", return_value={"output": "typed"}) as m:
+        inp.type_fn(text="hi", at_selector="@e2")
+    m.assert_called_once_with("type", text="hi", at_selector="@e2",
+                              enter=False, clear=False, caret_position="idle")
+
+
+def test_type_fn_forwards_at_coords():
+    with patch.object(inp, "_call", return_value={"output": "typed"}) as m:
+        inp.type_fn(text="hi", loc=[5, 6])
+    m.assert_called_once_with("type", text="hi", at_x=5, at_y=6,
+                              enter=False, clear=False, caret_position="idle")
+
+
+def test_drag_fn_forwards_four_coords():
+    """drag_fn forwards all four coordinates + the right flag."""
+    with patch.object(inp, "_call", return_value={"output": "ok"}) as m:
+        inp.drag_fn(x1=0, y1=1, x2=2, y2=3, right=True)
+    m.assert_called_once_with("drag", x1=0, y1=1, x2=2, y2=3, right=True)
+
+
+def test_scroll_fn_forwards_selector():
+    with patch.object(inp, "_call", return_value={"output": "ok"}) as m:
+        inp.scroll_fn(loc=None, selector="@e1", direction="up", amount=3)
+    m.assert_called_once_with("scroll", selector="@e1", direction="up", amount=3)
