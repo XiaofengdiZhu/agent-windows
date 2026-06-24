@@ -457,6 +457,77 @@ class TestLoadConfigValidation:
         assert cfg.load_config()["mcp"]["port"] == 9000
 
 
+class TestTrimToNonDefaults:
+    def test_all_defaults_to_empty(self):
+        from agent_windows.utils.config import _trim_to_non_defaults
+        import copy
+        assert _trim_to_non_defaults(copy.deepcopy(DEFAULT_CONFIG)) == {}
+
+    def test_only_non_default_kept(self):
+        from agent_windows.utils.config import _trim_to_non_defaults
+        cfg = {"mcp": {"port": 9000, "transport": "stdio", "host": "127.0.0.1"}}
+        # Only port differs from defaults; transport/host equal -> dropped.
+        assert _trim_to_non_defaults(cfg) == {"mcp": {"port": 9000}}
+
+    def test_unknown_key_preserved(self):
+        from agent_windows.utils.config import _trim_to_non_defaults
+        cfg = {"vlm": {"model": "gpt-4o-mini", "prompts": {"x": 1}}, "evil": 1}
+        # vlm.model equals default -> dropped; unknown vlm.prompts and [evil] kept.
+        assert _trim_to_non_defaults(cfg) == {"vlm": {"prompts": {"x": 1}}, "evil": 1}
+
+    def test_empty_section_dropped(self):
+        from agent_windows.utils.config import _trim_to_non_defaults
+        cfg = {"mcp": {"transport": "stdio"}}  # all equal default -> empty section
+        assert _trim_to_non_defaults(cfg) == {}
+
+
+class TestWriteConfig:
+    def test_writes_only_non_defaults(self, tmp_path, monkeypatch):
+        import agent_windows.utils.config as cfg
+
+        monkeypatch.delenv("AGENT_WINDOWS_VLM_API_KEY", raising=False)
+        path = tmp_path / "config.toml"
+        cfg.write_config({"mcp": {"port": 9000}}, path)
+        text = path.read_text(encoding="utf-8")
+        assert "port = 9000" in text
+        assert "transport" not in text  # default value not written
+
+    def test_default_config_writes_empty_file(self, tmp_path, monkeypatch):
+        import agent_windows.utils.config as cfg
+        import copy
+
+        monkeypatch.delenv("AGENT_WINDOWS_VLM_API_KEY", raising=False)
+        path = tmp_path / "config.toml"
+        cfg.write_config(copy.deepcopy(cfg.DEFAULT_CONFIG), path)
+        assert path.read_text(encoding="utf-8").strip() == ""
+
+    def test_encrypts_secret(self, tmp_path, monkeypatch):
+        import agent_windows.utils.config as cfg
+
+        monkeypatch.delenv("AGENT_WINDOWS_VLM_API_KEY", raising=False)
+        monkeypatch.setattr(cfg, "_encrypt_secret", lambda s: "dpapi:ENC")
+        path = tmp_path / "config.toml"
+        cfg.write_config({"vlm": {"api_key": "sk-secret"}}, path)
+        text = path.read_text(encoding="utf-8")
+        assert "dpapi:ENC" in text
+        assert "sk-secret" not in text
+
+    def test_round_trip_preserves_values(self, tmp_path, monkeypatch):
+        import agent_windows.utils.config as cfg
+
+        monkeypatch.setattr(cfg, "get_config_path", lambda: tmp_path / "config.toml")
+        monkeypatch.delenv("AGENT_WINDOWS_VLM_API_KEY", raising=False)
+        monkeypatch.setattr(cfg, "_encrypt_secret", lambda s: "dpapi:" + s)
+        monkeypatch.setattr(cfg, "_decrypt_secret", lambda v: v[len("dpapi:"):] if v.startswith("dpapi:") else v)
+        cfg._config_cache = None
+
+        src = {"mcp": {"port": 9000}, "vlm": {"api_key": "sk-secret"}}
+        cfg.write_config(src, tmp_path / "config.toml")
+        loaded = cfg.load_config()
+        assert loaded["mcp"]["port"] == 9000
+        assert loaded["vlm"]["api_key"] == "sk-secret"
+
+
 class TestCheckLeaf:
     """_check_leaf enforces the per-type rules (bool/int disambiguation etc.)."""
 

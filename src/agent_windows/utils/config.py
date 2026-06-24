@@ -265,6 +265,63 @@ def load_config() -> dict[str, Any]:
     return merged
 
 
+def _trim_to_non_defaults(config: dict, reference: dict = None) -> dict:
+    """Return a copy of *config* containing only non-default leaves plus all
+    unknown keys/sections (passed through verbatim for round-trip safety).
+
+    Used by :func:`write_config` so the on-disk file stays minimal (TODO #10).
+    """
+    if reference is None:
+        reference = DEFAULT_CONFIG
+    out: dict[str, Any] = {}
+    for key, actual in config.items():
+        default_val = reference.get(key, _MISSING)
+        if default_val is _MISSING:
+            out[key] = actual  # unknown key/section — preserve
+        elif isinstance(default_val, dict):
+            if isinstance(actual, dict):
+                sub = _trim_to_non_defaults(actual, default_val)
+                if sub:
+                    out[key] = sub
+            else:
+                out[key] = actual  # defensive; validation should prevent this
+        else:
+            if actual != default_val:
+                out[key] = actual
+    return out
+
+
+def _encrypt_for_write(config: dict) -> dict:
+    """Shallow-copy *config* and DPAPI-encrypt ``vlm.api_key`` / ``mcp.auth_key``
+    for serialization. A key that is empty or already ``dpapi:``-prefixed, or a
+    non-string value, is passed through unchanged. The caller's dict is not
+    mutated (it keeps usable plaintext). Shared by write_config and full-write.
+    """
+    to_write = dict(config)
+    for section, field in (("vlm", "api_key"), ("mcp", "auth_key")):
+        sub = to_write.get(section)
+        if isinstance(sub, dict):
+            sub = dict(sub)
+            key = sub.get(field, "")
+            if isinstance(key, str) and key and not key.startswith("dpapi:"):
+                sub[field] = _encrypt_secret(key)
+            to_write[section] = sub
+    return to_write
+
+
+def _serialize(config: dict, path: Path) -> None:
+    """Write *config* to *path* as TOML, encrypting secrets first."""
+    path.write_text(toml.dumps(_encrypt_for_write(config)), encoding="utf-8")
+
+
+def write_config(config: dict, path: Path) -> None:
+    """Serialize *config* to TOML at *path*, writing only non-default values
+    (TODO #10). Unknown keys are preserved; secrets are DPAPI-encrypted.
+    Does NOT set the owner-only ACL or clear the cache — callers do that.
+    """
+    _serialize(_trim_to_non_defaults(config), path)
+
+
 def save_config(config: dict[str, Any]) -> None:
     """Save config dict to TOML file.
 
