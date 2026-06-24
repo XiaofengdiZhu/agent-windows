@@ -234,6 +234,12 @@ def apply_tool_filter(
     removes just the named tools. Unknown names are silently ignored (the tool
     simply isn't there to remove) — this keeps typos from crashing startup.
 
+    This is **irreversible for the process**: it mutates the registry in place,
+    and ``build_server()`` memoizes the instance, so a later ``build_server()``
+    (e.g. a re-serve in the same process) keeps the filtered set. That matches
+    the one-shot server-startup use case; tests call ``reset_server()`` between
+    cases.
+
     FastMCP has changed its internal registry across versions: older releases
     expose ``_tool_manager._tools``; 3.x stores components on
     ``_local_provider._components`` keyed ``"tool:<name>@"`` → ``FunctionTool``
