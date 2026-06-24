@@ -305,6 +305,23 @@ def test_mcp_serve_loopback_host_needs_no_auth():
     mock_run.assert_called_once()
 
 
+def test_mcp_serve_allow_insecure_remote_config_fallback():
+    """[mcp] allow_insecure_remote=true in config satisfies the guard (no CLI flag)."""
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+
+    runner = CliRunner()
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config",
+                      return_value={"mcp": {"allow_insecure_remote": True}}):
+        result = runner.invoke(mcp_cmd.app,
+                               ["serve", "--transport", "streamable-http",
+                                "--host", "0.0.0.0", "--port", "9000"])
+    assert result.exit_code == 0, result.output
+    mock_run.assert_called_once()
+    assert "warning" in result.output.lower()
+
+
 # ── `mcp auth` ──────────────────────────────────────────────────────────
 
 def test_mcp_auth_generates_key_and_writes_config(tmp_path, monkeypatch):

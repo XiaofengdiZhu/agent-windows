@@ -86,7 +86,8 @@ def serve(
     if allow_insecure_remote and transport != "stdio":
         typer.echo(
             f"WARNING: binding HTTP transport to {host!r} with NO authentication. "
-            "Anyone who can reach this port has full desktop control. NOT recommended.")
+            "Anyone who can reach this port has full desktop control. NOT recommended.",
+            err=True)
 
     from agent_windows.mcp import run
     run(transport=transport, host=host, port=port, debug=debug,
