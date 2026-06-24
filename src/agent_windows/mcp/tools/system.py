@@ -1,0 +1,241 @@
+"""System MCP tools — apps, shell, filesystem, clipboard, process, notify,
+registry. These map 1:1 to the daemon's system handlers."""
+from typing import Any, Literal
+
+from mcp.types import ToolAnnotations
+
+from agent_windows.mcp._call import _call, _as_bool
+
+
+# ── apps ───────────────────────────────────────────────────────────────
+
+def app_launch_fn(name_or_path: str, args: list[str] | None = None) -> str:
+    if args is not None and (not isinstance(args, list) or not all(isinstance(a, str) for a in args)):
+        raise ValueError("args must be a list of strings")
+    return str(_call("app_launch", name_or_path=name_or_path, args=args).get("output", ""))
+
+
+def app_switch_fn(name_or_title: str) -> str:
+    return str(_call("app_switch", name_or_title=name_or_title).get("output", ""))
+
+
+def app_resize_fn(name_or_title: str, width: int, height: int,
+                  x: int = -1, y: int = -1) -> str:
+    if width <= 0 or height <= 0:
+        raise ValueError("width and height must be positive integers")
+    return str(_call("app_resize", name_or_title=name_or_title, width=width,
+                     height=height, x=x, y=y).get("output", ""))
+
+
+def app_list_fn() -> str:
+    return str(_call("app_list").get("output", ""))
+
+
+# ── shell ──────────────────────────────────────────────────────────────
+
+def shell_fn(command: str) -> str:
+    return str(_call("shell", command=command).get("output", ""))
+
+
+# ── filesystem ─────────────────────────────────────────────────────────
+
+def fs_read_fn(path: str, offset: int | None = None, limit: int | None = None) -> str:
+    return str(_call("fs_read", path=path, offset=offset, limit=limit).get("output", ""))
+
+
+def fs_write_fn(path: str, content: str, append: bool | str = False) -> str:
+    if content is None:
+        raise ValueError("content is required for write")
+    return str(_call("fs_write", path=path, content=content,
+                     append=_as_bool(append)).get("output", ""))
+
+
+def fs_list_fn(path: str, pattern: str | None = None,
+               recursive: bool | str = False, show_hidden: bool | str = False) -> str:
+    return str(_call("fs_list", path=path, pattern=pattern,
+                     recursive=_as_bool(recursive),
+                     show_hidden=_as_bool(show_hidden)).get("output", ""))
+
+
+def fs_copy_fn(path: str, destination: str, overwrite: bool | str = False) -> str:
+    return str(_call("fs_copy", path=path, destination=destination,
+                     overwrite=_as_bool(overwrite)).get("output", ""))
+
+
+def fs_move_fn(path: str, destination: str, overwrite: bool | str = False) -> str:
+    return str(_call("fs_move", path=path, destination=destination,
+                     overwrite=_as_bool(overwrite)).get("output", ""))
+
+
+def fs_delete_fn(path: str, recursive: bool | str = False) -> str:
+    return str(_call("fs_delete", path=path, recursive=_as_bool(recursive)).get("output", ""))
+
+
+def fs_search_fn(path: str, pattern: str, recursive: bool | str = True) -> str:
+    return str(_call("fs_search", path=path, pattern=pattern,
+                     recursive=_as_bool(recursive)).get("output", ""))
+
+
+def fs_info_fn(path: str) -> str:
+    return str(_call("fs_info", path=path).get("output", ""))
+
+
+# ── clipboard ──────────────────────────────────────────────────────────
+
+def clipboard_get_fn(keyboard: bool | str = False) -> str:
+    return str(_call("clipboard_get", keyboard=_as_bool(keyboard) or None).get("output", ""))
+
+
+def clipboard_set_fn(text: str, keyboard: bool | str = False) -> str:
+    return str(_call("clipboard_set", text=text, keyboard=_as_bool(keyboard) or None).get("output", ""))
+
+
+# ── process ────────────────────────────────────────────────────────────
+
+def process_list_fn() -> str:
+    return str(_call("process_list").get("output", ""))
+
+
+def process_kill_fn(pid_or_name: int | str) -> str:
+    return str(_call("process_kill", pid_or_name=pid_or_name).get("output", ""))
+
+
+# ── notify ─────────────────────────────────────────────────────────────
+
+def notify_fn(title: str, message: str, app_id: str | None = None) -> str:
+    return str(_call("notify", title=title, message=message, app_id=app_id).get("output", ""))
+
+
+# ── registry ───────────────────────────────────────────────────────────
+
+def registry_fn(
+    mode: Literal["get", "set", "delete", "list"],
+    path: str,
+    name: str | None = None,
+    value: Any = None,
+    type: str = "String",
+) -> str:
+    if mode not in ("get", "set", "delete", "list"):
+        raise ValueError("mode must be get/set/delete/list")
+    return str(_call("registry", mode=mode, path=path, name=name,
+                     value=value, type=type).get("output", ""))
+
+
+# ── registration ───────────────────────────────────────────────────────
+
+def register(mcp) -> None:
+    _REG = ToolAnnotations
+
+    @mcp.tool(name="app_launch", description=(
+        "Launch an application by name (e.g. 'notepad') or path. "
+        "args is an optional list of string arguments."
+    ), annotations=_REG(title="App Launch", readOnlyHint=False, destructiveHint=False, openWorldHint=False))
+    def _app_launch(name_or_path: str, args: list[str] | None = None) -> str:
+        return app_launch_fn(name_or_path=name_or_path, args=args)
+
+    @mcp.tool(name="app_switch", description=(
+        "Switch focus to a window by name/title."
+    ), annotations=_REG(title="App Switch", readOnlyHint=False, destructiveHint=False, openWorldHint=False))
+    def _app_switch(name_or_title: str) -> str:
+        return app_switch_fn(name_or_title=name_or_title)
+
+    @mcp.tool(name="app_resize", description=(
+        "Resize a window by name/title. width/height required (positive ints). "
+        "x/y position optional (-1 = leave)."
+    ), annotations=_REG(title="App Resize", readOnlyHint=False, destructiveHint=False, openWorldHint=False))
+    def _app_resize(name_or_title: str, width: int, height: int,
+                    x: int = -1, y: int = -1) -> str:
+        return app_resize_fn(name_or_title=name_or_title, width=width, height=height, x=x, y=y)
+
+    @mcp.tool(name="app_list", description="List all visible windows.",
+              annotations=_REG(title="App List", readOnlyHint=True, idempotentHint=True, openWorldHint=False))
+    def _app_list() -> str:
+        return app_list_fn()
+
+    @mcp.tool(name="shell", description=(
+        "Run a PowerShell command and return stdout/stderr."
+    ), annotations=_REG(title="Shell", readOnlyHint=False, destructiveHint=True, openWorldHint=True))
+    def _shell(command: str) -> str:
+        return shell_fn(command=command)
+
+    @mcp.tool(name="fs_read", description=(
+        "Read a text file. offset/limit select a 1-based line range."
+    ), annotations=_REG(title="FS Read", readOnlyHint=True, idempotentHint=True, openWorldHint=False))
+    def _fs_read(path: str, offset: int | None = None, limit: int | None = None) -> str:
+        return fs_read_fn(path=path, offset=offset, limit=limit)
+
+    @mcp.tool(name="fs_write", description=(
+        "Write to a file. append=True appends instead of overwriting."
+    ), annotations=_REG(title="FS Write", readOnlyHint=False, destructiveHint=True, openWorldHint=False))
+    def _fs_write(path: str, content: str, append: bool | str = False) -> str:
+        return fs_write_fn(path=path, content=content, append=append)
+
+    @mcp.tool(name="fs_list", description=(
+        "List a directory. pattern filters names; recursive walks subdirs; "
+        "show_hidden keeps dotfiles."
+    ), annotations=_REG(title="FS List", readOnlyHint=True, idempotentHint=True, openWorldHint=False))
+    def _fs_list(path: str, pattern: str | None = None,
+                 recursive: bool | str = False, show_hidden: bool | str = False) -> str:
+        return fs_list_fn(path=path, pattern=pattern, recursive=recursive, show_hidden=show_hidden)
+
+    @mcp.tool(name="fs_copy", description="Copy a file/dir. overwrite=True replaces target.",
+              annotations=_REG(title="FS Copy", readOnlyHint=False, destructiveHint=True, openWorldHint=False))
+    def _fs_copy(path: str, destination: str, overwrite: bool | str = False) -> str:
+        return fs_copy_fn(path=path, destination=destination, overwrite=overwrite)
+
+    @mcp.tool(name="fs_move", description="Move/rename a file/dir. overwrite=True replaces target.",
+              annotations=_REG(title="FS Move", readOnlyHint=False, destructiveHint=True, openWorldHint=False))
+    def _fs_move(path: str, destination: str, overwrite: bool | str = False) -> str:
+        return fs_move_fn(path=path, destination=destination, overwrite=overwrite)
+
+    @mcp.tool(name="fs_delete", description="Delete a file/dir. recursive=True for non-empty dirs.",
+              annotations=_REG(title="FS Delete", readOnlyHint=False, destructiveHint=True, openWorldHint=False))
+    def _fs_delete(path: str, recursive: bool | str = False) -> str:
+        return fs_delete_fn(path=path, recursive=recursive)
+
+    @mcp.tool(name="fs_search", description="Find files/dirs matching a glob pattern (recursive by default).",
+              annotations=_REG(title="FS Search", readOnlyHint=True, idempotentHint=True, openWorldHint=False))
+    def _fs_search(path: str, pattern: str, recursive: bool | str = True) -> str:
+        return fs_search_fn(path=path, pattern=pattern, recursive=recursive)
+
+    @mcp.tool(name="fs_info", description="Return metadata (size/dates/type) for a file or directory.",
+              annotations=_REG(title="FS Info", readOnlyHint=True, idempotentHint=True, openWorldHint=False))
+    def _fs_info(path: str) -> str:
+        return fs_info_fn(path=path)
+
+    @mcp.tool(name="clipboard_get", description="Get clipboard content. keyboard=True simulates Ctrl+C.",
+              annotations=_REG(title="Clipboard Get", readOnlyHint=True, idempotentHint=True, openWorldHint=False))
+    def _clipboard_get(keyboard: bool | str = False) -> str:
+        return clipboard_get_fn(keyboard=keyboard)
+
+    @mcp.tool(name="clipboard_set", description="Set clipboard content. keyboard=True simulates Ctrl+V.",
+              annotations=_REG(title="Clipboard Set", readOnlyHint=False, destructiveHint=True, openWorldHint=False))
+    def _clipboard_set(text: str, keyboard: bool | str = False) -> str:
+        return clipboard_set_fn(text=text, keyboard=keyboard)
+
+    @mcp.tool(name="process_list", description="List running processes.",
+              annotations=_REG(title="Process List", readOnlyHint=True, idempotentHint=True, openWorldHint=False))
+    def _process_list() -> str:
+        return process_list_fn()
+
+    @mcp.tool(name="process_kill", description="Kill a process by PID (int) or name (str).",
+              annotations=_REG(title="Process Kill", readOnlyHint=False, destructiveHint=True, openWorldHint=False))
+    def _process_kill(pid_or_name: int | str) -> str:
+        return process_kill_fn(pid_or_name=pid_or_name)
+
+    @mcp.tool(name="notify", description=(
+        "Show a Windows toast notification. app_id defaults to PowerShell's AUMID."
+    ), annotations=_REG(title="Notify", readOnlyHint=False, destructiveHint=False, openWorldHint=False))
+    def _notify(title: str, message: str, app_id: str | None = None) -> str:
+        return notify_fn(title=title, message=message, app_id=app_id)
+
+    @mcp.tool(name="registry", description=(
+        "Windows Registry operation. mode: get/set/delete/list. path is a "
+        "PowerShell-drive path (e.g. 'HKCU:\\\\Software\\\\MyApp'). set needs "
+        "name+value (type: String/DWord/QWord/MultiString/Binary); get needs "
+        "name; delete takes optional name (omit to delete the whole key); list "
+        "takes only path."
+    ), annotations=_REG(title="Registry", readOnlyHint=False, destructiveHint=True, openWorldHint=False))
+    def _registry(mode: Literal["get", "set", "delete", "list"], path: str,
+                  name: str | None = None, value: Any = None, type: str = "String") -> str:
+        return registry_fn(mode=mode, path=path, name=name, value=value, type=type)

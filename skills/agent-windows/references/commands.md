@@ -775,6 +775,31 @@ agent-windows config doctor            # Check whether the vision model is confi
 
 Config file: `~/.agent-windows/config.toml`
 
+### mcp serve / auth / install / uninstall
+
+MCP server. The launcher forwards these to the bundled Python CLI transparently, so use `agent-windows mcp ...` directly. Requires the `mcp` extra (`uv tool install agent-windows` includes it; from source run `uv sync --extra mcp`).
+
+```bash
+agent-windows mcp serve                                          # stdio (default; Claude Desktop / Cursor)
+agent-windows mcp serve --transport streamable-http --port 8765  # remote clients
+agent-windows mcp auth --transport streamable-http --host 0.0.0.0 --port 8000 --with-tls
+agent-windows mcp install          # auto-start the HTTP server at login (Scheduled Task)
+agent-windows mcp uninstall        # stop + remove the login auto-start task
+```
+
+`serve` starts the FastMCP server, which auto-starts the daemon on the first tool call — no separate `daemon start` needed. Defaults come from the `[mcp]` config section; explicit flags override. `auth_key` and TLS only apply to HTTP transports (sse / streamable-http), never stdio.
+
+`auth` generates a bearer token (DPAPI-encrypted at rest in `[mcp] auth_key`), optionally a TLS cert, saves them to config, and prints the ready-to-paste MCP client config snippet (stdio / sse / streamable-http). Regenerate with `--force`.
+
+| Subcommand | Parameters |
+|------------|------------|
+| `mcp serve` | `--transport` (stdio\|sse\|streamable-http), `--host`, `--port`, `--debug` |
+| `mcp auth` | `--transport`, `--host`, `--port`, `--with-tls`, `--force` |
+| `mcp install` | `--transport`, `--host`, `--port`, `--force` |
+| `mcp uninstall` | — |
+
+The server exposes ~46 tools mapping 1:1 to the daemon methods (screenshot, snapshot, observe, ground, detect, ask_vision, highlight, diff, get_text, element_state, cleanup_screenshots, click, dblclick, hover, move, mouse_down, mouse_up, drag, scroll, type, shortcut, app_launch/switch/resize/list, shell, fs_read/write/list/copy/move/delete/search/info, clipboard_get/set, process_list/kill, notify, registry, batch, multi_select, multi_edit, ping, wait, wait_for). Same usage tips apply: call `snapshot` first for pixel-exact coordinates, prefer it over `ground`/`detect` for named controls, and always `app switch` before input.
+
 ---
 
 ## Global Options
