@@ -1001,11 +1001,15 @@ def test_mcp_serve_empty_ip_allowlist_flag_falls_through_to_config(monkeypatch):
 
 
 def test_mcp_serve_config_scalar_list_value_is_normalized():
-    """`config set` writes scalars, so a list key may land as a bare string.
-    The serve reads must wrap a scalar into a one-element list rather than
-    iterating its characters (which would corrupt parsing). Regression test for
-    the config-set round-trip across all four list keys.
-    """
+    """serve() wraps a scalar list-field value into a one-element list instead
+    of iterating its characters (which would corrupt parsing).
+
+    After TODO #10, a well-formed config never has scalars here: set_config_value
+    wraps scalars into lists on write and load_config's strict validation
+    rejects scalar-on-list. But a config dict constructed programmatically (or
+    via env/flag fallbacks feeding a non-validated dict) could still carry a
+    scalar, so the normalization in build_mcp_config + serve stays as
+    defense-in-depth. This test pins that normalization."""
     from typer.testing import CliRunner
     from agent_windows.cli.commands import mcp_cmd
     import ipaddress

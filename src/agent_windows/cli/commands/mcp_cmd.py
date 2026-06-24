@@ -17,7 +17,7 @@ from pathlib import Path
 
 import typer
 
-from agent_windows.utils.config import load_config
+from agent_windows.utils.config import build_mcp_config, load_config
 
 app = typer.Typer(help="MCP server", no_args_is_help=True)
 
@@ -121,12 +121,12 @@ def serve(
     from agent_windows.mcp.server import (
         is_loopback_host, compute_allowed_hosts)
     full_cfg = load_config()
-    cfg = full_cfg.get("mcp") or {}
-    security_cfg = full_cfg.get("security") or {}
-    tools_cfg = full_cfg.get("tools") or {}
-    transport = transport or cfg.get("transport", "stdio")
-    host = host or cfg.get("host", "127.0.0.1")
-    port = port if port is not None else int(cfg.get("port", 8000))
+    # Typed view of [mcp]/[security]/[tools] for type-safe initial reads
+    # (TODO #10). Flag/env overrides below still resolve precedence per-key.
+    view = build_mcp_config(full_cfg)
+    transport = transport or view.server.transport
+    host = host or view.server.host
+    port = port if port is not None else view.server.port
     if not 1 <= port <= 65535:
         # Fail fast with a clear message rather than letting uvicorn raise an
         # opaque bind error. Applies to both the --port flag and [mcp] port.
@@ -143,9 +143,9 @@ def serve(
         oauth_client_id = None
         oauth_client_secret = None
     else:
-        auth_key = cfg.get("auth_key") or None
-        ssl_certfile = cfg.get("ssl_certfile") or None
-        ssl_keyfile = cfg.get("ssl_keyfile") or None
+        auth_key = view.server.auth_key or None
+        ssl_certfile = view.server.ssl_certfile or None
+        ssl_keyfile = view.server.ssl_keyfile or None
         # IP allowlist precedence: --ip-allowlist flag > AGENT_WINDOWS_IP_ALLOWLIST
         # env > [security] ip_allowlist config. Comma-separated; stdio ignores it.
         raw_allowlist = ip_allowlist
@@ -154,7 +154,7 @@ def serve(
         entries = ([e.strip() for e in raw_allowlist.split(",") if e.strip()]
                    if raw_allowlist else None)
         if not entries:
-            entries = [e for e in _as_list(security_cfg.get("ip_allowlist")) if e]
+            entries = [e for e in _as_list(view.security.ip_allowlist) if e]
         parsed_allowlist = _parse_allowlist(entries)
         # CORS origins precedence: --cors-origins flag > AGENT_WINDOWS_CORS_ORIGINS
         # env > [security] cors_origins config. Empty = no CORS headers emitted.
@@ -164,7 +164,7 @@ def serve(
         parsed_cors = ([o.strip() for o in raw_cors.split(",") if o.strip()]
                        if raw_cors else None)
         if not parsed_cors:
-            cfg_cors = [o for o in _as_list(security_cfg.get("cors_origins")) if o]
+            cfg_cors = [o for o in _as_list(view.security.cors_origins) if o]
             parsed_cors = cfg_cors or None
 
         # OAuth precedence: --oauth-client-id flag > AGENT_WINDOWS_OAUTH_CLIENT_ID
@@ -172,11 +172,11 @@ def serve(
         # be set together (mutual-exclusion checked below).
         oauth_client_id = oauth_client_id or os.environ.get("AGENT_WINDOWS_OAUTH_CLIENT_ID")
         if not oauth_client_id:
-            oauth_client_id = security_cfg.get("oauth_client_id") or None
+            oauth_client_id = view.security.oauth_client_id or None
         oauth_client_secret = oauth_client_secret or os.environ.get(
             "AGENT_WINDOWS_OAUTH_CLIENT_SECRET")
         if not oauth_client_secret:
-            oauth_client_secret = security_cfg.get("oauth_client_secret") or None
+            oauth_client_secret = view.security.oauth_client_secret or None
 
     # A bool flag needs a config fallback like host/port: the command-line flag
     # wins; otherwise AGENT_WINDOWS_ALLOW_INSECURE_REMOTE env > [mcp]
@@ -184,7 +184,7 @@ def serve(
     allow_insecure_remote = allow_insecure_remote or (
         os.environ.get("AGENT_WINDOWS_ALLOW_INSECURE_REMOTE", "").lower()
         in ("1", "true", "yes")
-        or bool(cfg.get("allow_insecure_remote", False)))
+        or view.server.allow_insecure_remote)
 
     # OAuth client id/secret must be set together (one without the other is a
     # misconfiguration, not a partial setup). Checked BEFORE the bare-bind guard
@@ -233,13 +233,13 @@ def serve(
     if parsed_tools is None:
         parsed_tools = _split_csv(os.environ.get("AGENT_WINDOWS_TOOLS"))
     if not parsed_tools:
-        parsed_tools = [t for t in _as_list(tools_cfg.get("include")) if t] or None
+        parsed_tools = [t for t in _as_list(view.tools.include) if t] or None
 
     parsed_exclude = _split_csv(exclude_tools)
     if parsed_exclude is None:
         parsed_exclude = _split_csv(os.environ.get("AGENT_WINDOWS_EXCLUDE_TOOLS"))
     if not parsed_exclude:
-        parsed_exclude = [t for t in _as_list(tools_cfg.get("exclude")) if t] or None
+        parsed_exclude = [t for t in _as_list(view.tools.exclude) if t] or None
 
     # stateless_http precedence: flag > env (AGENT_WINDOWS_STATELESS_HTTP) >
     # [mcp] stateless_http config. A bool flag wins; config/env default false.
@@ -248,7 +248,7 @@ def serve(
         parsed_stateless = os.environ.get(
             "AGENT_WINDOWS_STATELESS_HTTP", "").lower() in ("1", "true", "yes")
     if not parsed_stateless:
-        parsed_stateless = bool(cfg.get("stateless_http", False))
+        parsed_stateless = view.server.stateless_http
 
     from agent_windows.mcp import run
     # DNS-rebinding protection: compute a Host-header allowlist from the bind

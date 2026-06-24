@@ -247,6 +247,20 @@ class MCPConfig:
     tools: ToolsConfig = field(default_factory=ToolsConfig)
 
 
+def _coerce_list(value: Any) -> list:
+    """Normalize a list config value to a list, wrapping a scalar string as a
+    one-element list (a scalar would otherwise be character-iterated by
+    ``list(...)``). Mirrors mcp_cmd._as_list; duplicated here so config.py stays
+    free of the CLI layer. Defense-in-depth for programmatically-built configs;
+    load_config validation already rejects scalars on list fields.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    return list(value)
+
+
 def build_mcp_config(config: dict) -> MCPConfig:
     """Build a typed :class:`MCPConfig` view from a validated config dict.
 
@@ -269,14 +283,14 @@ def build_mcp_config(config: dict) -> MCPConfig:
             stateless_http=mcp.get("stateless_http", False),
         ),
         security=SecurityConfig(
-            ip_allowlist=list(sec.get("ip_allowlist", []) or []),
-            cors_origins=list(sec.get("cors_origins", []) or []),
+            ip_allowlist=_coerce_list(sec.get("ip_allowlist", []) or []),
+            cors_origins=_coerce_list(sec.get("cors_origins", []) or []),
             oauth_client_id=sec.get("oauth_client_id", "") or "",
             oauth_client_secret=sec.get("oauth_client_secret", "") or "",
         ),
         tools=ToolsConfig(
-            include=list(tools.get("include", []) or []),
-            exclude=list(tools.get("exclude", []) or []),
+            include=_coerce_list(tools.get("include", []) or []),
+            exclude=_coerce_list(tools.get("exclude", []) or []),
         ),
     )
 
