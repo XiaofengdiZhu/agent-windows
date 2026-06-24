@@ -243,3 +243,36 @@ def test_process_kill_fn_accepts_int_pid():
     with patch.object(sysmod, "_call", return_value={"output": "killed"}) as m:
         sysmod.process_kill_fn(pid_or_name=1234)
     m.assert_called_once_with("process_kill", pid_or_name=1234)
+
+
+import agent_windows.mcp.tools.batch as bat
+
+
+def test_batch_fn_requires_non_empty_commands():
+    with pytest.raises(ValueError):
+        bat.batch_fn(commands=[])
+
+
+def test_batch_fn_forwards_shape():
+    cmds = [{"method": "ping"}, {"method": "app_list"}]
+    with patch.object(bat, "_call", return_value={"output": "ok"}) as m:
+        bat.batch_fn(commands=cmds, delay=0.1, stop_on_error=False)
+    m.assert_called_once_with("batch", commands=cmds, delay=0.1, stop_on_error=False)
+
+
+def test_multi_select_fn_requires_locs_or_selectors():
+    with pytest.raises(ValueError):
+        bat.multi_select_fn()
+
+
+def test_multi_select_fn_rejects_both():
+    with pytest.raises(ValueError):
+        bat.multi_select_fn(locs=[[1, 2]], selectors=["@e1"])
+
+
+def test_multi_edit_fn_forwards_locs():
+    with patch.object(bat, "_call", return_value={"output": "ok"}) as m:
+        bat.multi_edit_fn(locs=[[1, 2, "hi"]])
+    # *_fn forwards locs + selectors(None default) verbatim (_call strips None;
+    # it's mocked here). Assert method + locs; selectors passed through as None.
+    m.assert_called_once_with("multi_edit", locs=[[1, 2, "hi"]], selectors=None)
