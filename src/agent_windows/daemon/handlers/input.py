@@ -157,6 +157,36 @@ def _scroll(params: dict) -> dict[str, Any]:
     return {"output": f"## Scroll\nPosition: ({x}, {y})\nDirection: {direction}\nAmount: {amount}"}
 
 
+@handler("expand")
+def _expand(params: dict) -> dict[str, Any]:
+    """Expand an expandable element (@eN) via its ExpandCollapsePattern. (TODO #12)
+
+    Unlike the coordinate-based input handlers, this drives a live UIA Pattern,
+    so it only accepts a ``selector`` (@eN) — the snapshot's bbox is reverse-
+    looked-up to a live control. See expand_element for semantics (idempotent,
+    skips if already expanded).
+    """
+    from agent_windows.core.tree import expand_element
+
+    selector = require(params, "selector")
+    result = expand_element(selector)
+    return {"output": (
+        f"## Expand\nElement: {selector}\nState: {result['state']}\n"
+        f"Skipped: {result.get('skipped', False)}")}
+
+
+@handler("collapse")
+def _collapse(params: dict) -> dict[str, Any]:
+    """Collapse an expandable element (@eN) via its ExpandCollapsePattern. (TODO #12)"""
+    from agent_windows.core.tree import collapse_element
+
+    selector = require(params, "selector")
+    result = collapse_element(selector)
+    return {"output": (
+        f"## Collapse\nElement: {selector}\nState: {result['state']}\n"
+        f"Skipped: {result.get('skipped', False)}")}
+
+
 @handler("move")
 def _move(params: dict) -> dict[str, Any]:
     """Move mouse to position."""

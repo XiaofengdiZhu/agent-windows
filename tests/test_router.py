@@ -113,7 +113,8 @@ class TestRequire:
                     "wait_for", "wait_for_check",
                     "highlight", "diff", "cleanup_screenshots",
                     "move", "drag", "hover", "dblclick",
-                    "mouse_down", "mouse_up", "app_resize"}
+                    "mouse_down", "mouse_up", "app_resize",
+                    "expand", "collapse"}
         registered = set(HANDLERS.keys())
         missing = expected - registered
         assert not missing, f"Missing handlers: {missing}"

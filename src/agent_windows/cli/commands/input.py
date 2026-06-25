@@ -149,3 +149,21 @@ def shortcut(
 ) -> None:
     """Send keyboard shortcut."""
     _cmd(ctx, "shortcut", keys=keys)
+
+
+@app.command()
+def expand(
+    ctx: typer.Context,
+    selector: str = typer.Argument(help="Element ref (@eN)"),
+) -> None:
+    """Expand an expandable element (ComboBox/TreeItem/Menu) at @eN."""
+    _cmd(ctx, "expand", selector=selector)
+
+
+@app.command()
+def collapse(
+    ctx: typer.Context,
+    selector: str = typer.Argument(help="Element ref (@eN)"),
+) -> None:
+    """Collapse an expandable element at @eN."""
+    _cmd(ctx, "collapse", selector=selector)

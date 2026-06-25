@@ -130,6 +130,8 @@ Python daemon (persistent, COM STA worker)
 | `move X Y \| -s @eN` | Move mouse |
 | `drag X1 Y1 X2 Y2 [--right]` | Drag |
 | `shortcut KEYS` | Keyboard shortcut (e.g. `ctrl+c`) |
+| `expand SELECTOR` | Expand an element (@eN) — ComboBox/TreeItem/Menu |
+| `collapse SELECTOR` | Collapse an element (@eN) |
 
 ### System
 | Command | Description |

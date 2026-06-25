@@ -446,7 +446,7 @@ def test_register_all_registers_every_domain_on_a_fake_mcp():
         "ground", "detect", "ask_vision",
         # input
         "click", "dblclick", "hover", "move", "mouse_down", "mouse_up",
-        "drag", "scroll", "type", "shortcut",
+        "drag", "scroll", "type", "shortcut", "expand", "collapse",
         # system
         "app_launch", "app_switch", "app_resize", "app_list", "shell",
         "fs_read", "fs_write", "fs_list", "fs_copy", "fs_move", "fs_delete",

@@ -1105,6 +1105,72 @@ class TestRichMetadata:
                     ExpandCollapseState.Expanded}))
         assert el.metadata["expand_collapse_state"] == "expanded"
 
+    def test_expand_collapse_on_group_outside_classic_set(self):
+        """expand_collapse_state is collected for ANY element exposing a real
+        expandable state — browsers expose it on GroupControl/Tree nodes
+        beyond the classic ComboBox/TreeItem set. (TODO #12)"""
+        GROUP = ControlType.GroupControl  # outside the classic expand set
+        el = self._one(FakeElement(
+            name="Section", control_type=GROUP,
+            extra_props={
+                PropertyId.ExpandCollapseExpandCollapseStateProperty:
+                    ExpandCollapseState.Collapsed}))
+        assert el.metadata["expand_collapse_state"] == "collapsed"
+
+    def test_expand_collapse_leaf_node_omits_key(self):
+        """LeafNode means 'no children to expand' — not a useful state, so the
+        key is omitted to keep the tree quiet. (TODO #12)"""
+        el = self._one(FakeElement(
+            name="Dead", control_type=COMBO,
+            extra_props={
+                PropertyId.ExpandCollapseExpandCollapseStateProperty:
+                    ExpandCollapseState.LeafNode}))
+        assert "expand_collapse_state" not in el.metadata
+
+    def test_scrollable_vertical(self):
+        """A vertically-scrollable container reports scrollable='v' plus its
+        scroll position. (TODO #12)"""
+        el = self._one(FakeElement(
+            name="Doc", control_type=PANE,
+            extra_props={
+                PropertyId.ScrollVerticallyScrollableProperty: True,
+                PropertyId.ScrollHorizontallyScrollableProperty: False,
+                PropertyId.ScrollVerticalScrollPercentProperty: 42.6}))
+        assert el.metadata["scrollable"] == "v"
+        assert el.metadata["scroll_pct"] == "v:43%"
+
+    def test_scrollable_both_axes(self):
+        """Both-axes scrollable reports 'vh' and both percentages. (TODO #12)"""
+        el = self._one(FakeElement(
+            name="Grid", control_type=PANE,
+            extra_props={
+                PropertyId.ScrollVerticallyScrollableProperty: True,
+                PropertyId.ScrollHorizontallyScrollableProperty: True,
+                PropertyId.ScrollVerticalScrollPercentProperty: 0.0,
+                PropertyId.ScrollHorizontalScrollPercentProperty: 100.0}))
+        assert el.metadata["scrollable"] == "vh"
+        assert el.metadata["scroll_pct"] == "v:0% h:100%"
+
+    def test_not_scrollable_omits_keys(self):
+        """An interactive-but-non-scrollable control (a combo box with no
+        scroll properties) stays quiet — no scrollable/scroll_pct keys.
+        (TODO #12)"""
+        el = self._one(FakeElement(name="Drop", control_type=COMBO))
+        assert "scrollable" not in el.metadata
+        assert "scroll_pct" not in el.metadata
+
+    def test_scrollable_false_omits_keys(self):
+        """Scroll property explicitly False (not None) also omits the keys —
+        only True scrollability is reported. Tested on an interactive combo so
+        it still surfaces via _one. (TODO #12)"""
+        el = self._one(FakeElement(
+            name="Fixed", control_type=COMBO,
+            extra_props={
+                PropertyId.ScrollVerticallyScrollableProperty: False,
+                PropertyId.ScrollHorizontallyScrollableProperty: False}))
+        assert "scrollable" not in el.metadata
+        assert "scroll_pct" not in el.metadata
+
     def test_slider_range(self):
         """SliderControl is now interactive (TODO #15 added it), so a slider's
         range metadata surfaces via the normal traversal path."""

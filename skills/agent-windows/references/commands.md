@@ -52,7 +52,7 @@ Uses config `tree.max_depth` (default 15), `tree.max_elements` (default 200), `t
 
 **Output**: Same as observe but without screenshot file. Contains the Interactive Elements table with `@eN` refs.
 
-**Rich element attributes**: the Interactive Elements table's State column surfaces extra attributes when the element exposes them — `toggle_state:on|off|indeterminate` (checkboxes/toggles), `value:...` (text fields, sliders), `expand_collapse_state:expanded|collapsed|partially expanded|leaf` (combo boxes), `min:..`/`max:..` (sliders), `is_selected:true|false` (list/radio/tab items), `is_password:true`, `shortcut:Ctrl+S`, `help_text:...`. These are read from the cached UIA properties (no extra COM round-trips) and help disambiguate similar-looking elements and read current state without an extra click.
+**Rich element attributes**: the Interactive Elements table's State column surfaces extra attributes when the element exposes them — `toggle_state:on|off|indeterminate` (checkboxes/toggles), `value:...` (text fields, sliders), `expand_collapse_state:expanded|collapsed|partially expanded` (combo boxes, tree items, menus, collapsible groups — any element exposing the state), `scrollable:v|h|vh` + `scroll_pct:v:42% h:0%` (scrollable containers), `min:..`/`max:..` (sliders), `is_selected:true|false` (list/radio/tab items), `is_password:true`, `shortcut:Ctrl+S`, `help_text:...`. These are read from the cached UIA properties (no extra COM round-trips) and help disambiguate similar-looking elements and read current state without an extra click. Note: scrollable and expandable containers are promoted to interactive (they get an `@eN` ref) so they can be targeted by `expand`/`collapse`/`scroll`.
 
 ### screenshot
 
@@ -356,6 +356,23 @@ agent-windows scroll -s @e3 [--direction up]
 \* `X Y` is required unless `--selector` is given.
 
 **Output**: `{output}`
+
+---
+
+### expand / collapse
+
+Expand or collapse an expandable UI element at `@eN` (a ComboBox dropdown, TreeItem, menu, or collapsible Group). Unlike the coordinate-based input commands, these drive the element's UIA `ExpandCollapsePattern` directly — call `snapshot` first to find a node whose State shows `expand_collapse_state: collapsed` (or `expanded`), then pass its `@eN`. Both are idempotent: an already-expanded element is skipped on `expand`, already-collapsed (or a leaf) on `collapse`. `expand` also skips a `leaf` (nothing to expand); a `partially expanded` node is expanded further (the provider decides). If the element has moved or been obscured since the snapshot, the error tells you to re-snapshot.
+
+```bash
+agent-windows expand @e4
+agent-windows collapse @e4
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `SELECTOR` | str | **required** | Element ref (`@eN`) |
+
+**Output**: `{output}` with the element, resulting State, and whether the action was skipped.
 
 ---
 
@@ -798,7 +815,7 @@ agent-windows mcp uninstall        # stop + remove the login auto-start task
 | `mcp install` | `--transport`, `--host`, `--port`, `--force` |
 | `mcp uninstall` | — |
 
-The server exposes ~46 tools mapping 1:1 to the daemon methods (screenshot, snapshot, observe, ground, detect, ask_vision, highlight, diff, get_text, element_state, cleanup_screenshots, click, dblclick, hover, move, mouse_down, mouse_up, drag, scroll, type, shortcut, app_launch/switch/resize/list, shell, fs_read/write/list/copy/move/delete/search/info, clipboard_get/set, process_list/kill, notify, registry, batch, multi_select, multi_edit, ping, wait, wait_for). Same usage tips apply: call `snapshot` first for pixel-exact coordinates, prefer it over `ground`/`detect` for named controls, and always `app switch` before input.
+The server exposes ~48 tools mapping 1:1 to the daemon methods (screenshot, snapshot, observe, ground, detect, ask_vision, highlight, diff, get_text, element_state, cleanup_screenshots, click, dblclick, hover, move, mouse_down, mouse_up, drag, scroll, type, shortcut, expand, collapse, app_launch/switch/resize/list, shell, fs_read/write/list/copy/move/delete/search/info, clipboard_get/set, process_list/kill, notify, registry, batch, multi_select, multi_edit, ping, wait, wait_for). Same usage tips apply: call `snapshot` first for pixel-exact coordinates, prefer it over `ground`/`detect` for named controls, and always `app switch` before input.
 
 ---
 

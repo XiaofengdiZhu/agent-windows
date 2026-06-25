@@ -142,7 +142,7 @@ agent-windows config doctor                            # verify
 | @e3 | Button  | Cancel   | (520,300,620,340)  |         |
 ```
 
-The State column also surfaces richer attributes when the element exposes them: `toggle_state:on|off|indeterminate`, `value:...`, `expand_collapse_state:expanded|collapsed|partially expanded|leaf`, `min`/`max` (sliders), `is_selected:true|false` (list/radio/tab items), `is_password:true`, `shortcut:Ctrl+S`, `help_text:...`. Use these to disambiguate similar-looking elements and read current state (e.g. a checkbox's on/off) without an extra click.
+The State column also surfaces richer attributes when the element exposes them: `toggle_state:on|off|indeterminate`, `value:...`, `expand_collapse_state:expanded|collapsed|partially expanded` (combo boxes, tree items, menus, collapsible groups), `scrollable:v|h|vh` + `scroll_pct:v:42%` (scrollable containers), `min`/`max` (sliders), `is_selected:true|false` (list/radio/tab items), `is_password:true`, `shortcut:Ctrl+S`, `help_text:...`. Use these to disambiguate similar-looking elements and read current state (e.g. a checkbox's on/off) without an extra click. Scrollable and expandable containers are promoted to interactive (they get an `@eN` ref) so they can be targeted by `expand`/`collapse`/`scroll`.
 
 ### Commands That Accept @eN Directly
 

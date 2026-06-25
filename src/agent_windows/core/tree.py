@@ -418,6 +418,136 @@ def resolve_element_center(selector: str) -> tuple[int, int]:
     return validate_coordinates(cx, cy)
 
 
+def _resolve_live_control(selector: str):
+    """Resolve an ``@eN`` selector to a LIVE UIA ``Control`` for Pattern calls.
+
+    The snapshot's ``ElementInfo`` only stores a bbox (no COM handle), so
+    pattern-based operations (expand/collapse) must re-acquire a live element.
+    We resolve the cached bbox center (already screen-validated) and reverse-
+    look it up via ``ControlFromPoint``. This is the same staleness trade-off
+    click makes: the 2s-TTL snapshot may be stale, but ``resolve_element_center``
+    re-checks the center is on-screen.
+
+    Args:
+        selector: Element reference like ``"@e3"``.
+
+    Returns:
+        A live ``Control`` (from ``agent_windows.uia.controls``) at the
+        element's bbox center.
+
+    Raises:
+        ValueError: If the element moved/vanished (ControlFromPoint returned
+            None) — surfaces as INVALID_PARAMS at the router with an actionable
+            "re-snapshot and retry" hint.
+        IndexError/ValueError: Propagated from ``resolve_element_center`` for
+            a bad selector format or out-of-range index.
+        CoordinateRangeError: If the bbox center is off-screen.
+    """
+    from agent_windows.uia.controls import ControlFromPoint
+
+    x, y = resolve_element_center(selector)
+    control = ControlFromPoint(x, y)
+    if control is None:
+        raise ValueError(
+            f"Element {selector} not reachable at ({x}, {y}) — it may have "
+            f"moved, been obscured, or closed. Re-snapshot and retry."
+        )
+    return control
+
+
+# ExpandCollapseExpandCollapseStateProperty int → human-readable state. Shared
+# with _collect_rich_metadata; the value map is the single source of truth so
+# expand_element/collapse_element report states consistent with the tree.
+_EC_STATE_STR = {
+    0: "collapsed",    # ExpandCollapseState.Collapsed
+    1: "expanded",     # ExpandCollapseState.Expanded
+    2: "partially expanded",  # ExpandCollapseState.PartiallyExpanded
+    3: "leaf",         # ExpandCollapseState.LeafNode
+}
+
+
+def _read_expand_collapse_state(pattern) -> str | None:
+    """Read the current ExpandCollapseState from a live pattern, or None."""
+    try:
+        return _EC_STATE_STR.get(int(pattern.ExpandCollapseState))
+    except Exception:
+        logger.debug("Failed to read ExpandCollapseState", exc_info=True)
+        return None
+
+
+def expand_element(selector: str) -> dict[str, Any]:
+    """Expand an expandable UI element (ComboBox/TreeItem/Menu/Group). (TODO #12)
+
+    Acquires a live ``Control`` via ``_resolve_live_control`` and drives its
+    ``ExpandCollapsePattern``. Idempotent: if the element is already expanded,
+    returns ``{"skipped": True}`` rather than erroring — the desired end state
+    already holds.
+
+    Args:
+        selector: ``@eN`` element ref.
+
+    Returns:
+        ``{"action": "expanded"/"skipped", "state": <new state str>,
+        "skipped": bool}``.
+
+    Raises:
+        ValueError: Element not reachable (→ INVALID_PARAMS) or does not
+            support expand/collapse (→ INVALID_PARAMS).
+    """
+    from agent_windows.uia.enums import PatternId
+
+    control = _resolve_live_control(selector)
+    pattern = control.GetPattern(PatternId.ExpandCollapsePattern)
+    if pattern is None:
+        raise ValueError(
+            f"Element {selector} does not support expand/collapse"
+        )
+    state = _read_expand_collapse_state(pattern)
+    # Skip when the goal already holds (fully expanded) or can never hold
+    # (leaf — no children to expand). Calling Expand() on a leaf is a wasted
+    # ~0.5s sleep (OPERATION_WAIT_TIME) inside the pattern, so pre-check.
+    # PartiallyExpanded falls through to Expand(): the agent asking to expand
+    # a partially-expanded node (e.g. a 3-state tree) usually wants the
+    # remaining children, so let the provider decide rather than hard-skip.
+    if state == "expanded" or state == "leaf":
+        return {"action": "skipped", "state": state, "skipped": True}
+    pattern.Expand()
+    new_state = _read_expand_collapse_state(pattern) or "expanded"
+    return {"action": "expanded", "state": new_state, "skipped": False}
+
+
+def collapse_element(selector: str) -> dict[str, Any]:
+    """Collapse an expandable UI element. (TODO #12)
+
+    Mirror of ``expand_element``. Idempotent: an already-collapsed element
+    returns ``{"skipped": True}``.
+
+    Args:
+        selector: ``@eN`` element ref.
+
+    Returns:
+        ``{"action": "collapsed"/"skipped", "state": <new state str>,
+        "skipped": bool}``.
+
+    Raises:
+        ValueError: Element not reachable or does not support expand/collapse.
+    """
+    from agent_windows.uia.enums import PatternId
+
+    control = _resolve_live_control(selector)
+    pattern = control.GetPattern(PatternId.ExpandCollapsePattern)
+    if pattern is None:
+        raise ValueError(
+            f"Element {selector} does not support expand/collapse"
+        )
+    state = _read_expand_collapse_state(pattern)
+    if state == "collapsed" or state == "leaf":
+        return {"action": "skipped", "state": state, "skipped": True}
+    ok = pattern.Collapse()
+    new_state = _read_expand_collapse_state(pattern) or "collapsed"
+    return {"action": "collapsed", "state": new_state, "skipped": False}
+
+
 def _traverse_window(
     client,
     window: WindowInfo,
@@ -540,6 +670,15 @@ def _build_traversal_cache(client):
     cache.AddProperty(PropertyId.HelpTextProperty)
     cache.AddProperty(PropertyId.IsPasswordProperty)
     cache.AddProperty(PropertyId.SelectionItemIsSelectedProperty)
+    # Scroll (TODO #12): surface scrollable containers so the agent can see
+    # which regions scroll and their current position. Each is a cached local
+    # lookup (no COM round-trip) — collected into metadata only when the
+    # container actually reports scrollability, keeping the tree output quiet
+    # for static panes.
+    cache.AddProperty(PropertyId.ScrollVerticallyScrollableProperty)
+    cache.AddProperty(PropertyId.ScrollHorizontallyScrollableProperty)
+    cache.AddProperty(PropertyId.ScrollVerticalScrollPercentProperty)
+    cache.AddProperty(PropertyId.ScrollHorizontalScrollPercentProperty)
     cache.TreeScope = TreeScope.TreeScope_Element | TreeScope.TreeScope_Children
     cache.TreeFilter = client.IUIAutomation.RawViewCondition
     return cache
@@ -673,6 +812,21 @@ def _traverse_node(
         except Exception:
             logger.debug("Failed to get cached node property", exc_info=True)
 
+        # Collect richer attributes (TODO #15 / #12). Done unconditionally —
+        # before the interactive decision — because a node may carry actionable
+        # metadata (scrollable container, expandable group) that PROMOTES it to
+        # interactive even though its control type (Pane/Group/Document) isn't
+        # in INTERACTIVE_TYPES. Those are exactly the containers the agent
+        # needs to see and address (@eN). Mirrors reference's separate
+        # scrollable_nodes list, folded into our single interactive list.
+        metadata = _collect_rich_metadata(node, control_type)
+
+        # Promote scrollable / expandable containers to interactive so they get
+        # an @eN ref and surface in the Interactive Elements table. (TODO #12)
+        if is_enabled and ("scrollable" in metadata or
+                           "expand_collapse_state" in metadata):
+            is_interactive = True
+
         # Detect a modal dialog: a WindowControl whose WindowIsModal is True.
         # Once entered, every interactive element in this subtree is marked
         # is_modal so render_snapshot can promote them to the front. The flag
@@ -723,7 +877,7 @@ def _traverse_node(
                     is_offscreen=is_offscreen,
                     is_modal=this_in_modal,
                     window_name=window.title,
-                    metadata=_collect_rich_metadata(node, control_type),
+                    metadata=metadata,
                 ))
 
         # Recurse into children. PERF3-05: fetch all children pre-cached in one
@@ -786,14 +940,28 @@ def _read_cached(node, prop_id) -> Any:
     return val
 
 
+def _fmt_scroll_pct(val: Any) -> str:
+    """Format a ScrollPattern percent value for metadata. (TODO #12)
+
+    UIA reports scroll position as a float in [0, 100] (or -1 /
+    ``ScrollPattern.NoScrollValue`` when not set). Round to an int for the
+    tree output — sub-percent precision isn't actionable for the agent.
+    Returns "0" for None/invalid so the marker still reads sensibly.
+    """
+    try:
+        n = round(float(val))
+    except (TypeError, ValueError):
+        return "0"
+    if n < 0:  # NoScrollValue sentinel
+        return "0"
+    return str(n)
+
+
 # Control types whose Toggle state is meaningful (on/off/indeterminate).
 _TOGGLE_TYPES = {"ButtonControl", "CheckBoxControl", "MenuItemControl",
                  "ListItemControl", "TreeItemControl"}
-# Control types carrying a text value (input fields).
+# Controls carrying a text value (input fields).
 _VALUE_TYPES = {"EditControl", "TextBoxControl", "DocumentControl"}
-# Controls that expand/collapse (combo boxes, trees, menus).
-_EXPAND_TYPES = {"ComboBoxControl", "TreeItemControl", "MenuItemControl",
-                 "SplitButtonControl"}
 # Controls exposing a numeric range (sliders, spinners).
 _RANGE_TYPES = {"SliderControl", "SpinnerControl"}
 
@@ -840,19 +1008,45 @@ def _collect_rich_metadata(node, control_type: str) -> dict[str, Any]:
             except (TypeError, ValueError):
                 pass
 
-    # Expand/collapse state for combo boxes, tree items, etc.
-    if control_type in _EXPAND_TYPES:
-        ecs = _read_cached(node, PropertyId.ExpandCollapseExpandCollapseStateProperty)
-        if ecs is not None:
-            try:
-                md["expand_collapse_state"] = {
-                    ExpandCollapseState.Collapsed: "collapsed",
-                    ExpandCollapseState.Expanded: "expanded",
-                    ExpandCollapseState.PartiallyExpanded: "partially expanded",
-                    ExpandCollapseState.LeafNode: "leaf",
-                }.get(int(ecs))
-            except (TypeError, ValueError):
-                pass
+    # Expand/collapse state — collected for ANY element that exposes a valid
+    # ExpandCollapseExpandCollapseStateProperty value (property-gated, not
+    # control-type-gated). Browsers/chromium expose expand/collapse on
+    # Group/Tree nodes beyond the classic ComboBox/TreeItem/SplitButton set;
+    # gating by property value catches them while leaving plain controls
+    # quiet (LeafNode/no property → no key). Mirrors reference's
+    # tree/service.py GroupControl handling. (TODO #12)
+    ecs = _read_cached(node, PropertyId.ExpandCollapseExpandCollapseStateProperty)
+    if ecs is not None:
+        try:
+            state_str = _EC_STATE_STR.get(int(ecs))
+            # Only record when the element is actually expandable — LeafNode
+            # means "no children to expand", so it carries no useful state.
+            if state_str and state_str != "leaf":
+                md["expand_collapse_state"] = state_str
+        except (TypeError, ValueError):
+            pass
+
+    # Scrollable container (TODO #12): report which axes scroll and the
+    # current position, so the agent knows where to send wheel input. Only
+    # emitted when at least one axis reports scrollable — static panes stay
+    # quiet. Axis string ("v"/"h"/"vh") is denser than a bare bool.
+    v_scrollable = _read_cached(node, PropertyId.ScrollVerticallyScrollableProperty)
+    h_scrollable = _read_cached(node, PropertyId.ScrollHorizontallyScrollableProperty)
+    axes = []
+    if v_scrollable:
+        axes.append("v")
+    if h_scrollable:
+        axes.append("h")
+    if axes:
+        md["scrollable"] = "".join(axes)
+        parts = []
+        if v_scrollable:
+            pct = _read_cached(node, PropertyId.ScrollVerticalScrollPercentProperty)
+            parts.append(f"v:{_fmt_scroll_pct(pct)}%")
+        if h_scrollable:
+            pct = _read_cached(node, PropertyId.ScrollHorizontalScrollPercentProperty)
+            parts.append(f"h:{_fmt_scroll_pct(pct)}%")
+        md["scroll_pct"] = " ".join(parts)
 
     # Text value + password flag for input fields.
     if control_type in _VALUE_TYPES:

@@ -84,6 +84,16 @@ def shortcut_fn(keys: str) -> str:
     return str(_call("shortcut", keys=keys).get("output", ""))
 
 
+def expand_fn(selector: str) -> str:
+    """Expand an expandable element. (TODO #12)"""
+    return str(_call("expand", selector=selector).get("output", ""))
+
+
+def collapse_fn(selector: str) -> str:
+    """Collapse an expandable element. (TODO #12)"""
+    return str(_call("collapse", selector=selector).get("output", ""))
+
+
 def register(mcp) -> None:
     @mcp.tool(name="click", description=(
         "Mouse click at [x, y] or at a UI element (@eN selector from a prior "
@@ -182,3 +192,23 @@ def register(mcp) -> None:
                                    destructiveHint=True, idempotentHint=False, openWorldHint=False))
     def _shortcut(keys: str) -> str:
         return shortcut_fn(keys=keys)
+
+    @mcp.tool(name="expand", description=(
+        "Expand an expandable UI element at @eN (a ComboBox dropdown, "
+        "TreeItem, menu, or collapsible Group). Call snapshot first to find a "
+        "node whose state is [expand_collapse_state: collapsed]. Idempotent: "
+        "already-expanded elements are skipped. Keywords: expand, open "
+        "dropdown, expand tree, show options."
+    ), annotations=ToolAnnotations(title="Expand", readOnlyHint=False,
+                                   destructiveHint=True, idempotentHint=True, openWorldHint=False))
+    def _expand(selector: str) -> str:
+        return expand_fn(selector=selector)
+
+    @mcp.tool(name="collapse", description=(
+        "Collapse an expandable UI element at @eN (the inverse of expand). "
+        "Idempotent: already-collapsed elements are skipped. Keywords: "
+        "collapse, close dropdown, fold, hide options."
+    ), annotations=ToolAnnotations(title="Collapse", readOnlyHint=False,
+                                   destructiveHint=True, idempotentHint=True, openWorldHint=False))
+    def _collapse(selector: str) -> str:
+        return collapse_fn(selector=selector)

@@ -249,6 +249,46 @@ class TestShortcutHandler:
             HANDLERS["shortcut"]({"keys": ["ctrl", "c"]})
 
 
+class TestExpandCollapseHandlers:
+    """expand/collapse take ONLY a selector (@eN) — no coordinates — and forward
+    to the core pattern-based functions. (TODO #12)"""
+
+    def test_expand_forwards_selector(self):
+        with patch("agent_windows.core.tree.expand_element",
+                   return_value={"action": "expanded", "state": "expanded",
+                                 "skipped": False}) as m:
+            r = HANDLERS["expand"]({"selector": "@e5"})
+        m.assert_called_once_with("@e5")
+        assert "Element: @e5" in r["output"]
+        assert "State: expanded" in r["output"]
+        assert "Skipped: False" in r["output"]
+
+    def test_expand_skipped_surfaces(self):
+        with patch("agent_windows.core.tree.expand_element",
+                   return_value={"action": "skipped", "state": "expanded",
+                                 "skipped": True}) as m:
+            r = HANDLERS["expand"]({"selector": "@e1"})
+        m.assert_called_once_with("@e1")
+        assert "Skipped: True" in r["output"]
+
+    def test_expand_missing_selector_raises(self):
+        with pytest.raises(ValueError, match="missing required parameter 'selector'"):
+            HANDLERS["expand"]({})
+
+    def test_collapse_forwards_selector(self):
+        with patch("agent_windows.core.tree.collapse_element",
+                   return_value={"action": "collapsed", "state": "collapsed",
+                                 "skipped": False}) as m:
+            r = HANDLERS["collapse"]({"selector": "@e2"})
+        m.assert_called_once_with("@e2")
+        assert "Element: @e2" in r["output"]
+        assert "State: collapsed" in r["output"]
+
+    def test_collapse_missing_selector_raises(self):
+        with pytest.raises(ValueError, match="missing required parameter 'selector'"):
+            HANDLERS["collapse"]({})
+
+
 # ── selector (@eN) → coordinate resolution (TODO #13) ────────────────
 
 
