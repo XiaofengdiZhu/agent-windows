@@ -10,6 +10,8 @@ The server auto-starts the daemon on the first tool call — no separate `daemon
 agent-windows mcp serve          # stdio (default) — for local clients
 ```
 
+> **Per-call screenshot resolution:** the `screenshot` tool accepts optional `scale` (e.g. `0.5` for half-resolution), `max_width`, and `max_height` params that override the config defaults for that one capture — handy for a quick low-res peek without changing config. Omit them to use the configured `[screenshot]` values. The returned metadata reports a `Coordinate Scale` factor to apply to image-pixel coords before clicking when a downscale occurred.
+
 ## Install in a client
 
 The stdio snippet is the common case — a command + `mcp serve`. Client-specific notes below. `agent-windows` must be on PATH for the client — if it isn't (e.g. an MSIX-sandboxed or WSL client), use the **full absolute path** to the executable (`where agent-windows` to find it; typically `C:\Users\<user>\.local\bin\agent-windows.exe` after `uv tool install`).

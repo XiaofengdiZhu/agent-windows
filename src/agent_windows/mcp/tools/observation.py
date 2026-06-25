@@ -14,10 +14,11 @@ so programmatic consumers still get structured error codes. (TODO #12)
 """
 import logging
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from fastmcp.utilities.types import Image
 from mcp.types import ToolAnnotations
+from pydantic import Field
 
 from agent_windows.mcp._call import _call
 
@@ -55,15 +56,23 @@ def screenshot_fn(
     monitor: int = -1,
     bbox: list[int] | None = None,
     selector: str | None = None,
+    scale: float | None = None,
+    max_width: int | None = None,
+    max_height: int | None = None,
 ) -> list:
     """Capture a screenshot. Returns the metadata text plus the image.
 
     On failure returns ``[error_text]`` (retryable) instead of raising, so the
     agent can recover — e.g. when the capture backend isn't ready yet. (TODO #12)
+
+    ``scale``/``max_width``/``max_height`` (TODO #15b) override the config
+    defaults for this capture only — pass ``scale=0.5`` for a quick low-res
+    shot. Omit to use the configured values.
     """
     try:
         result = _call("screenshot", output=output, monitor=monitor,
-                       bbox=bbox, selector=selector)
+                       bbox=bbox, selector=selector,
+                       scale=scale, max_width=max_width, max_height=max_height)
         return _image_from_result(result, "path")
     except (RuntimeError, OSError) as e:
         # RuntimeError carries the daemon's JSON-RPC error code; OSError covers
@@ -167,8 +176,21 @@ def register(mcp) -> None:
     ), annotations=ToolAnnotations(title="Screenshot", readOnlyHint=True,
                                    idempotentHint=True, openWorldHint=False))
     def _screenshot(output: str | None = None, monitor: int = -1,
-                    bbox: list[int] | None = None, selector: str | None = None) -> list:
-        return screenshot_fn(output=output, monitor=monitor, bbox=bbox, selector=selector)
+                    bbox: list[int] | None = None, selector: str | None = None,
+                    scale: Annotated[float | None, Field(
+                        description="Optional downscale factor for this capture only (e.g. 0.5 for half-resolution). Omit to use the config default (1.0).",
+                        ge=0.0, le=1.0,
+                    )] = None,
+                    max_width: Annotated[int | None, Field(
+                        description="Optional max width in px for this capture only; downscales (aspect-preserving) if the image is wider. Omit to use the config default.",
+                        ge=0,
+                    )] = None,
+                    max_height: Annotated[int | None, Field(
+                        description="Optional max height in px for this capture only; downscales (aspect-preserving) if the image is taller. Omit to use the config default.",
+                        ge=0,
+                    )] = None) -> list:
+        return screenshot_fn(output=output, monitor=monitor, bbox=bbox, selector=selector,
+                             scale=scale, max_width=max_width, max_height=max_height)
 
     @mcp.tool(name="snapshot", description=(
         "Return a semantic snapshot of the UIA accessibility tree: focused "

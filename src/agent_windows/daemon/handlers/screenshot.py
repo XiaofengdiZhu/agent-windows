@@ -104,13 +104,15 @@ def _screenshot(params: dict) -> dict[str, Any]:
             image = ai.copy()
         pre_scale_size = image.size  # annotation may not change size, but be safe
 
-    # Scale if configured
+    # Scale if configured. Per-call params (TODO #15b) override the config
+    # values when present, so an agent can request a quick low-res capture
+    # vs. the configured default in a single request. None → config wins.
     try:
         from agent_windows.utils.config import load_config
         cfg = load_config().get("screenshot", {})
-        max_w = cfg.get("max_width", 0)
-        max_h = cfg.get("max_height", 0)
-        scale = cfg.get("scale", 1.0)
+        max_w = params.get("max_width", cfg.get("max_width", 0))
+        max_h = params.get("max_height", cfg.get("max_height", 0))
+        scale = params.get("scale", cfg.get("scale", 1.0))
         image = scale_screenshot(image, max_width=max_w, max_height=max_h, scale=scale)
     except Exception:
         logger.debug("Screenshot scaling skipped", exc_info=True)

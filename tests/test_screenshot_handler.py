@@ -254,3 +254,49 @@ class TestScreenshotAnnotation:
                 patch("agent_windows.core.screenshot.annotate_screenshot") as m_ann:
             HANDLERS["screenshot"]({})
         m_ann.assert_not_called()
+
+
+class TestPerCallScaleOverride:
+    """TODO #15b: per-call scale/max_width/max_height override the config defaults."""
+
+    def _patch_scaling(self):
+        """Mock scale_screenshot to return the image unchanged but record its kwargs."""
+        from agent_windows.core import screenshot as sc
+        return patch.object(sc, "scale_screenshot", side_effect=lambda img, **kw: img)
+
+    def test_per_call_scale_overrides_config(self):
+        """Passing scale in params overrides the config value."""
+        from agent_windows.daemon.router import HANDLERS
+        with patch("agent_windows.utils.config.load_config",
+                   return_value={"screenshot": {"scale": 1.0, "max_width": 0, "max_height": 0}}), \
+                patch("agent_windows.core.screenshot.capture_screenshot",
+                      return_value=Image.new("RGB", (100, 100))), \
+                self._patch_scaling() as m_scale:
+            HANDLERS["screenshot"]({"scale": 0.5})
+        # scale=0.5 from params wins over config's 1.0
+        assert m_scale.call_args.kwargs["scale"] == 0.5
+
+    def test_per_call_max_dims_override_config(self):
+        """Passing max_width/max_height in params overrides the config values."""
+        from agent_windows.daemon.router import HANDLERS
+        with patch("agent_windows.utils.config.load_config",
+                   return_value={"screenshot": {"scale": 1.0, "max_width": 1920, "max_height": 1080}}), \
+                patch("agent_windows.core.screenshot.capture_screenshot",
+                      return_value=Image.new("RGB", (100, 100))), \
+                self._patch_scaling() as m_scale:
+            HANDLERS["screenshot"]({"max_width": 800, "max_height": 600})
+        assert m_scale.call_args.kwargs["max_width"] == 800
+        assert m_scale.call_args.kwargs["max_height"] == 600
+
+    def test_omitted_params_fall_back_to_config(self):
+        """When scale/max_* are omitted from params, the config defaults apply."""
+        from agent_windows.daemon.router import HANDLERS
+        with patch("agent_windows.utils.config.load_config",
+                   return_value={"screenshot": {"scale": 0.75, "max_width": 1280, "max_height": 720}}), \
+                patch("agent_windows.core.screenshot.capture_screenshot",
+                      return_value=Image.new("RGB", (100, 100))), \
+                self._patch_scaling() as m_scale:
+            HANDLERS["screenshot"]({})
+        assert m_scale.call_args.kwargs["scale"] == 0.75
+        assert m_scale.call_args.kwargs["max_width"] == 1280
+        assert m_scale.call_args.kwargs["max_height"] == 720

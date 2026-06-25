@@ -89,8 +89,10 @@ def test_screenshot_fn_forwards_params_and_returns_image_list():
     # screenshot_fn forwards every kwarg to _call (the *_fn layer doesn't strip
     # None — _call itself does, and here _call is mocked). Assert the method +
     # the explicit args; monitor/bbox/selector are passed through verbatim.
+    # scale/max_width/max_height default to None (TODO #15b); _call strips them.
     m.assert_called_once_with("screenshot", output="C:\\s.png", monitor=0,
-                              bbox=None, selector=None)
+                              bbox=None, selector=None,
+                              scale=None, max_width=None, max_height=None)
     # FastMCP tools that return an image return a list [text, Image]
     assert isinstance(out, list)
     assert out[0].startswith("## Screenshot")
