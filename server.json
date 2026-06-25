@@ -1,0 +1,22 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
+  "name": "io.github.XiaofengdiZhu/agent-windows",
+  "description": "Windows Computer-Use CLI for AI Agents — MCP server driving the Windows desktop via UIA + vision",
+  "status": "active",
+  "repository": {
+    "url": "https://github.com/XiaofengdiZhu/agent-windows",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "agent-windows",
+      "version": "0.1.0",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}
