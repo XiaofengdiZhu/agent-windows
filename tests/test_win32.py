@@ -1,10 +1,13 @@
-"""Unit tests for utils/win32.py — the shared get_process_name helper.
+"""Unit tests for utils/win32.py — the shared get_process_name and is_elevated
+helpers.
 
-The helper is shared by core/app_manager.py and core/tree.py (extracted in the
-QUAL-03 dedup). It had no direct test — only indirect coverage via the callers,
-which mock it out. This locks the Win32 plumbing: OpenProcess →
+get_process_name is shared by core/app_manager.py and core/tree.py (extracted in
+the QUAL-03 dedup). It had no direct test — only indirect coverage via the
+callers, which mock it out. This locks the Win32 plumbing: OpenProcess →
 QueryFullProcessImageNameW → basename → CloseHandle, plus the failure paths.
 (TEST3-04)
+
+is_elevated wraps shell32.IsUserAnAdmin for elevation-aware hints (TODO #14).
 """
 import os
 from unittest.mock import patch, MagicMock
@@ -71,3 +74,37 @@ def test_handles_path_without_directory(monkeypatch):
     monkeypatch.setattr(win32.ctypes.windll, "kernel32", kernel)
 
     assert win32.get_process_name(1) == "explorer.exe"
+
+
+# ── is_elevated: Win32 IsUserAnAdmin wrapper ───────────────────────────
+
+
+class TestIsElevated:
+    def test_admin_returns_true(self, monkeypatch):
+        """IsUserAnAdmin() != 0 → True."""
+        shell = MagicMock()
+        shell.IsUserAnAdmin.return_value = 1
+        monkeypatch.setattr(win32.ctypes.windll, "shell32", shell)
+        assert win32.is_elevated() is True
+        shell.IsUserAnAdmin.assert_called_once()
+
+    def test_non_admin_returns_false(self, monkeypatch):
+        """IsUserAnAdmin() == 0 → False."""
+        shell = MagicMock()
+        shell.IsUserAnAdmin.return_value = 0
+        monkeypatch.setattr(win32.ctypes.windll, "shell32", shell)
+        assert win32.is_elevated() is False
+
+    def test_attribute_error_returns_false(self, monkeypatch):
+        """If shell32 lacks IsUserAnAdmin (non-Windows edge) → False, no raise."""
+        shell = MagicMock()
+        shell.IsUserAnAdmin.side_effect = AttributeError("no shell32")
+        monkeypatch.setattr(win32.ctypes.windll, "shell32", shell)
+        assert win32.is_elevated() is False
+
+    def test_os_error_returns_false(self, monkeypatch):
+        """An OSError from the Win32 call → False, no raise."""
+        shell = MagicMock()
+        shell.IsUserAnAdmin.side_effect = OSError("win32 fault")
+        monkeypatch.setattr(win32.ctypes.windll, "shell32", shell)
+        assert win32.is_elevated() is False

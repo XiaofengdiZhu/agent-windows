@@ -7,6 +7,21 @@ import os
 logger = logging.getLogger(__name__)
 
 
+def is_elevated() -> bool:
+    """Return True if the current process runs with administrative privileges.
+
+    Uses ``shell32.IsUserAnAdmin`` (deprecated by Microsoft but still the
+    simplest reliable elevation check; the token-API alternative is heavier for
+    no practical gain here). Returns False on non-Windows or if the Win32 API
+    is unavailable, so callers can treat the hint as best-effort.
+    """
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin() != 0
+    except (AttributeError, OSError):
+        logger.debug("IsUserAnAdmin unavailable; assuming not elevated", exc_info=True)
+        return False
+
+
 def get_process_name(pid: int) -> str:
     """Get process executable name from PID via Win32 API."""
     PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
