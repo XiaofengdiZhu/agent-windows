@@ -1,69 +1,84 @@
 """Direct unit tests for core/clipboard.py.
 
-The handler-level tests in test_input_system_handlers.py mock clipboard
-entirely, so the real PowerShell construction — in particular the SEC-05
-stdin-piping injection fix and the QUAL-08 error-chaining — is otherwise
-unexercised. This file locks those paths down without touching the real
-clipboard or sending real keystrokes. (TEST3-02)
+The clipboard now uses the native win32clipboard API (TODO #17) instead of
+spawning powershell. These tests lock the Open/Get/Set/Close flow, the
+open-retry behavior, the empty-vs-non-text distinction, the keyboard
+(Ctrl+C/V) mode, and the QUAL-08 error chaining — all without touching the
+real clipboard or sending real keystrokes.
 """
 from unittest.mock import patch, MagicMock
+import sys
 
 import pytest
 
 from agent_windows.core import clipboard as cb
 
 
-def _completed(stdout: str = "", stderr: str = "", returncode: int = 0):
-    """Build a fake subprocess.CompletedProcess."""
-    return MagicMock(stdout=stdout, stderr=stderr, returncode=returncode)
+def _win32clip():
+    """A mock win32clipboard module: OpenClipboard/CloseClipboard/etc as MagicMocks."""
+    mod = MagicMock()
+    mod.CF_UNICODETEXT = 13
+    return mod
 
 
 # ── get_clipboard ─────────────────────────────────────────────────────
 
 
 class TestGetClipboard:
-    @patch("agent_windows.core.clipboard.subprocess.run")
-    def test_invokes_get_clipboard_command(self, mock_run):
-        """argv is exactly ['powershell', '-NoProfile', '-Command', 'Get-Clipboard']."""
-        mock_run.return_value = _completed(stdout="hello")
-        cb.get_clipboard()
-        argv = mock_run.call_args.args[0]
-        assert argv == ["powershell", "-NoProfile", "-Command", "Get-Clipboard"]
-        # capture_output + text + timeout + encoding all set
-        kwargs = mock_run.call_args.kwargs
-        assert kwargs["capture_output"] is True
-        assert kwargs["text"] is True
-        assert kwargs["timeout"] == 5
-        assert kwargs["encoding"] == "utf-8"
-        assert kwargs["errors"] == "replace"
-
-    @patch("agent_windows.core.clipboard.subprocess.run")
-    def test_content_returned_with_text_key(self, mock_run):
-        mock_run.return_value = _completed(stdout="hello world\n")
+    @patch("agent_windows.core.clipboard._open_clipboard")
+    def test_returns_unicode_text(self, mock_open):
+        """CF_UNICODETEXT available → returns the text, stripped."""
+        w32c = _win32clip()
+        w32c.IsClipboardFormatAvailable.return_value = True
+        w32c.GetClipboardData.return_value = "hello world\n"
+        mock_open.return_value = w32c
         result = cb.get_clipboard()
         assert result["text"] == "hello world"  # stripped
         assert "hello world" in result["output"]
+        w32c.GetClipboardData.assert_called_once_with(w32c.CF_UNICODETEXT)
+        w32c.CloseClipboard.assert_called_once()
 
-    @patch("agent_windows.core.clipboard.subprocess.run")
-    def test_empty_clipboard_reports_empty(self, mock_run):
-        mock_run.return_value = _completed(stdout="")
+    @patch("agent_windows.core.clipboard._open_clipboard")
+    def test_non_text_clipboard_reports_non_text(self, mock_open):
+        """No CF_UNICODETEXT available (e.g. an image) → 'non-text', no text key."""
+        w32c = _win32clip()
+        w32c.IsClipboardFormatAvailable.return_value = False
+        mock_open.return_value = w32c
         result = cb.get_clipboard()
         assert result["output"] == "## Clipboard\n(Empty or non-text content)"
-        assert "text" not in result  # no text key when empty
+        assert "text" not in result
+        w32c.GetClipboardData.assert_not_called()
+        w32c.CloseClipboard.assert_called_once()
 
-    @patch("agent_windows.core.clipboard.subprocess.run")
-    def test_failure_raises_runtime_error_with_chain(self, mock_run):
-        """QUAL-08 lock: errors raise RuntimeError with exception chaining."""
-        mock_run.side_effect = OSError("pipe broken")
-        with pytest.raises(RuntimeError, match="Failed to read clipboard") as exc_info:
+    @patch("agent_windows.core.clipboard._open_clipboard")
+    def test_empty_text_clipboard_reports_empty(self, mock_open):
+        """CF_UNICODETEXT available but blank → 'Empty' (distinct from non-text)."""
+        w32c = _win32clip()
+        w32c.IsClipboardFormatAvailable.return_value = True
+        w32c.GetClipboardData.return_value = "   \n  "  # whitespace-only → empty
+        mock_open.return_value = w32c
+        result = cb.get_clipboard()
+        assert result["output"] == "## Clipboard\n(Empty)"
+
+    @patch("agent_windows.core.clipboard._open_clipboard")
+    def test_close_called_even_on_error(self, mock_open):
+        """CloseClipboard runs in a finally — even if GetClipboardData raises."""
+        w32c = _win32clip()
+        w32c.IsClipboardFormatAvailable.return_value = True
+        w32c.GetClipboardData.side_effect = OSError("boom")
+        mock_open.return_value = w32c
+        with pytest.raises(RuntimeError, match="Failed to read clipboard"):
             cb.get_clipboard()
-        assert isinstance(exc_info.value.__cause__, OSError)
+        w32c.CloseClipboard.assert_called_once()  # finally ran
 
     @patch("agent_windows.core.input_controller.shortcut")
-    @patch("agent_windows.core.clipboard.subprocess.run")
-    def test_keyboard_true_sends_ctrl_c_first(self, mock_run, mock_shortcut):
+    @patch("agent_windows.core.clipboard._open_clipboard")
+    def test_keyboard_true_sends_ctrl_c_first(self, mock_open, mock_shortcut):
         """keyboard=True simulates Ctrl+C before reading the clipboard."""
-        mock_run.return_value = _completed(stdout="x")
+        w32c = _win32clip()
+        w32c.IsClipboardFormatAvailable.return_value = True
+        w32c.GetClipboardData.return_value = "x"
+        mock_open.return_value = w32c
         cb.get_clipboard(keyboard=True)
         mock_shortcut.assert_called_once_with("ctrl+c")
 
@@ -72,97 +87,108 @@ class TestGetClipboard:
 
 
 class TestSetClipboard:
-    @patch("agent_windows.core.clipboard.subprocess.run")
-    def test_text_piped_via_stdin_not_interpolated(self, mock_run):
-        """SEC-05 regression lock: text is passed as `input=` to a CONSTANT
-        command ($input | Set-Clipboard), never interpolated into the command
-        string. This is the injection fix — a here-string build would embed the
-        text and allow PowerShell metacharacters to execute."""
-        hostile = "'; Get-Process; '$evil"
-        mock_run.return_value = _completed(returncode=0)
+    @patch("agent_windows.core.clipboard._open_clipboard")
+    def test_empties_then_sets_text(self, mock_open):
+        """set calls EmptyClipboard then SetClipboardData(CF_UNICODETEXT, text)."""
+        w32c = _win32clip()
+        mock_open.return_value = w32c
+        result = cb.set_clipboard("hello")
+        w32c.EmptyClipboard.assert_called_once()
+        w32c.SetClipboardData.assert_called_once_with(w32c.CF_UNICODETEXT, "hello")
+        w32c.CloseClipboard.assert_called_once()
+        assert "hello" in result["output"]
+
+    @patch("agent_windows.core.clipboard._open_clipboard")
+    def test_text_set_verbatim_no_interpolation_risk(self, mock_open):
+        """TODO #17 + former SEC-05: with the native API there's no command string,
+        so hostile text is passed to SetClipboardData verbatim — no injection
+        surface at all. The text reaches the API unchanged."""
+        hostile = "'; Get-Process; '$evil\r\nback`tick${var}"
+        w32c = _win32clip()
+        mock_open.return_value = w32c
         cb.set_clipboard(hostile)
-        kwargs = mock_run.call_args.kwargs
-        argv = mock_run.call_args.args[0]
-        # The hostile text is on stdin, NOT in the command string
-        assert kwargs["input"] == hostile
-        assert argv[3] == "$input | Set-Clipboard"
-        # The command is byte-identical regardless of input value
-        assert hostile not in argv[3]
+        # The exact string reaches SetClipboardData — nothing is parsed.
+        assert w32c.SetClipboardData.call_args.args == (w32c.CF_UNICODETEXT, hostile)
 
-    @patch("agent_windows.core.clipboard.subprocess.run")
-    def test_command_constant_across_inputs(self, mock_run):
-        """The PowerShell command string must not change with the text value —
-        confirming no interpolation regardless of metacharacter content."""
-        mock_run.return_value = _completed(returncode=0)
-        inputs = [
-            "plain text",
-            "'; rm -rf /; '",                      # quotes + semicolon
-            '$var = "x"\nGet-Date',                 # dollar + newline
-            "back`tick",                            # backtick
-            "line1\r\nline2\ttab",                  # CRLF + tab
-        ]
-        commands = set()
-        for txt in inputs:
-            cb.set_clipboard(txt)
-            argv = mock_run.call_args.args[0]
-            commands.add(argv[3])
-            # each input is piped verbatim via stdin
-            assert mock_run.call_args.kwargs["input"] == txt
-        # exactly one constant command across all inputs
-        assert commands == {"$input | Set-Clipboard"}
-
-    @patch("agent_windows.core.clipboard.subprocess.run")
-    def test_nonzero_returncode_raises(self, mock_run):
-        """QUAL-08 lock: a nonzero PowerShell exit surfaces as a chained
-        RuntimeError, not a silent success."""
-        mock_run.return_value = _completed(stderr="access denied", returncode=1)
-        with pytest.raises(RuntimeError, match="Set-Clipboard failed") as exc_info:
+    @patch("agent_windows.core.clipboard._open_clipboard")
+    def test_close_called_even_on_set_error(self, mock_open):
+        """CloseClipboard runs in a finally — even if SetClipboardData raises."""
+        w32c = _win32clip()
+        w32c.SetClipboardData.side_effect = OSError("denied")
+        mock_open.return_value = w32c
+        with pytest.raises(RuntimeError, match="Failed to set clipboard"):
             cb.set_clipboard("x")
-        # the inner exception is preserved in the chain
-        assert exc_info.value.__cause__ is not None
+        w32c.CloseClipboard.assert_called_once()
 
-    @patch("agent_windows.core.clipboard.subprocess.run")
-    def test_subprocess_failure_raises_with_chain(self, mock_run):
-        """A subprocess.run exception propagates as a chained RuntimeError."""
-        mock_run.side_effect = FileNotFoundError("no powershell")
-        with pytest.raises(RuntimeError, match="Failed to set clipboard") as exc_info:
+    @patch("agent_windows.core.clipboard._open_clipboard")
+    def test_failure_raises_runtime_error_with_chain(self, mock_open):
+        """QUAL-08 lock: _open_clipboard failures already chain; re-raised as-is."""
+        mock_open.side_effect = RuntimeError("locked")
+        with pytest.raises(RuntimeError, match="locked"):
             cb.set_clipboard("x")
-        assert isinstance(exc_info.value.__cause__, FileNotFoundError)
 
     @patch("agent_windows.core.input_controller.shortcut")
-    @patch("agent_windows.core.clipboard.subprocess.run")
-    def test_keyboard_true_sends_ctrl_v_after(self, mock_run, mock_shortcut):
-        """keyboard=True simulates Ctrl+V AFTER setting the clipboard, and the
-        output carries the 'Keyboard: simulated Ctrl+V' marker. The paste
-        cannot happen unless the set succeeded — verify by making the set FAIL:
-        shortcut must NOT be called (proving paste is gated behind a successful
-        set, i.e. it runs after)."""
-        mock_run.return_value = _completed(returncode=0)
+    @patch("agent_windows.core.clipboard._open_clipboard")
+    def test_keyboard_true_sends_ctrl_v_after(self, mock_open, mock_shortcut):
+        """keyboard=True simulates Ctrl+V AFTER setting the clipboard."""
+        w32c = _win32clip()
+        mock_open.return_value = w32c
         result = cb.set_clipboard("x", keyboard=True)
         mock_shortcut.assert_called_once_with("ctrl+v")
         assert "Keyboard: simulated Ctrl+V" in result["output"]
 
     @patch("agent_windows.core.input_controller.shortcut")
-    @patch("agent_windows.core.clipboard.subprocess.run")
-    def test_keyboard_paste_skipped_when_set_fails(self, mock_run, mock_shortcut):
-        """If the clipboard set fails (nonzero returncode), Ctrl+V is NOT sent —
-        confirming the paste runs only after a successful set (ordering lock)."""
-        mock_run.return_value = _completed(stderr="denied", returncode=1)
+    @patch("agent_windows.core.clipboard._open_clipboard")
+    def test_keyboard_paste_skipped_when_set_fails(self, mock_open, mock_shortcut):
+        """If the clipboard set fails, Ctrl+V is NOT sent — paste runs only after
+        a successful set (ordering lock)."""
+        w32c = _win32clip()
+        w32c.SetClipboardData.side_effect = OSError("denied")
+        mock_open.return_value = w32c
         with pytest.raises(RuntimeError):
             cb.set_clipboard("x", keyboard=True)
         mock_shortcut.assert_not_called()
 
-    @patch("agent_windows.core.clipboard.subprocess.run")
-    def test_success_output_truncates_long_text(self, mock_run):
-        mock_run.return_value = _completed(returncode=0)
+    @patch("agent_windows.core.clipboard._open_clipboard")
+    def test_success_output_truncates_long_text(self, mock_open):
+        w32c = _win32clip()
+        mock_open.return_value = w32c
         long = "x" * 200
         result = cb.set_clipboard(long)
         assert "..." in result["output"]
         assert str(long) not in result["output"]  # truncated, not full
 
-    @patch("agent_windows.core.clipboard.subprocess.run")
-    def test_success_output_no_truncation_for_short_text(self, mock_run):
-        mock_run.return_value = _completed(returncode=0)
+    @patch("agent_windows.core.clipboard._open_clipboard")
+    def test_success_output_no_truncation_for_short_text(self, mock_open):
+        w32c = _win32clip()
+        mock_open.return_value = w32c
         result = cb.set_clipboard("hi")
         assert "..." not in result["output"]
         assert "hi" in result["output"]
+
+
+# ── _open_clipboard retry behavior ────────────────────────────────────
+
+
+class TestOpenClipboardRetry:
+    def test_retries_until_success(self):
+        """OpenClipboard fails a few times (another app holds it) then succeeds."""
+        w32c = _win32clip()
+        w32c.OpenClipboard.side_effect = [OSError("locked"), OSError("locked"), None]
+        # _open_clipboard imports win32clipboard locally, so patch sys.modules.
+        with patch.dict(sys.modules, {"win32clipboard": w32c}), \
+                patch("time.sleep"):  # don't really sleep
+            result = cb._open_clipboard()
+        assert result is w32c
+        assert w32c.OpenClipboard.call_count == 3
+
+    def test_gives_up_after_retries_with_chain(self):
+        """Persistent failure → RuntimeError chained to the last error."""
+        w32c = _win32clip()
+        w32c.OpenClipboard.side_effect = OSError("locked forever")
+        with patch.dict(sys.modules, {"win32clipboard": w32c}), \
+                patch("time.sleep"), \
+                patch("agent_windows.core.clipboard._OPEN_RETRIES", 2):
+            with pytest.raises(RuntimeError, match="Could not open clipboard") as exc_info:
+                cb._open_clipboard()
+        assert isinstance(exc_info.value.__cause__, OSError)
