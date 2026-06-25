@@ -70,9 +70,137 @@ class TestLaunchApp:
     def test_filenotfound_becomes_valueerror(self):
         with patch("agent_windows.core.filesystem.validate_executable_path"), \
              patch("agent_windows.core.app_manager.subprocess.Popen",
-                   side_effect=FileNotFoundError):
+                   side_effect=FileNotFoundError), \
+             patch("agent_windows.core.app_manager._resolve_friendly_name",
+                   return_value=None):
+            # The friendly-name fallback is patched to "no match" so this test
+            # stays hermetic — it must not spawn a real Get-StartApps powershell.
             with pytest.raises(ValueError, match="Application not found"):
                 am.launch_app("nonexistent-app-xyz")
+
+
+# ── friendly-name launch (TODO #18) ─────────────────────────────────
+
+
+class TestFriendlyNameLaunch:
+    """TODO #18: launch by Start-Menu friendly name when the PATH/exe path fails."""
+
+    def setup_method(self):
+        # Each test starts with a clean cache.
+        am._START_APPS_CACHE = None
+
+    def _csv(self, rows):
+        """Build a Get-StartApps CSV stdout from [(name, appid), ...]."""
+        import io
+        import csv
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow(["Name", "AppID"])
+        for n, a in rows:
+            w.writerow([n, a])
+        return buf.getvalue()
+
+    def test_get_start_apps_caches_result(self):
+        """Get-StartApps runs once; the second call reuses the cache (no 2nd subprocess)."""
+        csv_out = self._csv([("Calculator", "Microsoft.Calculator_8wekyb3d8bbwe!App"),
+                             ("Notepad", r"C:\Windows\System32\notepad.exe")])
+        with patch("agent_windows.core.app_manager.subprocess.run",
+                   return_value=MagicMock(stdout=csv_out, returncode=0)) as mock_run:
+            am._get_start_apps()
+            am._get_start_apps()
+        assert mock_run.call_count == 1
+
+    def test_get_start_apps_returns_empty_on_failure(self):
+        """A failed powershell call → {} (best-effort), not a raise."""
+        with patch("agent_windows.core.app_manager.subprocess.run",
+                   side_effect=FileNotFoundError("no powershell")):
+            assert am._get_start_apps() == {}
+
+    def test_resolve_exact_name_match(self):
+        """An exact (case-insensitive) friendly name resolves to its AppID."""
+        am._START_APPS_CACHE = {"calculator": "Microsoft.Calculator_8wekyb3d8bbwe!App"}
+        assert am._resolve_friendly_name("Calculator") == "Microsoft.Calculator_8wekyb3d8bbwe!App"
+        assert am._resolve_friendly_name("CALCULATOR") == "Microsoft.Calculator_8wekyb3d8bbwe!App"
+
+    def test_resolve_substring_match(self):
+        """No exact match → a substring match ("calc" ⊂ "calculator")."""
+        am._START_APPS_CACHE = {"calculator": "appid-calc", "edge": "appid-edge"}
+        assert am._resolve_friendly_name("calc") == "appid-calc"
+
+    def test_resolve_returns_none_when_no_map(self):
+        """Empty/disabled Start Menu → None (caller raises 'not found')."""
+        am._START_APPS_CACHE = {}
+        assert am._resolve_friendly_name("anything") is None
+
+    def test_launch_falls_back_to_friendly_name_on_filenotfound(self):
+        """When the PATH/exe Popen raises FileNotFoundError, the friendly-name
+        path resolves via the Start Menu and launches the resolved target."""
+        am._START_APPS_CACHE = {"myapp": r"C:\Apps\myapp.exe"}
+        fake_proc = MagicMock(pid=99)
+        with patch("agent_windows.core.filesystem.validate_executable_path"), \
+                patch("agent_windows.core.app_manager.subprocess.Popen",
+                      side_effect=[FileNotFoundError, fake_proc]) as mock_p, \
+                patch("agent_windows.core.app_manager._resolve_friendly_name",
+                      return_value=r"C:\Apps\myapp.exe"):
+            result = am.launch_app("myapp")
+        # Second Popen call launched the resolved path directly.
+        assert mock_p.call_args_list[1].args[0] == [r"C:\Apps\myapp.exe"]
+        assert result["pid"] == 99
+
+    def test_launch_uwp_uses_shell_appsfolder(self):
+        """A UWP AppID (no backslash, not an existing path) launches via
+        explorer.exe shell:AppsFolder\\{appid}."""
+        appid = "Microsoft.Calculator_8wekyb3d8bbwe!App"
+        with patch("agent_windows.core.app_manager.subprocess.Popen",
+                   return_value=MagicMock(pid=0)) as mock_p, \
+                patch("os.path.exists", return_value=False):
+            result = am._launch_start_app_target("calculator", appid)
+        argv = mock_p.call_args.args[0]
+        assert argv[0] == "explorer.exe"
+        assert argv[1] == f"shell:AppsFolder\\{appid}"
+        assert result["pid"] == 0
+        assert "UWP" in result["output"]
+
+    def test_launch_win32_path_validates_resolved_location(self):
+        """A Win32 path target is re-validated (L-03) before launching."""
+        with patch("agent_windows.core.filesystem.validate_executable_path") as mock_v, \
+                patch("agent_windows.core.app_manager.subprocess.Popen",
+                      return_value=MagicMock(pid=7)), \
+                patch("os.path.exists", return_value=True):
+            am._launch_start_app_target("myapp", r"C:\Apps\myapp.exe")
+        mock_v.assert_called_once_with(r"C:\Apps\myapp.exe")
+
+    def test_launch_no_match_raises_not_found(self):
+        """When neither PATH nor Start Menu resolves, raise 'not found'."""
+        with patch("agent_windows.core.filesystem.validate_executable_path"), \
+                patch("agent_windows.core.app_manager.subprocess.Popen",
+                      side_effect=FileNotFoundError), \
+                patch("agent_windows.core.app_manager._resolve_friendly_name",
+                      return_value=None):
+            with pytest.raises(ValueError, match="Application not found"):
+                am.launch_app("no-such-app-zzz")
+
+    def test_blocked_path_raises_without_friendly_name_fallback(self):
+        """L-03: a blocked sensitive path raises from validate_executable_path
+        BEFORE the friendly-name fallback is ever attempted."""
+        with patch("agent_windows.core.filesystem.validate_executable_path",
+                   side_effect=ValueError("blocked")), \
+                patch("agent_windows.core.app_manager.subprocess.Popen") as mock_p, \
+                patch("agent_windows.core.app_manager._resolve_friendly_name") as mock_resolve:
+            with pytest.raises(ValueError, match="blocked"):
+                am.launch_app(r"C:\Users\x\.ssh\evil.exe")
+        mock_p.assert_not_called()
+        mock_resolve.assert_not_called()  # fallback never reached
+
+    def test_win32_target_filenotfound_raises(self):
+        """A resolved Win32 path whose Popen then fails → ValueError (not a
+        silent success). Locks the _launch_start_app_target FileNotFoundError branch."""
+        with patch("agent_windows.core.filesystem.validate_executable_path"), \
+                patch("agent_windows.core.app_manager.subprocess.Popen",
+                      side_effect=FileNotFoundError), \
+                patch("os.path.exists", return_value=True):
+            with pytest.raises(ValueError, match="Application not found"):
+                am._launch_start_app_target("myapp", r"C:\Apps\gone.exe")
 
 
 # ── EnumWindows callback harness ─────────────────────────────────────
