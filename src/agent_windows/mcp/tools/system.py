@@ -136,14 +136,14 @@ def register(mcp) -> None:
         "Launch an application by name (e.g. 'notepad') or path. "
         "Keywords: launch app, open program, start application, run exe. "
         "args is an optional list of string arguments."
-    ), annotations=_REG(title="App Launch", readOnlyHint=False, destructiveHint=False, openWorldHint=False))
+    ), annotations=_REG(title="App Launch", readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False))
     def _app_launch(name_or_path: str, args: list[str] | None = None) -> str:
         return app_launch_fn(name_or_path=name_or_path, args=args)
 
     @mcp.tool(name="app_switch", description=(
         "Switch focus to a window by name/title. "
         "Keywords: switch window, focus app, bring to front, activate window, alt-tab."
-    ), annotations=_REG(title="App Switch", readOnlyHint=False, destructiveHint=False, openWorldHint=False))
+    ), annotations=_REG(title="App Switch", readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False))
     def _app_switch(name_or_title: str) -> str:
         return app_switch_fn(name_or_title=name_or_title)
 
@@ -151,7 +151,7 @@ def register(mcp) -> None:
         "Resize a window by name/title. width/height required (positive ints). "
         "Keywords: resize window, move window, window size, reposition. "
         "x/y position optional (-1 = leave)."
-    ), annotations=_REG(title="App Resize", readOnlyHint=False, destructiveHint=False, openWorldHint=False))
+    ), annotations=_REG(title="App Resize", readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False))
     def _app_resize(name_or_title: str, width: int, height: int,
                     x: int = -1, y: int = -1) -> str:
         return app_resize_fn(name_or_title=name_or_title, width=width, height=height, x=x, y=y)
@@ -166,7 +166,7 @@ def register(mcp) -> None:
     @mcp.tool(name="shell", description=(
         "Run a PowerShell command and return stdout/stderr. "
         "Keywords: shell, command line, powershell, cmd, run command, terminal, exec."
-    ), annotations=_REG(title="Shell", readOnlyHint=False, destructiveHint=True, openWorldHint=True))
+    ), annotations=_REG(title="Shell", readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True))
     def _shell(command: str) -> str:
         return shell_fn(command=command)
 
@@ -180,7 +180,7 @@ def register(mcp) -> None:
     @mcp.tool(name="fs_write", description=(
         "Write to a file. Keywords: write file, save, create file, edit file, "
         "append. append=True appends instead of overwriting."
-    ), annotations=_REG(title="FS Write", readOnlyHint=False, destructiveHint=True, openWorldHint=False))
+    ), annotations=_REG(title="FS Write", readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False))
     def _fs_write(path: str, content: str, append: bool | str = False) -> str:
         return fs_write_fn(path=path, content=content, append=append)
 
@@ -196,21 +196,21 @@ def register(mcp) -> None:
     @mcp.tool(name="fs_copy", description=(
         "Copy a file/dir. Keywords: copy, duplicate, cp, clone file. "
         "overwrite=True replaces target."
-    ), annotations=_REG(title="FS Copy", readOnlyHint=False, destructiveHint=True, openWorldHint=False))
+    ), annotations=_REG(title="FS Copy", readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False))
     def _fs_copy(path: str, destination: str, overwrite: bool | str = False) -> str:
         return fs_copy_fn(path=path, destination=destination, overwrite=overwrite)
 
     @mcp.tool(name="fs_move", description=(
         "Move/rename a file/dir. Keywords: move, rename, mv, relocate file. "
         "overwrite=True replaces target."
-    ), annotations=_REG(title="FS Move", readOnlyHint=False, destructiveHint=True, openWorldHint=False))
+    ), annotations=_REG(title="FS Move", readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False))
     def _fs_move(path: str, destination: str, overwrite: bool | str = False) -> str:
         return fs_move_fn(path=path, destination=destination, overwrite=overwrite)
 
     @mcp.tool(name="fs_delete", description=(
         "Delete a file/dir. Keywords: delete, remove, rm, trash, erase. "
         "recursive=True for non-empty dirs."
-    ), annotations=_REG(title="FS Delete", readOnlyHint=False, destructiveHint=True, openWorldHint=False))
+    ), annotations=_REG(title="FS Delete", readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False))
     def _fs_delete(path: str, recursive: bool | str = False) -> str:
         return fs_delete_fn(path=path, recursive=recursive)
 
@@ -238,7 +238,7 @@ def register(mcp) -> None:
     @mcp.tool(name="clipboard_set", description=(
         "Set clipboard content. Keywords: clipboard, copy, set clipboard, "
         "write clipboard. keyboard=True simulates Ctrl+V."
-    ), annotations=_REG(title="Clipboard Set", readOnlyHint=False, destructiveHint=True, openWorldHint=False))
+    ), annotations=_REG(title="Clipboard Set", readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False))
     def _clipboard_set(text: str, keyboard: bool | str = False) -> str:
         return clipboard_set_fn(text=text, keyboard=keyboard)
 
@@ -256,14 +256,14 @@ def register(mcp) -> None:
         "Kill a process by PID (int) or name (str). "
         "Keywords: kill, terminate, end process, stop process, force kill, close app. "
         "Default is graceful (lets the app save); force=True 强杀 immediately."
-    ), annotations=_REG(title="Process Kill", readOnlyHint=False, destructiveHint=True, openWorldHint=False))
+    ), annotations=_REG(title="Process Kill", readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False))
     def _process_kill(pid_or_name: int | str, force: bool | str = False) -> str:
         return process_kill_fn(pid_or_name=pid_or_name, force=force)
 
     @mcp.tool(name="notify", description=(
         "Show a Windows toast notification. Keywords: notification, toast, "
         "alert, message popup, notify user. app_id defaults to PowerShell's AUMID."
-    ), annotations=_REG(title="Notify", readOnlyHint=False, destructiveHint=False, openWorldHint=False))
+    ), annotations=_REG(title="Notify", readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False))
     def _notify(title: str, message: str, app_id: str | None = None) -> str:
         return notify_fn(title=title, message=message, app_id=app_id)
 
@@ -274,7 +274,7 @@ def register(mcp) -> None:
         "set needs name+value (type: String/DWord/QWord/MultiString/Binary); "
         "get needs name; delete takes optional name (omit to delete the whole "
         "key); list takes only path."
-    ), annotations=_REG(title="Registry", readOnlyHint=False, destructiveHint=True, openWorldHint=False))
+    ), annotations=_REG(title="Registry", readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False))
     def _registry(mode: Literal["get", "set", "delete", "list"], path: str,
                   name: str | None = None, value: Any = None, type: str = "String") -> str:
         return registry_fn(mode=mode, path=path, name=name, value=value, type=type)

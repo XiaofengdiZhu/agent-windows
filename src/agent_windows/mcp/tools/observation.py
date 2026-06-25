@@ -245,6 +245,6 @@ def register(mcp) -> None:
         "(~/.agent-windows/screenshots). Keywords: cleanup, delete screenshots, "
         "free disk space, clear images."
     ), annotations=ToolAnnotations(title="Cleanup Screenshots", readOnlyHint=False,
-                                   idempotentHint=True, openWorldHint=False))
+                                   idempotentHint=False, openWorldHint=False))
     def _cleanup_screenshots() -> str:
         return cleanup_screenshots_fn()

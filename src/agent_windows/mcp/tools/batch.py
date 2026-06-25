@@ -48,7 +48,7 @@ def register(mcp) -> None:
         "commands is a list of {\"method\": str, \"params\": dict}. "
         "stop_on_error (default true) halts on the first error; delay is "
         "seconds between commands. Nested batch is not allowed."
-    ), annotations=_REG(title="Batch", readOnlyHint=False, destructiveHint=True, openWorldHint=False))
+    ), annotations=_REG(title="Batch", readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False))
     def _batch(commands: list[dict], stop_on_error: bool = True, delay: float = 0.0) -> str:
         return batch_fn(commands=commands, stop_on_error=stop_on_error, delay=delay)
 
@@ -57,7 +57,7 @@ def register(mcp) -> None:
         "multiple, several clicks, ctrl-click, multi-select items. Provide "
         "locs=[[x,y],...] OR selectors=[\"@e1\",...]. press_ctrl (default true) "
         "holds Ctrl so each click toggles selection."
-    ), annotations=_REG(title="Multi Select", readOnlyHint=False, destructiveHint=True, openWorldHint=False))
+    ), annotations=_REG(title="Multi Select", readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False))
     def _multi_select(locs: list[list[int]] | None = None,
                       selectors: list[str] | None = None,
                       press_ctrl: bool | str = True) -> str:
@@ -68,7 +68,7 @@ def register(mcp) -> None:
         "type multiple, batch type, fill several fields. Provide "
         "locs=[[x,y,text],...] OR selectors=[[@eN,text],...]. Each field is "
         "clicked, cleared, typed."
-    ), annotations=_REG(title="Multi Edit", readOnlyHint=False, destructiveHint=True, openWorldHint=False))
+    ), annotations=_REG(title="Multi Edit", readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False))
     def _multi_edit(locs: list[list] | None = None,
                     selectors: list[list] | None = None) -> str:
         return multi_edit_fn(locs=locs, selectors=selectors)

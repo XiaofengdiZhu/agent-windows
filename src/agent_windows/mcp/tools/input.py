@@ -91,7 +91,7 @@ def register(mcp) -> None:
         "select, left-click. right=True for a context-menu click, double=True "
         "for a double-click. Provide either loc OR selector."
     ), annotations=ToolAnnotations(title="Click", readOnlyHint=False,
-                                   destructiveHint=True, openWorldHint=False))
+                                   destructiveHint=True, idempotentHint=False, openWorldHint=False))
     def _click(loc: list[int] | None = None, selector: str | None = None,
                right: bool = False, double: bool = False) -> str:
         return click_fn(loc=loc, selector=selector, right=right, double=double)
@@ -100,7 +100,7 @@ def register(mcp) -> None:
         "Double-click at [x, y] or at a UI element (@eN). "
         "Keywords: double click, double-click, two clicks, open file, expand."
     ), annotations=ToolAnnotations(title="Double Click", readOnlyHint=False,
-                                   destructiveHint=True, openWorldHint=False))
+                                   destructiveHint=True, idempotentHint=False, openWorldHint=False))
     def _dblclick(loc: list[int] | None = None, selector: str | None = None,
                   right: bool = False) -> str:
         return dblclick_fn(loc=loc, selector=selector, right=right)
@@ -109,7 +109,7 @@ def register(mcp) -> None:
         "Hover at [x, y] or @eN to trigger tooltips/highlights. "
         "Keywords: hover, mouse over, tooltip, mouse hover."
     ), annotations=ToolAnnotations(title="Hover", readOnlyHint=False,
-                                   destructiveHint=False, openWorldHint=False))
+                                   destructiveHint=False, idempotentHint=False, openWorldHint=False))
     def _hover(loc: list[int] | None = None, selector: str | None = None) -> str:
         return hover_fn(loc=loc, selector=selector)
 
@@ -117,7 +117,7 @@ def register(mcp) -> None:
         "Move the mouse cursor to [x, y] or @eN (without clicking). "
         "Keywords: move mouse, cursor, mouse position, point."
     ), annotations=ToolAnnotations(title="Move", readOnlyHint=False,
-                                   destructiveHint=False, openWorldHint=False))
+                                   destructiveHint=False, idempotentHint=False, openWorldHint=False))
     def _move(loc: list[int] | None = None, selector: str | None = None) -> str:
         return move_fn(loc=loc, selector=selector)
 
@@ -126,7 +126,7 @@ def register(mcp) -> None:
         "Keywords: mouse down, press button, hold, drag start. "
         "button: left/right/middle. Pair with mouse_up."
     ), annotations=ToolAnnotations(title="Mouse Down", readOnlyHint=False,
-                                   destructiveHint=True, openWorldHint=False))
+                                   destructiveHint=True, idempotentHint=False, openWorldHint=False))
     def _mouse_down(loc: list[int] | None = None, selector: str | None = None,
                     button: str = "left") -> str:
         return mouse_down_fn(loc=loc, selector=selector, button=button)
@@ -136,7 +136,7 @@ def register(mcp) -> None:
         "Keywords: mouse up, release button, drop, drag end. "
         "button: left/right/middle."
     ), annotations=ToolAnnotations(title="Mouse Up", readOnlyHint=False,
-                                   destructiveHint=False, openWorldHint=False))
+                                   destructiveHint=False, idempotentHint=False, openWorldHint=False))
     def _mouse_up(loc: list[int] | None = None, selector: str | None = None,
                   button: str = "left") -> str:
         return mouse_up_fn(loc=loc, selector=selector, button=button)
@@ -145,7 +145,7 @@ def register(mcp) -> None:
         "Drag from (x1,y1) to (x2,y2). Keywords: drag, move item, drop, "
         "drag and drop, slide. right=True for a right-button drag."
     ), annotations=ToolAnnotations(title="Drag", readOnlyHint=False,
-                                   destructiveHint=True, openWorldHint=False))
+                                   destructiveHint=True, idempotentHint=False, openWorldHint=False))
     def _drag(x1: int, y1: int, x2: int, y2: int, right: bool = False) -> str:
         return drag_fn(x1=x1, y1=y1, x2=x2, y2=y2, right=right)
 
@@ -154,7 +154,7 @@ def register(mcp) -> None:
         "page up, swipe. direction: up/down. amount is wheel ticks "
         "(~3-5 lines each)."
     ), annotations=ToolAnnotations(title="Scroll", readOnlyHint=False,
-                                   destructiveHint=False, openWorldHint=False))
+                                   destructiveHint=False, idempotentHint=False, openWorldHint=False))
     def _scroll(loc: list[int] | None = None, selector: str | None = None,
                 direction: str = "down", amount: int = 3) -> str:
         return scroll_fn(loc=loc, selector=selector, direction=direction, amount=amount)
@@ -166,7 +166,7 @@ def register(mcp) -> None:
         "presses Enter after; clear=True select-all+deletes first; "
         "caret_position: start|idle|end."
     ), annotations=ToolAnnotations(title="Type", readOnlyHint=False,
-                                   destructiveHint=True, openWorldHint=False))
+                                   destructiveHint=True, idempotentHint=False, openWorldHint=False))
     def _type(text: str, loc: list[int] | None = None,
               at_selector: str | None = None, enter: bool = False,
               clear: bool = False,
@@ -179,6 +179,6 @@ def register(mcp) -> None:
         'Keywords: shortcut, hotkey, key combination, keyboard shortcut, '
         'ctrl, alt, ctrl+c, paste.'
     ), annotations=ToolAnnotations(title="Shortcut", readOnlyHint=False,
-                                   destructiveHint=True, openWorldHint=False))
+                                   destructiveHint=True, idempotentHint=False, openWorldHint=False))
     def _shortcut(keys: str) -> str:
         return shortcut_fn(keys=keys)
