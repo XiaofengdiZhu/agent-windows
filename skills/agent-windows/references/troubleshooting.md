@@ -162,7 +162,7 @@ agent-windows observe
 | `-32603` | `INTERNAL_ERROR` | Unexpected server error |
 | `-1001` | `ELEMENT_NOT_FOUND` | UIA element lookup failed |
 | `-1002` | `COORDINATE_OUT_OF_RANGE` | Click/scroll coordinates outside screen bounds |
-| `-1003` | `WAIT_TIMEOUT` | `wait` command exceeded timeout |
+| `-1003` | `WAIT_TIMEOUT` | `wait`/`wait-for` exceeded timeout, or a `shell` command exceeded `shell.timeout` |
 | `-1004` | `PERMISSION_DENIED` | UAC or access denied |
 | `-1005` | `VISION_API_ERROR` | Vision model API call failed |
 | `-1999` | `DAEMON_INTERNAL_ERROR` | Unhandled exception in daemon |

@@ -273,6 +273,7 @@ agent-windows app resize "Notepad" --width 800 --height 600 --x 100 --y 100
 ```bash
 # Shell
 agent-windows shell "Get-Process | Select-Object -First 5"
+agent-windows shell "Get-Process" --timeout 60   # override default 30s (shell.timeout)
 
 # Filesystem
 agent-windows fs list C:\Users
