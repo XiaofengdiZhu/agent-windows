@@ -168,19 +168,13 @@ Python daemon (persistent, COM STA worker)
 
 ## MCP Server
 
-agent-windows ships a complete [MCP](https://modelcontextprotocol.io/) server (built with [FastMCP](https://github.com/jlowin/fastmcp)), exposing every command above as MCP tools. Any MCP-capable client — Claude Desktop, Cursor, etc. — can drive Windows through it.
+agent-windows also ships a complete [MCP](https://modelcontextprotocol.io/) server (built with [FastMCP](https://github.com/jlowin/fastmcp)), exposing every CLI command as MCP tools. Any MCP-capable client — Claude Desktop, Cursor, Gemini CLI, etc. — can drive Windows through it. **This project is CLI-first; MCP is an alternative interface.** The full guide — client install configs (Claude Desktop incl. MSIX/Store, Cursor, Perplexity, Gemini CLI, Qwen Code, Codex CLI, Claude Code incl. WSL), remote HTTP access, auth, transports, and the tool catalog — lives in **[MCP.md](MCP.md)**.
 
-> Requires the `mcp` extra: `uv tool install agent-windows` installs it by default; from source run `uv sync --extra mcp`.
-
-### Quick start (local, stdio)
+The 30-second version (local stdio, e.g. for Claude Desktop):
 
 ```bash
-agent-windows mcp serve          # stdio — for Claude Desktop / Cursor
+agent-windows mcp serve          # auto-starts the daemon on the first tool call
 ```
-
-The server auto-starts the daemon on the first tool call — no separate `daemon start` needed. Use `--debug` for verbose logging.
-
-**Claude Desktop** (`claude_desktop_config.json`):
 
 ```json
 {
@@ -190,65 +184,7 @@ The server auto-starts the daemon on the first tool call — no separate `daemon
 }
 ```
 
-### Remote access (HTTP) with authentication
-
-stdio is local-only. For remote/LAN clients use an HTTP transport **behind an auth key** — a bare, unauthenticated bind to a non-loopback address is insecure. `mcp auth` generates a bearer token (DPAPI-encrypted at rest in `[mcp] auth_key`), optionally a TLS cert, and prints the ready-to-paste client config:
-
-```bash
-# 1. Generate an auth key + TLS cert, save to ~/.agent-windows/config.toml
-agent-windows mcp auth --transport streamable-http --host 0.0.0.0 --port 8000 --with-tls
-
-# 2. (Optional) Auto-start the server at every login as a Scheduled Task
-agent-windows mcp install
-agent-windows mcp uninstall     # stop + remove the auto-start task
-```
-
-The printed client snippet already includes the `Authorization: Bearer <key>` header. The server rejects any HTTP request that doesn't carry it (401). Regenerate with `--force`.
-
-> **Security:** `auth_key` is **DPAPI-encrypted at rest** (same protection as `vlm.api_key`) and masked in `config show`. TLS keys are written to `~/.agent-windows/` under an owner-only ACL. For stdio none of this applies — there's no network surface.
-
-### HTTP security & scaling options
-
-A bare `mcp serve --transport streamable-http --host 0.0.0.0` with no `auth_key` is refused — it would expose the full desktop toolset to the LAN. Set an auth key (`mcp auth`) or pass `--allow-insecure-remote` to opt in. Additional HTTP-only controls (all settable via flag, `AGENT_WINDOWS_*` env var, or `[security]`/`[mcp]`/`[tools]` config; flag > env > config):
-
-| Option | Purpose |
-|---|---|
-| `--allow-insecure-remote` | Allow an unauthenticated non-loopback bind (prints a warning; not recommended). |
-| `--ip-allowlist 10.0.0.0/8,192.168.1.5` | Restrict HTTP clients to the given IPs/CIDRs (IPv4+IPv6); others get 403. `/health` is exempt. |
-| `--cors-origins https://my-client.example.com` | Allow cross-origin browser access. **Default: none** — no CORS headers are emitted, so Same-Origin Policy blocks cross-origin requests. |
-| `--tools screenshot,click,snapshot` | Enable only these tools (whitelist); removes all others. Overrides `--exclude-tools`. |
-| `--exclude-tools shell,registry` | Remove these tools from the active set. |
-| `--stateless-http` | Run streamable-http without `Mcp-Session-Id` / per-connection state — reconnecting clients survive a server restart, and the server scales behind a load balancer. Streamable-http only. |
-
-Config equivalents (in `~/.agent-windows/config.toml`):
-
-```toml
-[mcp]
-allow_insecure_remote = false   # opt into an insecure non-loopback bind
-stateless_http = false          # stateless streamable-http
-
-[security]
-ip_allowlist = ["10.0.0.0/8"]   # CIDR/IP list; empty = no restriction
-cors_origins = ["https://my-client.example.com"]   # empty = no CORS headers
-
-[tools]
-include = ["screenshot", "snapshot"]   # whitelist (overrides exclude)
-exclude = ["shell", "registry"]        # blacklist
-```
-
-### Transports
-
-| Transport | Command | Use case |
-|---|---|---|
-| stdio (default) | `mcp serve` | Local clients (Claude Desktop, Cursor) |
-| streamable-http | `mcp serve --transport streamable-http` | Remote clients (modern MCP) |
-| sse | `mcp serve --transport sse` | Remote clients (legacy SSE) |
-
-### Tools
-
-The server exposes ~46 tools mapping 1:1 to the CLI commands: `screenshot`, `snapshot`, `observe`, `ground`, `detect`, `ask_vision`, `highlight`, `diff`, `get_text`, `element_state`, `cleanup_screenshots`, `click`, `dblclick`, `hover`, `move`, `mouse_down`, `mouse_up`, `drag`, `scroll`, `type`, `shortcut`, `app_launch`, `app_switch`, `app_resize`, `app_list`, `shell`, `fs_read/write/list/copy/move/delete/search/info`, `clipboard_get/set`, `process_list/kill`, `notify`, `registry`, `batch`, `multi_select`, `multi_edit`, `ping`, `wait`, `wait_for`. See the [Commands](#commands) table for what each does; the MCP tool names match the daemon method names.
-
-Same usage tips apply: call `snapshot` first for pixel-exact coordinates, prefer it over `ground`/`detect` for named controls, and always `app switch` before input.
+> Requires the `mcp` extra: `uv tool install agent-windows` installs it by default; from source run `uv sync --extra mcp`.
 
 ## Configure a Vision Model (optional, recommended)
 
@@ -310,6 +246,28 @@ timeout = 10           # global traversal budget, seconds (0 disables)
 [clipboard]
 method = "system"      # "system" (PowerShell API) or "keyboard" (simulate Ctrl+C/V)
 ```
+
+### Environment variables
+
+Every option below can be set as an env var instead of (or in addition to) the config file. Precedence is **flag > env var > config** everywhere. Grouped by area:
+
+| Variable | Area | Purpose |
+|---|---|---|
+| `AGENT_WINDOWS_VLM_API_KEY` | VLM / Config | Vision-model API key. Takes priority over `[vlm] api_key` in config; never written to disk. Set this in CI/shared envs. |
+| `AGENT_WINDOWS_SCREENSHOT_DIR` | Screenshot | Override where screenshots are saved (default `~/.agent-windows/screenshots/`). |
+| `AGENT_WINDOWS_ALLOW_INSECURE_REMOTE` | MCP / Security | Opt into an unauthenticated non-loopback HTTP bind (`mcp serve`). Not recommended. |
+| `AGENT_WINDOWS_IP_ALLOWLIST` | MCP / Security | Comma-separated IPs/CIDRs the HTTP server accepts; others get 403. |
+| `AGENT_WINDOWS_CORS_ORIGINS` | MCP / Security | Comma-separated allowed cross-origin URLs. Default empty (no CORS headers). |
+| `AGENT_WINDOWS_TOOLS` | MCP / Security | Comma-separated tool **whitelist** (overrides exclude). |
+| `AGENT_WINDOWS_EXCLUDE_TOOLS` | MCP / Security | Comma-separated tools to remove from the active set (e.g. `shell,registry`). |
+| `AGENT_WINDOWS_STATELESS_HTTP` | MCP / Security | `1`/`true` → stateless streamable-http (no `Mcp-Session-Id`; survives restarts). |
+| `AGENT_WINDOWS_OAUTH_CLIENT_ID` | MCP / Security | OAuth client id (requires `--oauth-client-secret`). |
+| `AGENT_WINDOWS_OAUTH_CLIENT_SECRET` | MCP / Security | OAuth client secret. |
+| `AGENT_WINDOWS_TELEMETRY` | Telemetry | `1`/`true`/`enabled` → enable local-only tool-call logging (off by default; writes `logs/telemetry.log`, no network). |
+| `AGENT_WINDOWS_PYTHON` | Launcher | Explicit Python interpreter for the daemon (highest priority; otherwise `python` on PATH). |
+| `AGENT_WINDOWS_E2E` | Testing | `1` → enable end-to-end daemon smoke tests (opt-in `@pytest.mark.e2e`). |
+
+> `--debug` (verbose logging) is a **flag, not an env var** — pass it on the command line.
 
 ## Desktop Automation Tips
 
