@@ -40,8 +40,10 @@ def shell_fn(command: str) -> str:
 
 # ── filesystem ─────────────────────────────────────────────────────────
 
-def fs_read_fn(path: str, offset: int | None = None, limit: int | None = None) -> str:
-    return str(_call("fs_read", path=path, offset=offset, limit=limit).get("output", ""))
+def fs_read_fn(path: str, offset: int | None = None, limit: int | None = None,
+               encoding: str | None = None) -> str:
+    return str(_call("fs_read", path=path, offset=offset, limit=limit,
+                     encoding=encoding).get("output", ""))
 
 
 def fs_write_fn(path: str, content: str, append: bool | str = False) -> str:
@@ -173,10 +175,14 @@ def register(mcp) -> None:
 
     @mcp.tool(name="fs_read", description=(
         "Read a text file. Keywords: read file, cat, view file, file content, "
-        "open file. offset/limit select a 1-based line range."
+        "open file. offset/limit select a 1-based line range. encoding overrides "
+        "UTF-8 for legacy codepage files (e.g. 'gbk', 'latin-1')."
     ), annotations=_REG(title="FS Read", readOnlyHint=True, idempotentHint=True, openWorldHint=False))
-    def _fs_read(path: str, offset: int | None = None, limit: int | None = None) -> str:
-        return fs_read_fn(path=path, offset=offset, limit=limit)
+    def _fs_read(path: str, offset: int | None = None, limit: int | None = None,
+                 encoding: Annotated[str | None, Field(
+                     description="Override the default UTF-8 decode for legacy codepage files (e.g. 'gbk', 'latin-1', 'cp1252'). Omit for UTF-8."
+                 )] = None) -> str:
+        return fs_read_fn(path=path, offset=offset, limit=limit, encoding=encoding)
 
     @mcp.tool(name="fs_write", description=(
         "Write to a file. Keywords: write file, save, create file, edit file, "

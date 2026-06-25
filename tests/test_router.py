@@ -49,6 +49,15 @@ class TestRouteRequest:
         assert resp.error["code"] == -32602
         assert "must be str" in resp.error["message"]
 
+    def test_bad_encoding_maps_to_invalid_params(self):
+        """TODO #20b: an unknown codec surfaces as INVALID_PARAMS (-32602), not
+        DAEMON_INTERNAL_ERROR — read_file re-raises LookupError as ValueError."""
+        req = JSONRPCRequest(id=1, method="fs_read",
+                             params={"path": "x.txt", "encoding": "not-a-codec"})
+        resp = route_request(req)
+        assert resp.error is not None
+        assert resp.error["code"] == -32602
+
     def test_permission_error_maps_to_permission_denied(self):
         """M-05: a handler raising PermissionError (e.g. shell blacklist block)
         maps to PERMISSION_DENIED (-1004), not the generic DAEMON_INTERNAL_ERROR."""

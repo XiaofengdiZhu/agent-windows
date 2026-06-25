@@ -70,12 +70,14 @@ def _shell(params: dict) -> dict[str, Any]:
 
 @handler("fs_read")
 def _fs_read(params: dict) -> dict[str, Any]:
-    """Read a file. ``offset``/``limit`` select a 1-based line range."""
+    """Read a file. ``offset``/``limit`` select a 1-based line range;
+    ``encoding`` overrides UTF-8 for legacy codepage files (TODO #20b)."""
     from agent_windows.core.filesystem import read_file
     return read_file(
         require(params, "path", str),
         offset=params.get("offset"),
         limit=params.get("limit"),
+        encoding=params.get("encoding"),
     )
 
 

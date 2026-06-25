@@ -438,13 +438,19 @@ class TestFsHandlers:
     def test_fs_read_forwards_path(self):
         with patch("agent_windows.core.filesystem.read_file", return_value={"output": "c"}) as m:
             HANDLERS["fs_read"]({"path": r"C:\x"})
-        # Bare call forwards offset=None, limit=None (TODO #4 optional params).
-        m.assert_called_once_with(r"C:\x", offset=None, limit=None)
+        # Bare call forwards offset=None, limit=None, encoding=None (TODO #4/#20b).
+        m.assert_called_once_with(r"C:\x", offset=None, limit=None, encoding=None)
 
     def test_fs_read_forwards_offset_limit(self):
         with patch("agent_windows.core.filesystem.read_file", return_value={"output": "c"}) as m:
             HANDLERS["fs_read"]({"path": r"C:\x", "offset": 5, "limit": 10})
-        m.assert_called_once_with(r"C:\x", offset=5, limit=10)
+        m.assert_called_once_with(r"C:\x", offset=5, limit=10, encoding=None)
+
+    def test_fs_read_forwards_encoding(self):
+        """TODO #20b: encoding param forwards to read_file."""
+        with patch("agent_windows.core.filesystem.read_file", return_value={"output": "c"}) as m:
+            HANDLERS["fs_read"]({"path": r"C:\x", "encoding": "gbk"})
+        m.assert_called_once_with(r"C:\x", offset=None, limit=None, encoding="gbk")
 
     def test_fs_write_forwards_path_and_content(self):
         with patch("agent_windows.core.filesystem.write_file", return_value={"output": "c"}) as m:

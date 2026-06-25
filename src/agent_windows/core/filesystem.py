@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Callable, TypeVar
 
 from agent_windows.utils.win32 import elevation_hint
+from agent_windows.utils.formatting import format_size
 
 logger = logging.getLogger(__name__)
 
@@ -272,16 +273,38 @@ def validate_executable_path(path: str) -> None:
 
 
 @_with_elevation_hint
-def read_file(path: str, offset: int | None = None, limit: int | None = None) -> dict[str, Any]:
+def read_file(path: str, offset: int | None = None, limit: int | None = None,
+              encoding: str | None = None) -> dict[str, Any]:
     """Read a file and return its contents.
 
     ``offset`` / ``limit`` (1-based line numbers) select a line range instead
     of the whole file — for large files that would otherwise hit the 5 MiB
     cap. When omitted, the whole file is read (capped at ``MAX_READ_BYTES``).
 
+    ``encoding`` (TODO #20b) overrides the default UTF-8 decode for legacy
+    codepage files (e.g. ``gbk``, ``latin-1``). Omit it for UTF-8. A bad
+    encoding name raises ``LookupError`` (→ INVALID_PARAMS) before any read.
+
     Capped at ``MAX_READ_BYTES`` (5 MiB) to bound daemon memory — a larger file
     is truncated with a notice rather than read whole. (SEC3-03)
     """
+    # Validate the encoding name up front so a typo surfaces as INVALID_PARAMS
+    # (→ ValueError at the router) rather than a partial read. codecs.lookup also
+    # normalizes aliases. Re-raise as ValueError because the router maps
+    # ValueError → INVALID_PARAMS; LookupError would otherwise fall through to
+    # DAEMON_INTERNAL_ERROR with log spam.
+    if encoding:
+        import codecs
+        try:
+            codecs.lookup(encoding)
+        except LookupError as e:
+            raise ValueError(str(e)) from None
+    enc = encoding or "utf-8"
+    # An explicitly-chosen encoding should fail loudly on a wrong codepage
+    # (strict) — returning mojibake with no signal defeats the purpose. The
+    # default UTF-8 path keeps errors="replace" for legacy robustness.
+    errors = "strict" if encoding else "replace"
+
     p = _validate_path(_resolve_user_path(path))
     if not p.exists():
         raise FileNotFoundError(f"File not found: {path}")
@@ -295,7 +318,7 @@ def read_file(path: str, offset: int | None = None, limit: int | None = None) ->
     # file whole by selecting the slice they want.
     if offset is not None or limit is not None:
         try:
-            with p.open("r", encoding="utf-8", errors="replace") as f:
+            with p.open("r", encoding=enc, errors=errors) as f:
                 lines = f.readlines()
         except UnicodeDecodeError:
             return {
@@ -326,12 +349,14 @@ def read_file(path: str, offset: int | None = None, limit: int | None = None) ->
     try:
         if truncated:
             # Read only the leading slice to avoid loading a multi-GB file whole.
-            # errors="replace" means decode cannot raise; binary bytes become U+FFFD.
+            # With the default errors="replace" decode cannot raise; binary bytes
+            # become U+FFFD. With an explicit encoding (errors="strict") a wrong
+            # codepage raises UnicodeDecodeError → binary fallback below.
             with p.open("rb") as f:
                 raw = f.read(MAX_READ_BYTES)
-            content = raw.decode("utf-8", errors="replace")
+            content = raw.decode(enc, errors=errors)
         else:
-            content = p.read_text(encoding="utf-8", errors="replace")
+            content = p.read_text(encoding=enc, errors=errors)
     except UnicodeDecodeError:
         content = p.read_bytes()
         content = f"[Binary file, {len(content)} bytes]"
@@ -407,7 +432,7 @@ def list_dir(path: str, pattern: str | None = None, recursive: bool = False, sho
                 size = entry.stat().st_size
             except OSError:
                 size = 0
-            entries.append(f"  {entry.name} ({size} bytes)")
+            entries.append(f"  {entry.name} ({format_size(size)})")
 
     listing = "\n".join(entries) if entries else "(empty)"
     note = f"\n\n[Truncated: directory has {total} entries, showed first {MAX_LIST_ENTRIES}]" if truncated else ""
@@ -545,7 +570,7 @@ def search_files(path: str, pattern: str, recursive: bool = True) -> dict[str, A
             size = 0
         rel = match.relative_to(p)
         tag = "DIR " if match.is_dir() else "FILE"
-        results.append(f"  [{tag}] {rel}  ({size} bytes)" if match.is_file() else f"  [{tag}] {rel}")
+        results.append(f"  [{tag}] {rel}  ({format_size(size)})" if match.is_file() else f"  [{tag}] {rel}")
 
     if not results:
         return {"output": f'## File Search\nNo matches for "{pattern}" in {p}', "count": 0}
@@ -581,7 +606,7 @@ def get_file_info(path: str) -> dict[str, Any]:
         f"## File Info",
         f"Path: {p}",
         f"Type: {file_type}",
-        f"Size: {stat.st_size} bytes",
+        f"Size: {stat.st_size} bytes ({format_size(stat.st_size)})",
         f"Created: {datetime.fromtimestamp(stat.st_ctime).strftime('%Y-%m-%d %H:%M:%S')}",
         f"Modified: {datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')}",
         f"Accessed: {datetime.fromtimestamp(stat.st_atime).strftime('%Y-%m-%d %H:%M:%S')}",

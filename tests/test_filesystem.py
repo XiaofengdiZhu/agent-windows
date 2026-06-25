@@ -47,6 +47,64 @@ class TestReadFile:
         assert len(result["content"]) == cap - 1
 
 
+class TestReadFileEncoding:
+    """TODO #20b: an explicit encoding overrides UTF-8 for legacy codepage files."""
+
+    def test_encoding_reads_legacy_codepage(self, tmp_path):
+        """A GBK-encoded file decodes correctly with encoding='gbk'."""
+        from agent_windows.core.filesystem import read_file
+        f = tmp_path / "gbk.txt"
+        # '中文' in GBK; these bytes are invalid as UTF-8.
+        f.write_bytes("中文".encode("gbk"))
+        result = read_file(str(f), encoding="gbk")
+        assert result["content"] == "中文"
+
+    def test_encoding_alias_normalized(self, tmp_path):
+        """A codec alias (latin-1 == iso-8859-1) is accepted via codecs.lookup."""
+        from agent_windows.core.filesystem import read_file
+        f = tmp_path / "l1.txt"
+        f.write_bytes(b"\xe9\xe8\xea")  # è ê in latin-1
+        result = read_file(str(f), encoding="latin-1")
+        assert result["content"] == "éèê"
+
+    def test_default_is_utf8(self, tmp_path):
+        """Omitting encoding reads as UTF-8 (unchanged behavior)."""
+        from agent_windows.core.filesystem import read_file
+        f = tmp_path / "u8.txt"
+        f.write_text("héllo", encoding="utf-8")
+        assert read_file(str(f))["content"] == "héllo"
+
+    def test_bad_encoding_raises_valueerror(self, tmp_path):
+        """An unknown codec name raises ValueError (→ INVALID_PARAMS at the
+        router) before any read — LookupError is re-raised as ValueError."""
+        from agent_windows.core.filesystem import read_file
+        f = tmp_path / "x.txt"
+        f.write_text("ok", encoding="utf-8")
+        with pytest.raises(ValueError):
+            read_file(str(f), encoding="not-a-real-codec")
+
+    def test_wrong_codepage_falls_back_to_binary(self, tmp_path):
+        """An explicit encoding that can't decode the file (errors='strict')
+        falls back to the binary notice rather than returning mojibake."""
+        from agent_windows.core.filesystem import read_file
+        f = tmp_path / "gbk.txt"
+        f.write_bytes("中文".encode("gbk"))  # invalid as latin-1? actually decodes; use raw bytes
+        # latin-1 can decode any byte (it's a 1:1 byte→codepoint map), so use a
+        # codec that genuinely rejects: utf-8 on GBK bytes already tested above
+        # via the strict path. Here force a real mismatch with shift_jis on gbk.
+        f.write_bytes(b"\xff\xfe\x00")  # invalid for most codecs
+        result = read_file(str(f), encoding="shift_jis")
+        assert "[Binary file" in result["content"]
+
+    def test_encoding_works_with_line_range(self, tmp_path):
+        """encoding applies in line-range (offset/limit) mode too."""
+        from agent_windows.core.filesystem import read_file
+        f = tmp_path / "gbk.txt"
+        f.write_bytes("行一\n行二\n".encode("gbk"))
+        result = read_file(str(f), offset=1, limit=1, encoding="gbk")
+        assert result["content"] == "行一\n"
+
+
 class TestWriteFile:
     def test_write_creates_file(self, tmp_path):
         from agent_windows.core.filesystem import write_file

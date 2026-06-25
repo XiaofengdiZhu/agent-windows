@@ -72,6 +72,7 @@ def fs_read(
     path: str = typer.Argument(help="File path to read"),
     offset: int = typer.Option(0, "--offset", help="1-based start line (0 = whole file)"),
     limit: int = typer.Option(0, "--limit", help="Max lines to read (0 = to EOF)"),
+    encoding: str = typer.Option("", "--encoding", help="Text encoding (default utf-8; e.g. gbk, latin-1)"),
 ) -> None:
     """Read a file. Use --offset/--limit for a line range."""
     params: dict = {"path": path}
@@ -79,6 +80,8 @@ def fs_read(
         params["offset"] = offset
     if limit:
         params["limit"] = limit
+    if encoding:
+        params["encoding"] = encoding
     _cmd(ctx, "fs_read", **params)
 
 
