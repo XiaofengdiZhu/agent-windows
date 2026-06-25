@@ -6,6 +6,7 @@ import subprocess
 from typing import Any
 
 from agent_windows.utils.config import load_config, get_log_dir
+from agent_windows.utils.win32 import elevation_hint
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +147,18 @@ def run_shell(command: str, timeout: float = 30.0) -> dict[str, Any]:
         if result.stderr.strip():
             output_parts.append(f"[stderr]\n{result.stderr.strip()}")
         output_parts.append(f"Exit code: {result.returncode}")
+
+        # "Access is denied" is the canonical opaque ACL failure; when the
+        # server isn't elevated, append a hint so the agent has an actionable
+        # fix instead of a raw system error. (TODO #14)
+        hint = None
+        if result.returncode != 0:
+            combined = f"{result.stdout}\n{result.stderr}".lower()
+            if "access is denied" in combined:
+                hint = elevation_hint()
+
+        if hint:
+            output_parts.append(f"\nHINT: {hint}")
 
         return {
             "output": "\n".join(output_parts),

@@ -108,3 +108,33 @@ class TestIsElevated:
         shell.IsUserAnAdmin.side_effect = OSError("win32 fault")
         monkeypatch.setattr(win32.ctypes.windll, "shell32", shell)
         assert win32.is_elevated() is False
+
+
+# ── elevation_hint: actionable guidance when not elevated (TODO #14) ───
+
+
+class TestElevationHint:
+    def test_not_elevated_returns_hint_string(self, monkeypatch):
+        """Non-admin → the hint string is returned (non-empty, actionable)."""
+        shell = MagicMock()
+        shell.IsUserAnAdmin.return_value = 0
+        monkeypatch.setattr(win32.ctypes.windll, "shell32", shell)
+        hint = win32.elevation_hint()
+        assert hint is win32.ELEVATION_HINT
+        assert "elevated" in hint.lower()
+
+    def test_elevated_returns_none(self, monkeypatch):
+        """Admin → no hint (the operation doesn't need elevation)."""
+        shell = MagicMock()
+        shell.IsUserAnAdmin.return_value = 1
+        monkeypatch.setattr(win32.ctypes.windll, "shell32", shell)
+        assert win32.elevation_hint() is None
+
+    def test_unavailable_api_returns_hint(self, monkeypatch):
+        """If IsUserAnAdmin is unavailable (non-Windows edge) → is_elevated
+        returns False, so the hint is shown — the safe default, since most MCP
+        servers run non-elevated."""
+        shell = MagicMock()
+        shell.IsUserAnAdmin.side_effect = AttributeError("no shell32")
+        monkeypatch.setattr(win32.ctypes.windll, "shell32", shell)
+        assert win32.elevation_hint() is win32.ELEVATION_HINT

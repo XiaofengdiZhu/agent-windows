@@ -22,6 +22,26 @@ def is_elevated() -> bool:
         return False
 
 
+# Appended to access-denied errors when the server isn't running elevated, so
+# an opaque "Access is denied" carries an actionable fix. (TODO #14) Worded to
+# fit both shell commands and filesystem operations.
+ELEVATION_HINT = (
+    "This may require an elevated (Administrator) terminal; "
+    "the agent-windows server is not currently running elevated."
+)
+
+
+def elevation_hint() -> str | None:
+    """Return the elevation hint string when NOT elevated, else ``None``.
+
+    Lets callers enrich access-denied errors with actionable guidance without
+    each repeating the ``is_elevated()`` check. Best-effort: on non-Windows or
+    if the API is unavailable, ``is_elevated`` returns False, so the hint is
+    shown — the safe default, since most MCP servers run non-elevated.
+    """
+    return None if is_elevated() else ELEVATION_HINT
+
+
 def get_process_name(pid: int) -> str:
     """Get process executable name from PID via Win32 API."""
     PROCESS_QUERY_LIMITED_INFORMATION = 0x1000

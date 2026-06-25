@@ -87,6 +87,76 @@ class TestRunShellBlocked:
             assert mock_audit.call_args.args[1].startswith("BLOCKED")
 
 
+class TestAccessDeniedHint:
+    """TODO #14: a failed command with 'Access is denied' gets an elevation hint
+    when the server isn't elevated."""
+
+    def test_access_denied_not_elevated_appends_hint(self):
+        """Non-zero exit + 'Access is denied' + not elevated → hint appended."""
+        mock_result = MagicMock(stdout="", stderr="Access is denied", returncode=1)
+        with _cfg([]), \
+                patch("subprocess.run", return_value=mock_result), \
+                patch("agent_windows.core.shell_runner.elevation_hint",
+                      return_value="HINT: run elevated"):
+            result = run_shell("Get-Process")
+        assert "HINT: run elevated" in result["output"]
+        assert result["exit_code"] == 1
+
+    def test_access_denied_elevated_no_hint(self):
+        """Even with 'Access is denied', an elevated server shows no hint — the
+        failure isn't an elevation problem."""
+        mock_result = MagicMock(stdout="", stderr="Access is denied", returncode=1)
+        with _cfg([]), \
+                patch("subprocess.run", return_value=mock_result), \
+                patch("agent_windows.core.shell_runner.elevation_hint",
+                      return_value=None):
+            result = run_shell("Get-Process")
+        assert "HINT" not in result["output"]
+
+    def test_other_failure_no_hint(self):
+        """A non-access-denied failure (even non-zero) gets no hint."""
+        mock_result = MagicMock(stdout="", stderr="CommandNotFoundException", returncode=1)
+        with _cfg([]), \
+                patch("subprocess.run", return_value=mock_result), \
+                patch("agent_windows.core.shell_runner.elevation_hint",
+                      return_value="HINT: run elevated") as mock_hint:
+            result = run_shell("Bad-Command")
+        assert "HINT" not in result["output"]
+        mock_hint.assert_not_called()  # short-circuit before checking elevation
+
+    def test_success_no_hint(self):
+        """A successful command (exit 0) never triggers the hint check."""
+        mock_result = MagicMock(stdout="ok", stderr="", returncode=0)
+        with _cfg([]), \
+                patch("subprocess.run", return_value=mock_result), \
+                patch("agent_windows.core.shell_runner.elevation_hint",
+                      return_value="HINT: run elevated") as mock_hint:
+            result = run_shell("Get-Process")
+        assert "HINT" not in result["output"]
+        mock_hint.assert_not_called()
+
+    def test_access_denied_in_stdout_also_triggers(self):
+        """'Access is denied' in stdout (not just stderr) triggers the hint —
+        locks the two-stream combination in the guard."""
+        mock_result = MagicMock(stdout="Access is denied", stderr="", returncode=1)
+        with _cfg([]), \
+                patch("subprocess.run", return_value=mock_result), \
+                patch("agent_windows.core.shell_runner.elevation_hint",
+                      return_value="HINT: run elevated"):
+            result = run_shell("Get-Process")
+        assert "HINT: run elevated" in result["output"]
+
+    def test_access_denied_match_is_case_insensitive(self):
+        """The guard lowercases the stream, so 'ACCESS IS DENIED' matches."""
+        mock_result = MagicMock(stdout="", stderr="ACCESS IS DENIED", returncode=1)
+        with _cfg([]), \
+                patch("subprocess.run", return_value=mock_result), \
+                patch("agent_windows.core.shell_runner.elevation_hint",
+                      return_value="HINT: run elevated"):
+            result = run_shell("Get-Process")
+        assert "HINT: run elevated" in result["output"]
+
+
 class TestAuditLog:
     def test_allowed_command_recorded_full_untruncated(self, tmp_path):
         """M-05: the audit log records the FULL command (daemon.log truncates at

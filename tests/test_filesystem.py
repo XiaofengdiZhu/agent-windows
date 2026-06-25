@@ -763,3 +763,71 @@ class TestFsHandlers:
         f.write_text("d", encoding="utf-8")
         r = HANDLERS["fs_info"]({"path": str(f)})
         assert r["type"] == "File"
+
+
+class TestElevationHint:
+    """TODO #14: a PermissionError carries an elevation hint when not elevated."""
+
+    def test_permission_error_appends_hint_when_not_elevated(self, tmp_path):
+        """A PermissionError from a read, when not elevated, is re-raised with
+        the hint appended."""
+        from unittest.mock import patch
+        from agent_windows.core.filesystem import read_file
+        with patch("agent_windows.core.filesystem.elevation_hint",
+                   return_value="HINT: run elevated"):
+            with patch("pathlib.Path.exists", side_effect=PermissionError("denied")):
+                with pytest.raises(PermissionError, match="HINT: run elevated"):
+                    read_file(str(tmp_path / "x.txt"))
+
+    def test_permission_error_chains_original_via_cause(self, tmp_path):
+        """The re-raised PermissionError chains the original via __cause__, so
+        the traceback stays intact (from exc)."""
+        from unittest.mock import patch
+        from agent_windows.core.filesystem import read_file
+        with patch("agent_windows.core.filesystem.elevation_hint",
+                   return_value="HINT: run elevated"):
+            with patch("pathlib.Path.exists", side_effect=PermissionError("original")):
+                with pytest.raises(PermissionError) as excinfo:
+                    read_file(str(tmp_path / "x.txt"))
+        assert excinfo.value.__cause__ is not None
+        assert str(excinfo.value.__cause__) == "original"
+
+    def test_permission_error_no_hint_when_elevated(self, tmp_path):
+        """A PermissionError when elevated keeps its original message — no hint."""
+        from unittest.mock import patch
+        from agent_windows.core.filesystem import read_file
+        with patch("agent_windows.core.filesystem.elevation_hint", return_value=None):
+            with patch("pathlib.Path.exists", side_effect=PermissionError("denied")):
+                with pytest.raises(PermissionError, match="^denied$"):
+                    read_file(str(tmp_path / "x.txt"))
+
+    def test_other_exceptions_not_affected(self, tmp_path):
+        """FileNotFoundError and ValueError pass through unchanged — the
+        decorator only enriches PermissionError."""
+        from agent_windows.core.filesystem import read_file
+        with pytest.raises(FileNotFoundError):
+            read_file(str(tmp_path / "missing.txt"))
+
+    def test_hint_applies_to_all_decorated_ops(self, tmp_path):
+        """Sanity: the decorator is applied to every public op, so a
+        PermissionError from any of them carries the hint."""
+        from unittest.mock import patch
+        from agent_windows.core import filesystem
+        ops = [
+            ("read_file", ("",), {}),
+            ("write_file", ("", ""), {}),
+            ("list_dir", ("",), {}),
+            ("copy_path", ("", ""), {}),
+            ("move_path", ("", ""), {}),
+            ("delete_path", ("",), {}),
+            ("search_files", ("", ""), {}),
+            ("get_file_info", ("",), {}),
+        ]
+        with patch("agent_windows.core.filesystem.elevation_hint",
+                   return_value="HINT: run elevated"), \
+                patch("pathlib.Path.exists", side_effect=PermissionError("denied")), \
+                patch("pathlib.Path.resolve", side_effect=PermissionError("denied")):
+            for name, args, kwargs in ops:
+                fn = getattr(filesystem, name)
+                with pytest.raises(PermissionError, match="HINT: run elevated"):
+                    fn(*args, **kwargs)

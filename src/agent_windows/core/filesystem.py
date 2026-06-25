@@ -1,14 +1,50 @@
 """File system operations: read, write, list, copy, move, delete, search, info."""
 
 import fnmatch
+import functools
 import logging
 import os
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, TypeVar
+
+from agent_windows.utils.win32 import elevation_hint
 
 logger = logging.getLogger(__name__)
+
+F = TypeVar("F", bound=Callable[..., Any])
+
+
+def _with_elevation_hint(fn: F) -> F:
+    """Re-raise a ``PermissionError`` with an elevation hint appended (TODO #14).
+
+    "Access is denied" is the single most common opaque failure on Windows, and
+    the daemon runs non-elevated by default. Appending actionable guidance —
+    only when actually non-elevated — keeps the error honest without claiming
+    elevation will always fix it. Other exceptions (``FileNotFoundError``,
+    ``ValueError`` from validation, ``IsADirectoryError``…) pass through
+    unchanged. The original exception is chained via ``raise ... from`` so the
+    traceback stays intact.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return fn(*args, **kwargs)
+        except PermissionError as exc:
+            # elevation_hint() is best-effort (is_elevated guards Win32 faults);
+            # guard it anyway so a surprise here can't mask the original error.
+            try:
+                hint = elevation_hint()
+            except Exception:
+                logger.debug("elevation_hint() failed; re-raising original", exc_info=True)
+                hint = None
+            if hint:
+                raise PermissionError(f"{exc}\n\nHINT: {hint}") from exc
+            raise
+
+    return wrapper  # type: ignore[return-value]
 
 # DoS bounds: cap single-read size and directory-listing length so a multi-GB
 # file or a directory with millions of entries can't exhaust daemon memory.
@@ -235,6 +271,7 @@ def validate_executable_path(path: str) -> None:
         )
 
 
+@_with_elevation_hint
 def read_file(path: str, offset: int | None = None, limit: int | None = None) -> dict[str, Any]:
     """Read a file and return its contents.
 
@@ -308,6 +345,7 @@ def read_file(path: str, offset: int | None = None, limit: int | None = None) ->
     }
 
 
+@_with_elevation_hint
 def write_file(path: str, content: str, append: bool = False) -> dict[str, Any]:
     """Write content to a file, or append when ``append=True`` (TODO #4)."""
     p = _validate_write_path(_resolve_user_path(path))
@@ -319,6 +357,7 @@ def write_file(path: str, content: str, append: bool = False) -> dict[str, Any]:
     return {"output": f"## File {action.title()}\nPath: {p}\nSize: {p.stat().st_size} bytes"}
 
 
+@_with_elevation_hint
 def list_dir(path: str, pattern: str | None = None, recursive: bool = False, show_hidden: bool = False) -> dict[str, Any]:
     """List directory contents.
 
@@ -395,6 +434,7 @@ def _check_overwrite_shape(src: Path, dst: Path) -> None:
         raise ValueError(f"Cannot overwrite a file with a directory: {dst}")
 
 
+@_with_elevation_hint
 def copy_path(source: str, destination: str, overwrite: bool = False) -> dict[str, Any]:
     """Copy a file or directory to ``destination`` (TODO #4).
 
@@ -427,6 +467,7 @@ def copy_path(source: str, destination: str, overwrite: bool = False) -> dict[st
     return {"output": f"## File Copy\nCopied {kind}: {src} -> {dst}"}
 
 
+@_with_elevation_hint
 def move_path(source: str, destination: str, overwrite: bool = False) -> dict[str, Any]:
     """Move/rename a file or directory (TODO #4).
 
@@ -450,6 +491,7 @@ def move_path(source: str, destination: str, overwrite: bool = False) -> dict[st
     return {"output": f"## File Move\nMoved: {src} -> {dst}"}
 
 
+@_with_elevation_hint
 def delete_path(path: str, recursive: bool = False) -> dict[str, Any]:
     """Delete a file or directory (TODO #4).
 
@@ -473,6 +515,7 @@ def delete_path(path: str, recursive: bool = False) -> dict[str, Any]:
     raise ValueError(f"Unsupported file type: {path}")
 
 
+@_with_elevation_hint
 def search_files(path: str, pattern: str, recursive: bool = True) -> dict[str, Any]:
     """Find files/dirs matching a glob ``pattern`` under ``path`` (TODO #4).
 
@@ -515,6 +558,7 @@ def search_files(path: str, pattern: str, recursive: bool = True) -> dict[str, A
     }
 
 
+@_with_elevation_hint
 def get_file_info(path: str) -> dict[str, Any]:
     """Return metadata about a file or directory (TODO #4)."""
     p = _validate_path(_resolve_user_path(path))
