@@ -457,3 +457,33 @@ def test_register_all_registers_every_domain_on_a_fake_mcp():
     }
     missing = expected - set(seen)
     assert not missing, f"missing tools: {missing}"
+
+
+class TestParamDescriptions:
+    """TODO #15a: non-obvious params carry Field(description=...) so the agent
+    can pick enum values. Locks the schema propagation through FastMCP."""
+
+    @pytest.fixture(scope="class")
+    def _tool(self):
+        """Build a real FastMCP instance once and fetch the registry tool."""
+        import asyncio
+        from fastmcp import FastMCP
+        from agent_windows.mcp.tools import register_all
+
+        mcp = FastMCP("test")
+        register_all(mcp)
+
+        async def _get():
+            return await mcp.get_tool("registry")
+
+        return asyncio.run(_get())
+
+    def test_registry_mode_has_description(self, _tool):
+        """registry.mode carries a description explaining get/set/delete/list."""
+        desc = _tool.parameters["properties"]["mode"].get("description", "")
+        assert "get" in desc and "set" in desc and "delete" in desc and "list" in desc
+
+    def test_registry_type_has_description(self, _tool):
+        """registry.type carries a description listing the value types."""
+        desc = _tool.parameters["properties"]["type"].get("description", "")
+        assert "String" in desc and "DWord" in desc

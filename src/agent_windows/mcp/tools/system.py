@@ -1,8 +1,9 @@
 """System MCP tools — apps, shell, filesystem, clipboard, process, notify,
 registry. These map 1:1 to the daemon's system handlers."""
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from mcp.types import ToolAnnotations
+from pydantic import Field
 
 from agent_windows.mcp._call import _call, _as_bool
 
@@ -248,7 +249,12 @@ def register(mcp) -> None:
         "sort_by=memory|cpu|name; limit caps the row count (0=all); name filters "
         "by case-insensitive substring."
     ), annotations=_REG(title="Process List", readOnlyHint=True, idempotentHint=True, openWorldHint=False))
-    def _process_list(sort_by: str = "memory", limit: int = 0,
+    def _process_list(sort_by: Annotated[str, Field(
+                          description="Sort key: 'memory' (default), 'cpu', or 'name'."
+                      )] = "memory",
+                      limit: Annotated[int, Field(
+                          description="Cap on rows returned; 0 (default) = no limit."
+                      )] = 0,
                       name: str | None = None) -> str:
         return process_list_fn(sort_by=sort_by, limit=limit, name=name)
 
@@ -275,6 +281,12 @@ def register(mcp) -> None:
         "get needs name; delete takes optional name (omit to delete the whole "
         "key); list takes only path."
     ), annotations=_REG(title="Registry", readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False))
-    def _registry(mode: Literal["get", "set", "delete", "list"], path: str,
-                  name: str | None = None, value: Any = None, type: str = "String") -> str:
+    def _registry(mode: Annotated[Literal["get", "set", "delete", "list"], Field(
+                      description="Operation: 'get' a value, 'set' a value, 'delete' a value/key, or 'list' a key's values."
+                  )],
+                  path: str,
+                  name: str | None = None, value: Any = None,
+                  type: Annotated[str, Field(
+                      description="Value type for 'set': 'String' (default), 'DWord', 'QWord', 'MultiString', or 'Binary'."
+                  )] = "String") -> str:
         return registry_fn(mode=mode, path=path, name=name, value=value, type=type)
