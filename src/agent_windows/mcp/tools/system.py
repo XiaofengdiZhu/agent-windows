@@ -34,8 +34,8 @@ def app_list_fn() -> str:
 
 # ── shell ──────────────────────────────────────────────────────────────
 
-def shell_fn(command: str) -> str:
-    return str(_call("shell", command=command).get("output", ""))
+def shell_fn(command: str, timeout: int | None = None) -> str:
+    return str(_call("shell", command=command, timeout=timeout).get("output", ""))
 
 
 # ── filesystem ─────────────────────────────────────────────────────────
@@ -168,10 +168,12 @@ def register(mcp) -> None:
 
     @mcp.tool(name="shell", description=(
         "Run a PowerShell command and return stdout/stderr. "
-        "Keywords: shell, command line, powershell, cmd, run command, terminal, exec."
+        "Keywords: shell, command line, powershell, cmd, run command, terminal, exec. "
+        "timeout (seconds) overrides the config default (shell.timeout, 30); large output "
+        "is truncated past shell.max_output_bytes (0 = no cap)."
     ), annotations=_REG(title="Shell", readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True))
-    def _shell(command: str) -> str:
-        return shell_fn(command=command)
+    def _shell(command: str, timeout: int | None = None) -> str:
+        return shell_fn(command=command, timeout=timeout)
 
     @mcp.tool(name="fs_read", description=(
         "Read a text file. Keywords: read file, cat, view file, file content, "

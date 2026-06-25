@@ -25,6 +25,62 @@ logger = logging.getLogger(__name__)
 _REDOS_SHAPE = re.compile(r"\([^()]*[+*?][^()]*\)[+*?]")
 
 
+# TODO #13: PowerShell 5.1 emits stdout in the system codepage (GBK on a
+# Chinese Windows) by default; the subprocess below decodes as UTF-8, so the
+# two mismatch and non-ASCII (CJK) output turns to mojibake. Prepending this
+# snippet forces both PowerShell's *output* encoding ([Console]::OutputEncoding,
+# what it writes to the pipe) and its *input* encoding ($OutputEncoding, what
+# it uses to decode bytes read from native exes) to UTF-8, so the bytes on the
+# pipe are already UTF-8 and the Python-side utf-8 decode matches. This mirrors
+# the reference (powershell/service.py) approach but stays on `powershell
+# -Command` (no -EncodedCommand) to match the rest of the codebase's style.
+_UTF8_PREFIX = (
+    "$OutputEncoding = [System.Text.Encoding]::UTF8; "
+    "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
+)
+
+
+def _shell_config() -> dict:
+    """Return the ``shell`` config section (empty dict if absent)."""
+    return load_config().get("shell", {}) or {}
+
+
+def _truncate_stream(text: str, budget: int) -> tuple[str, int]:
+    """Truncate *text* to at most *budget* UTF-8 bytes, ending on a newline.
+
+    Returns (truncated_text, bytes_used). The byte slice is walked back to the
+    last valid UTF-8 character boundary (so a multi-byte CJK char is dropped
+    whole rather than split into a replacement char), then to the last newline
+    to keep the tail readable. bytes_used is the actual byte length returned.
+    """
+    encoded = text.encode("utf-8")
+    if len(encoded) <= budget:
+        return text, len(encoded)
+    capped_bytes = encoded[:budget]
+    # Walk back to the last full character boundary: errors='ignore' drops the
+    # 1-2 trailing bytes of a half-included multi-byte char instead of emitting
+    # a U+FFFD replacement char.
+    capped = capped_bytes.decode("utf-8", "ignore")
+    nl = capped.rfind("\n")
+    if nl > 0:
+        capped = capped[:nl] + "\n"
+    return capped, len(capped.encode("utf-8"))
+
+
+def _truncate_streams(stdout: str, stderr: str, budget: int) -> tuple[str, str]:
+    """Truncate stdout+stderr to a combined *budget* (UTF-8 bytes).
+
+    stdout gets budget priority (the common case is a large stdout with little
+    or no stderr). Returns (new_stdout, new_stderr).
+    """
+    stdout, used = _truncate_stream(stdout, budget)
+    remaining = budget - used
+    if remaining <= 0:
+        return stdout, ""
+    stderr, _ = _truncate_stream(stderr, remaining)
+    return stdout, stderr
+
+
 def _check_blacklist(command: str) -> str | None:
     """Return the blacklist pattern a command matches, or ``None`` if allowed.
 
@@ -103,7 +159,7 @@ def _audit_shell(command: str, status: str) -> None:
         logger.warning("Failed to write shell audit log", exc_info=True)
 
 
-def run_shell(command: str, timeout: float = 30.0) -> dict[str, Any]:
+def run_shell(command: str, timeout: float | None = None) -> dict[str, Any]:
     """Execute a PowerShell command and return the output.
 
     A command matching the optional ``shell.blacklist`` config (M-05) is
@@ -113,14 +169,20 @@ def run_shell(command: str, timeout: float = 30.0) -> dict[str, Any]:
 
     Args:
         command: PowerShell command string.
-        timeout: Execution timeout in seconds.
+        timeout: Execution timeout in seconds. ``None`` (default) reads
+            ``shell.timeout`` from config (fallback 30.0). An explicit value
+            overrides the config default. (TODO #13)
 
     Returns:
         Dict with output, exit_code.
 
     Raises:
         PermissionError: If the command matches the blacklist.
-        RuntimeError: On timeout or if PowerShell is missing.
+        TimeoutError: On execution timeout (→ JSON-RPC ``WAIT_TIMEOUT``
+            -1003). (TODO #13: was RuntimeError — a timeout is a wait
+            condition, not an internal crash, so it must not trip the router's
+            catch-all + logger.exception.)
+        RuntimeError: If PowerShell is missing (environment failure).
     """
     matched = _check_blacklist(command)
     if matched is not None:
@@ -131,29 +193,76 @@ def run_shell(command: str, timeout: float = 30.0) -> dict[str, Any]:
     _audit_shell(command, "ALLOWED")
     logger.debug("Executing shell command: %s", command)
 
+    # TODO #13: timeout from config when the caller doesn't pass one.
+    cfg = _shell_config()
+    if timeout is None:
+        timeout = float(cfg.get("timeout", 30.0))
+    max_output_bytes = int(cfg.get("max_output_bytes", 0) or 0)
+    # Empty/absent → UTF-8. The UTF-8 prefix below makes PS emit UTF-8, so the
+    # two match and non-ASCII (CJK) output decodes cleanly. A NON-utf-8 override
+    # (e.g. 'gbk') means a native exe ignores our UTF-8 request and emits its
+    # legacy codepage — in that case the prefix must NOT run, or PS emits UTF-8
+    # while Python decodes as GBK → mojibake (the exact bug this TODO fixes).
+    out_encoding = (cfg.get("output_encoding") or "utf-8").strip() or "utf-8"
+    use_utf8_prefix = out_encoding.lower() in ("", "utf-8", "utf8")
+
+    # TODO #13: force UTF-8 on the PowerShell side so the pipe bytes match the
+    # Python-side decode. The prefix is prepended to the *command* (still one
+    # -Command argument), so it never changes how the caller's command is
+    # quoted/escaped. Skipped for a non-UTF-8 decode override (see above).
+    full_command = (_UTF8_PREFIX + command) if use_utf8_prefix else command
+
     try:
         result = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", full_command],
             capture_output=True,
             text=True,
             timeout=timeout,
-            encoding="utf-8",
+            encoding=out_encoding,
             errors="replace",
         )
 
+        stdout = result.stdout or ""
+        stderr = result.stderr or ""
+
+        # TODO #13: cap combined output so a runaway command can't flood the
+        # agent's context. Measured on the decoded text's UTF-8 byte length so
+        # the budget is encoding-stable. Applies to the returned stdout/stderr
+        # and thus the formatted `output`; the audit log is unaffected (it
+        # records commands, never output). stdout gets budget priority (the
+        # common case is a huge stdout with little/no stderr).
+        truncated = False
+        orig_bytes = 0
+        if max_output_bytes > 0:
+            orig_bytes = len((stdout + stderr).encode("utf-8", "replace"))
+            if orig_bytes > max_output_bytes:
+                stdout, stderr = _truncate_streams(
+                    stdout, stderr, max_output_bytes
+                )
+                truncated = True
+
         output_parts = [f"## Shell\nCommand: {command}"]
-        if result.stdout.strip():
-            output_parts.append(result.stdout.strip())
-        if result.stderr.strip():
-            output_parts.append(f"[stderr]\n{result.stderr.strip()}")
+        if stdout.strip():
+            output_parts.append(stdout.strip())
+        if stderr.strip():
+            output_parts.append(f"[stderr]\n{stderr.strip()}")
         output_parts.append(f"Exit code: {result.returncode}")
+
+        if truncated:
+            output_parts.append(
+                f"\n[output truncated: {orig_bytes} bytes, limit {max_output_bytes}]"
+            )
 
         # "Access is denied" is the canonical opaque ACL failure; when the
         # server isn't elevated, append a hint so the agent has an actionable
-        # fix instead of a raw system error. (TODO #14)
+        # fix instead of a raw system error. (TODO #14) Operates on the
+        # (possibly truncated) streams by design — if a huge stdout ate the
+        # whole budget and emptied stderr, the hint won't fire; that's an
+        # acceptable trade-off for bounding context, and ACL failures rarely
+        # produce multi-KB stdout.
         hint = None
         if result.returncode != 0:
-            combined = f"{result.stdout}\n{result.stderr}".lower()
+            combined = f"{stdout}\n{stderr}".lower()
             if "access is denied" in combined:
                 hint = elevation_hint()
 
@@ -163,10 +272,12 @@ def run_shell(command: str, timeout: float = 30.0) -> dict[str, Any]:
         return {
             "output": "\n".join(output_parts),
             "exit_code": result.returncode,
-            "stdout": result.stdout,
-            "stderr": result.stderr,
+            "stdout": stdout,
+            "stderr": stderr,
         }
     except subprocess.TimeoutExpired:
-        raise RuntimeError(f"Shell command timed out after {timeout}s: {command}")
+        raise TimeoutError(
+            f"Shell command timed out after {timeout}s: {command}"
+        )
     except FileNotFoundError:
         raise RuntimeError("PowerShell not found")

@@ -1,5 +1,7 @@
 """Tests for the shell runner: optional command blacklist and audit log (M-05)."""
 
+import subprocess
+
 import pytest
 from unittest.mock import patch, MagicMock
 
@@ -233,3 +235,194 @@ class TestAuditLog:
         assert "command-number-4" in current.read_text(encoding="utf-8")
         all_text = current.read_text(encoding="utf-8") + backup.read_text(encoding="utf-8")
         assert "command-number-0" not in all_text
+
+
+# ── TODO #13: encoding, timeout, output truncation ──────────────────
+
+
+def _shell_cfg(**over):
+    """Patch load_config to return a shell config with arbitrary keys."""
+    return patch(
+        "agent_windows.core.shell_runner.load_config",
+        return_value={"shell": {"blacklist": [], **over}},
+    )
+
+
+def _ok(stdout="", stderr="", returncode=0):
+    """A MagicMock CompletedProcess for a successful run."""
+    return MagicMock(stdout=stdout, stderr=stderr, returncode=returncode)
+
+
+class TestEncoding:
+    """TODO #13: PowerShell 5.1 emits the system codepage by default; a UTF-8
+    prefix is prepended so the pipe bytes match the Python-side UTF-8 decode."""
+
+    def test_command_has_utf8_prefix(self):
+        """The UTF-8 setup snippet is prepended to the user command in the
+        subprocess argv, so PS emits UTF-8 and the decode matches."""
+        with _shell_cfg(), patch("subprocess.run", return_value=_ok("x")) as m:
+            run_shell("Get-Process")
+        argv = m.call_args.args[0]
+        assert argv[:3] == ["powershell", "-NoProfile", "-NonInteractive"]
+        assert argv[3] == "-Command"
+        # The command argument carries the prefix BEFORE the user command.
+        assert argv[4].startswith("$OutputEncoding")
+        assert "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8" in argv[4]
+        assert argv[4].endswith("Get-Process")
+
+    def test_output_block_uses_original_command_not_prefixed(self):
+        """The returned `output` shows the ORIGINAL command (not the prefixed
+        internal form), so the agent isn't confused by the encoding boilerplate."""
+        with _shell_cfg(), patch("subprocess.run", return_value=_ok("x")):
+            result = run_shell("Get-Process")
+        assert "Command: Get-Process" in result["output"]
+        assert "$OutputEncoding" not in result["output"]
+
+    def test_output_encoding_override(self):
+        """An explicit shell.output_encoding overrides the decode (for a native
+        exe that ignores the UTF-8 request and emits its legacy codepage)."""
+        with _shell_cfg(output_encoding="gbk"), \
+                patch("subprocess.run", return_value=_ok("ok")) as m:
+            run_shell("Get-Date")
+        assert m.call_args.kwargs["encoding"] == "gbk"
+
+    def test_non_utf8_override_skips_utf8_prefix(self):
+        """A non-UTF-8 decode override must NOT prepend the UTF-8 prefix —
+        otherwise PS emits UTF-8 while Python decodes as GBK → mojibake, the
+        exact bug this TODO fixes. The prefix only runs when we decode UTF-8."""
+        with _shell_cfg(output_encoding="gbk"), \
+                patch("subprocess.run", return_value=_ok("ok")) as m:
+            run_shell("Get-Date")
+        argv = m.call_args.args[0]
+        # The -Command argument is the bare user command, no $OutputEncoding prefix.
+        assert argv[4] == "Get-Date"
+
+    def test_utf8_override_keeps_prefix(self):
+        """An explicit 'utf-8' override still uses the prefix (they're
+        consistent — PS emits UTF-8, Python decodes UTF-8)."""
+        with _shell_cfg(output_encoding="utf-8"), \
+                patch("subprocess.run", return_value=_ok("ok")) as m:
+            run_shell("Get-Date")
+        argv = m.call_args.args[0]
+        assert argv[4].startswith("$OutputEncoding")
+
+    def test_default_decode_is_utf8(self):
+        """Default (no override) decodes as UTF-8 — matching the prefix."""
+        with _shell_cfg(), patch("subprocess.run", return_value=_ok("ok")) as m:
+            run_shell("Get-Date")
+        assert m.call_args.kwargs["encoding"] == "utf-8"
+
+
+class TestTimeout:
+    """TODO #13: timeout comes from config when omitted, and a timeout now
+    raises TimeoutError (WAIT_TIMEOUT -1003) instead of RuntimeError."""
+
+    def test_timeout_defaults_from_config(self):
+        """Omitted timeout → shell.timeout config value is used."""
+        with _shell_cfg(timeout=7), patch("subprocess.run", return_value=_ok()) as m:
+            run_shell("Get-Date")
+        assert m.call_args.kwargs["timeout"] == 7
+
+    def test_explicit_timeout_overrides_config(self):
+        """An explicit timeout wins over the config default."""
+        with _shell_cfg(timeout=7), patch("subprocess.run", return_value=_ok()) as m:
+            run_shell("Get-Date", timeout=42)
+        assert m.call_args.kwargs["timeout"] == 42
+
+    def test_timeout_falls_back_to_30_when_config_absent(self):
+        """No timeout in config and none passed → 30s legacy default."""
+        with patch("agent_windows.core.shell_runner.load_config",
+                   return_value={}), \
+                patch("subprocess.run", return_value=_ok()) as m:
+            run_shell("Get-Date")
+        assert m.call_args.kwargs["timeout"] == 30.0
+
+    def test_timeout_raises_timeouterror_not_runtimeerror(self):
+        """A timeout raises TimeoutError (→ WAIT_TIMEOUT -1003 via the router),
+        not RuntimeError (→ DAEMON_INTERNAL_ERROR + log spam). Mirrors
+        notifier.py's deliberate choice."""
+        with _shell_cfg(), patch("subprocess.run", side_effect=subprocess.TimeoutExpired(
+                cmd="powershell", timeout=5)):
+            with pytest.raises(TimeoutError, match="timed out"):
+                run_shell("Start-Sleep 100", timeout=5)
+
+    def test_powershell_missing_still_runtimeerror(self):
+        """PowerShell not installed is an environment failure, not a wait
+        condition — stays RuntimeError (→ DAEMON_INTERNAL_ERROR)."""
+        with _shell_cfg(), patch("subprocess.run", side_effect=FileNotFoundError):
+            with pytest.raises(RuntimeError, match="PowerShell not found"):
+                run_shell("Get-Date")
+
+
+class TestOutputTruncation:
+    """TODO #13: shell.max_output_bytes caps combined stdout+stderr so a
+    runaway command can't flood the agent's context."""
+
+    def test_no_cap_when_zero(self):
+        """max_output_bytes=0 (default) = legacy behavior, no truncation."""
+        big = "X" * 5000
+        with _shell_cfg(max_output_bytes=0), \
+                patch("subprocess.run", return_value=_ok(stdout=big)):
+            result = run_shell("Get-Process")
+        assert result["stdout"] == big
+        assert "truncated" not in result["output"]
+
+    def test_truncates_when_over_cap(self):
+        """Output over the cap is truncated and a marker is appended."""
+        big = "line\n" * 2000  # ~10 KB
+        with _shell_cfg(max_output_bytes=1000), \
+                patch("subprocess.run", return_value=_ok(stdout=big)):
+            result = run_shell("Get-Process")
+        assert "[output truncated:" in result["output"]
+        assert "limit 1000" in result["output"]
+        # Returned stdout shrank to fit the byte budget.
+        assert len(result["stdout"].encode("utf-8")) <= 1000
+
+    def test_truncation_under_cap_untouched(self):
+        """Output under the cap passes through unchanged."""
+        small = "ok\n"
+        with _shell_cfg(max_output_bytes=10000), \
+                patch("subprocess.run", return_value=_ok(stdout=small)):
+            result = run_shell("Get-Date")
+        assert result["stdout"] == small
+        assert "truncated" not in result["output"]
+
+    def test_truncation_keeps_exit_code(self):
+        """Truncation doesn't lose the exit code line."""
+        with _shell_cfg(max_output_bytes=100), \
+                patch("subprocess.run", return_value=_ok(stdout="X" * 5000, returncode=2)):
+            result = run_shell("Get-Process")
+        assert "Exit code: 2" in result["output"]
+        assert result["exit_code"] == 2
+
+    def test_truncation_does_not_cut_multibyte_char(self):
+        """Slicing on encoded bytes (not chars) avoids splitting a multi-byte
+        CJK char in half — the cap boundary lands on errors='ignore' (the
+        trailing partial char is dropped whole, not replaced with U+FFFD)."""
+        cjk = "中" * 500  # 3 bytes each = 1500 bytes
+        with _shell_cfg(max_output_bytes=500), \
+                patch("subprocess.run", return_value=_ok(stdout=cjk)):
+            result = run_shell("Get-Process")
+        assert "[output truncated:" in result["output"]
+        # No lone replacement chars from a half-cut CJK char.
+        assert "\ufffd" not in result["stdout"]
+        # Byte-budget holds even with multi-byte content (a char-based slice
+        # at 500 chars would be 1500 bytes — over budget — so this is load-bearing).
+        assert len(result["stdout"].encode("utf-8")) <= 500
+
+
+class TestTruncateStreamsHelper:
+    """Direct unit tests for the byte-budget split helper."""
+
+    def test_stdout_priority(self):
+        """stdout gets the budget first; stderr gets the remainder."""
+        from agent_windows.core.shell_runner import _truncate_streams
+        stdout, stderr = _truncate_streams("A" * 600, "B" * 600, budget=1000)
+        assert len(stdout.encode("utf-8")) <= 1000
+        assert len(stderr) < 600  # stderr was trimmed
+
+    def test_stdout_alone_exceeds_budget_empties_stderr(self):
+        from agent_windows.core.shell_runner import _truncate_streams
+        stdout, stderr = _truncate_streams("A" * 2000, "B" * 100, budget=1000)
+        assert len(stdout.encode("utf-8")) <= 1000
+        assert stderr == ""

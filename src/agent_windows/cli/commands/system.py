@@ -56,9 +56,16 @@ def app_list(ctx: typer.Context) -> None:
 def shell(
     ctx: typer.Context,
     command: str = typer.Argument(help="PowerShell command to execute"),
+    timeout: float = typer.Option(
+        0, "--timeout", "-t",
+        help="Execution timeout in seconds (0 = config default shell.timeout, 30)",
+    ),
 ) -> None:
-    """Execute a PowerShell command."""
-    _cmd(ctx, "shell", command=command)
+    """Execute a PowerShell command. Use --timeout to override the default 30s."""
+    params: dict = {"command": command}
+    if timeout > 0:
+        params["timeout"] = timeout
+    _cmd(ctx, "shell", **params)
 
 
 # ── fs ────────────────────────────────────────────────────────────

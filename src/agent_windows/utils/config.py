@@ -154,6 +154,24 @@ DEFAULT_CONFIG: dict[str, Any] = {
         # (default). Best-effort only (PowerShell aliases/encodings can bypass);
         # every attempt is also recorded in logs/shell_audit.log regardless.
         "blacklist": [],
+        # TODO #13: execution timeout in seconds. Used when the caller omits an
+        # explicit timeout (run_shell(timeout=None), the daemon shell handler,
+        # the CLI/MCP tool). A timeout now raises TimeoutError → WAIT_TIMEOUT
+        # (-1003), not a generic internal error.
+        "timeout": 30,
+        # TODO #13: cap on combined stdout+stderr size in BYTES. 0 = no cap
+        # (legacy behavior). When exceeded, output is truncated and a
+        # "[output truncated: ...]" marker is appended so a runaway command
+        # (e.g. `Get-Process | Format-Table` over a huge session) can't drown
+        # the agent's context. The audit log is unaffected (it records
+        # commands, not output).
+        "max_output_bytes": 0,
+        # TODO #13: override the output decode encoding. Empty (default) uses
+        # UTF-8 — the run_shell command prefix forces PowerShell 5.1 to emit
+        # UTF-8, so the two match and non-ASCII (CJK) output decodes cleanly.
+        # Set to e.g. 'gbk'/'cp1252' only if a command's native exe ignores the
+        # UTF-8 request and emits its legacy codepage instead.
+        "output_encoding": "",
     },
     "mcp": {
         # MCP server (agent-windows mcp serve/auth/install). auth_key is the

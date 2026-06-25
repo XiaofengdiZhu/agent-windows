@@ -549,17 +549,19 @@ agent-windows app resize "Notepad" --width 800 --height 600 --x 100 --y 100
 
 ### shell
 
-Run a PowerShell command.
+Run a PowerShell command. Output is forced to UTF-8 on the PowerShell side (so CJK and other non-ASCII output decodes cleanly), and a command that produces a huge output is truncated past `shell.max_output_bytes` (default 0 = no cap) with an `[output truncated: ...]` marker so it can't flood the context.
 
 ```bash
 agent-windows shell "Get-Process | Select-Object -First 5"
+agent-windows shell "Get-Process" --timeout 60     # override default 30s
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `command` | str | **required** | PowerShell command |
+| `--timeout` / `-t` | float | `0` (= config `shell.timeout`, 30) | Execution timeout in seconds |
 
-**Output**: Command stdout/stderr.
+**Output**: Command stdout/stderr with an `Exit code: N` line. A timeout raises error code `-1003` (WAIT_TIMEOUT). `shell.timeout` and `shell.max_output_bytes` are configurable in `config.toml`.
 
 ### fs read / fs write / fs list / fs copy / fs move / fs delete / fs search / fs info
 

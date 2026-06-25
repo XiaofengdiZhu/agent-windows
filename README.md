@@ -140,7 +140,7 @@ Python daemon (persistent, COM STA worker)
 | `app switch NAME` | Switch to window |
 | `app resize NAME --width W --height H` | Resize window |
 | `app list` | List visible windows |
-| `shell COMMAND` | Run PowerShell command |
+| `shell COMMAND [--timeout SECS]` | Run PowerShell command (UTF-8 output; `--timeout` overrides default 30s) |
 | `fs read/write/list/copy/move/delete/search/info PATH ...` | File operations |
 | `clipboard get/set [--keyboard]` | Clipboard access (`--keyboard` simulates Ctrl+C/V) |
 | `process list/kill` | Process management |

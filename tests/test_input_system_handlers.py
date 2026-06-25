@@ -467,7 +467,24 @@ class TestShellHandler:
     def test_forwards_command(self):
         with patch("agent_windows.core.shell_runner.run_shell", return_value={"output": "done"}) as m:
             HANDLERS["shell"]({"command": "Get-Date"})
-        m.assert_called_once_with("Get-Date")
+        # timeout omitted by the caller → forwarded as None (run_shell then
+        # reads shell.timeout config). (TODO #13)
+        m.assert_called_once_with("Get-Date", timeout=None)
+
+    def test_forwards_timeout(self):
+        """TODO #13: an explicit timeout param is forwarded to run_shell."""
+        with patch("agent_windows.core.shell_runner.run_shell", return_value={"output": "done"}) as m:
+            HANDLERS["shell"]({"command": "Get-Date", "timeout": 5})
+        m.assert_called_once_with("Get-Date", timeout=5)
+
+    def test_timeout_zero_normalized_to_none(self):
+        """TODO #13: timeout=0 means 'use the config default' (0 would be an
+        instant timeout), so the handler normalizes it to None — matching the
+        CLI's --timeout 0 semantics and protecting the MCP/batch path (which
+        can't apply the CLI's >0 guard)."""
+        with patch("agent_windows.core.shell_runner.run_shell", return_value={"output": "done"}) as m:
+            HANDLERS["shell"]({"command": "Get-Date", "timeout": 0})
+        m.assert_called_once_with("Get-Date", timeout=None)
 
     def test_command_must_be_str(self):
         with pytest.raises(ValueError, match="must be str"):

@@ -60,9 +60,18 @@ def _app_list(params: dict) -> dict[str, Any]:
 
 @handler("shell")
 def _shell(params: dict) -> dict[str, Any]:
-    """Execute a PowerShell command."""
+    """Execute a PowerShell command.
+
+    Optional ``timeout`` (seconds) overrides ``shell.timeout`` config. Omitted
+    → run_shell reads the config default. A value of 0 is treated as "use the
+    config default" too (0 would mean instant timeout), matching the CLI's
+    ``--timeout 0`` semantics. (TODO #13)
+    """
     from agent_windows.core.shell_runner import run_shell
-    return run_shell(require(params, "command", str))
+    timeout = params.get("timeout")
+    if timeout == 0:
+        timeout = None
+    return run_shell(require(params, "command", str), timeout=timeout)
 
 
 # ── Filesystem ──────────────────────────────────────────────────────
