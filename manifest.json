@@ -1,0 +1,107 @@
+{
+  "manifest_version": "0.4",
+  "name": "agent-windows",
+  "version": "0.1.0",
+  "description": "Windows Computer-Use CLI for AI Agents (MCP server)",
+  "long_description": "agent-windows is a Windows Computer-Use CLI for AI Agents. It drives the real Windows desktop — screenshots, the UIA accessibility tree, vision-based element grounding, and mouse/keyboard automation — through a fast native-launcher + Python-daemon architecture. Bring your own multimodal model (GPT-4o-mini, Claude, Gemini) for locating icon-only or custom-drawn UI that the accessibility tree can't see. Any MCP-capable client (Claude Desktop, Cursor, etc.) can drive Windows through the bundled MCP server.",
+  "author": {
+    "name": "销锋镝铸",
+    "url": "https://github.com/XiaofengdiZhu"
+  },
+  "homepage": "https://github.com/XiaofengdiZhu/agent-windows",
+  "documentation": "https://github.com/XiaofengdiZhu/agent-windows#readme",
+  "server": {
+    "type": "uv",
+    "entry_point": "src/agent_windows/cli/main.py",
+    "mcp_config": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "${__dirname}",
+        "run",
+        "agent-windows",
+        "mcp",
+        "serve"
+      ],
+      "env": {
+        "UV_NO_SYNC": "1",
+        "AGENT_WINDOWS_VLM_API_KEY": "${user_config.vlm_api_key}",
+        "AGENT_WINDOWS_TELEMETRY": "${user_config.telemetry}"
+      }
+    }
+  },
+  "user_config": {
+    "vlm_api_key": {
+      "type": "string",
+      "title": "Vision Model API Key",
+      "description": "API key for the multimodal model used by ground/detect/ask-vision. Optional — only needed for vision-based element location. Stored via the CLI (config set vlm.api_key), DPAPI-encrypted at rest, never logged.",
+      "required": false,
+      "default": ""
+    },
+    "telemetry": {
+      "type": "boolean",
+      "title": "Local-only Tool Telemetry",
+      "description": "Append each tool call's name, success/failure and duration to ~/.agent-windows/logs/telemetry.log. Zero network, off by default.",
+      "required": false,
+      "default": false
+    }
+  },
+  "tools": [
+    { "name": "app_launch", "description": "Launch an application by name (e.g., 'notepad') or path." },
+    { "name": "app_list", "description": "List all visible windows." },
+    { "name": "app_resize", "description": "Resize a window by name/title." },
+    { "name": "app_switch", "description": "Switch focus to a window by name/title." },
+    { "name": "ask_vision", "description": "Free-form visual Q&A: send a screenshot (or a supplied image) plus a prompt to the vision model and return its textual answer." },
+    { "name": "batch", "description": "Execute multiple daemon commands in one IPC round-trip." },
+    { "name": "cleanup_screenshots", "description": "Delete old/oversized screenshots from the agent-windows data dir (~/.agent-windows/screenshots)." },
+    { "name": "click", "description": "Mouse click at [x, y] or at a UI element (@eN selector from a prior snapshot)." },
+    { "name": "clipboard_get", "description": "Get clipboard content." },
+    { "name": "clipboard_set", "description": "Set clipboard content." },
+    { "name": "dblclick", "description": "Double-click at [x, y] or at a UI element (@eN)." },
+    { "name": "detect", "description": "Detect multiple targets matching a description and return a bounding box per match (plus a marked screenshot)." },
+    { "name": "diff", "description": "Pixel-level diff between a baseline screenshot and another image (or a fresh capture when compare is omitted)." },
+    { "name": "drag", "description": "Drag from (x1,y1) to (x2,y2)." },
+    { "name": "element_state", "description": "Check whether a UIA element (@eN) is visible or enabled." },
+    { "name": "fs_copy", "description": "Copy a file/dir." },
+    { "name": "fs_delete", "description": "Delete a file/dir." },
+    { "name": "fs_info", "description": "Return metadata (size/dates/type) for a file or directory." },
+    { "name": "fs_list", "description": "List a directory." },
+    { "name": "fs_move", "description": "Move/rename a file/dir." },
+    { "name": "fs_read", "description": "Read a text file." },
+    { "name": "fs_search", "description": "Find files/dirs matching a glob pattern (recursive by default)." },
+    { "name": "fs_write", "description": "Write to a file." },
+    { "name": "get_text", "description": "Return the text/name of a UIA element identified by its @eN selector from a prior snapshot." },
+    { "name": "ground", "description": "Locate a UI element by natural-language description and return click-ready coordinates [x, y], confidence, and a marked screenshot." },
+    { "name": "highlight", "description": "Draw a labeled rectangle over a region [x1,y1,x2,y2] on a screenshot and return the marked image." },
+    { "name": "hover", "description": "Hover at [x, y] or @eN to trigger tooltips/highlights." },
+    { "name": "mouse_down", "description": "Press and hold a mouse button at [x, y] or @eN." },
+    { "name": "mouse_up", "description": "Release a mouse button at [x, y] or @eN." },
+    { "name": "move", "description": "Move the mouse cursor to [x, y] or @eN (without clicking)." },
+    { "name": "multi_edit", "description": "Type into multiple fields in one call." },
+    { "name": "multi_select", "description": "Click multiple targets in one call." },
+    { "name": "notify", "description": "Show a Windows toast notification." },
+    { "name": "observe", "description": "Combined observation: snapshot + screenshot (+ optional visual grounding), returned as text." },
+    { "name": "ping", "description": "Daemon health check (single IPC round-trip)." },
+    { "name": "process_kill", "description": "Kill a process by PID (int) or name (str)." },
+    { "name": "process_list", "description": "List running processes with PID, name, memory, and CPU time." },
+    { "name": "registry", "description": "Windows Registry operation." },
+    { "name": "screenshot", "description": "Capture a screenshot of the screen (or a region/monitor/element)." },
+    { "name": "scroll", "description": "Scroll at [x, y] or @eN." },
+    { "name": "shell", "description": "Run a PowerShell command and return stdout/stderr." },
+    { "name": "shortcut", "description": "Send a keyboard shortcut, e.g. \"ctrl+c\", \"alt+tab\", \"win+r\"." },
+    { "name": "snapshot", "description": "Return a semantic snapshot of the UIA accessibility tree: focused window, open windows, and interactive/scrollable elements with their bounding boxes and @eN labels." },
+    { "name": "type", "description": "Type text using Unicode direct input (bypasses IME)." },
+    { "name": "wait", "description": "Wait for a duration, an element (@eN selector) to appear, or text to appear in an interactive element's name." },
+    { "name": "wait_for", "description": "Wait until a UI condition holds." }
+  ],
+  "compatibility": {
+    "platforms": ["win32"],
+    "runtimes": { "python": ">=3.13" }
+  },
+  "keywords": ["windows", "automation", "ai", "mcp", "computer-use", "accessibility"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/XiaofengdiZhu/agent-windows"
+  }
+}
