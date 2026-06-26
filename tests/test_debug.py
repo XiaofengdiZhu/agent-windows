@@ -13,10 +13,18 @@ _FALSY = ("0", "false", "no", "off", "", "garbage")
 
 @pytest.fixture
 def clean_debug_env(monkeypatch):
-    """Remove AGENT_WINDOWS_DEBUG so tests start from a known unset state."""
+    """Remove AGENT_WINDOWS_DEBUG so tests start from a known unset state.
+
+    Teardown pops the key directly (not via monkeypatch) because some tests
+    mutate os.environ through enable_debug(), which writes outside
+    monkeypatch's tracking — monkeypatch.delenv at teardown only reliably
+    undoes ITS OWN setup deletion, leaving a stale value behind that would
+    leak into subprocess-based tests (test_uia_debug.py) run later in the
+    same pytest session.
+    """
     monkeypatch.delenv("AGENT_WINDOWS_DEBUG", raising=False)
     yield
-    monkeypatch.delenv("AGENT_WINDOWS_DEBUG", raising=False)
+    os.environ.pop("AGENT_WINDOWS_DEBUG", None)
 
 
 class TestIsDebug:
