@@ -45,3 +45,40 @@ class TestEnableDebug:
         debug_mod.enable_debug()
         debug_mod.enable_debug()
         assert debug_mod.is_debug() is True
+
+
+class TestConfigureLogging:
+    @pytest.fixture(autouse=True)
+    def _save_root_level(self):
+        root = logging.getLogger()
+        saved = root.level
+        yield
+        root.setLevel(saved)
+
+    def test_debug_raises_root_to_debug(self, clean_debug_env, monkeypatch):
+        logging.getLogger().setLevel(logging.INFO)
+        monkeypatch.setenv("AGENT_WINDOWS_DEBUG", "1")
+        debug_mod.configure_logging()
+        assert logging.getLogger().getEffectiveLevel() == logging.DEBUG
+
+    def test_debug_raises_verbose_loggers(self, clean_debug_env, monkeypatch):
+        for name in debug_mod._VERBOSE_LOGGERS:
+            logging.getLogger(name).setLevel(logging.INFO)
+        monkeypatch.setenv("AGENT_WINDOWS_DEBUG", "1")
+        debug_mod.configure_logging()
+        for name in debug_mod._VERBOSE_LOGGERS:
+            assert logging.getLogger(name).level == logging.DEBUG
+
+    def test_noop_when_not_debug(self, clean_debug_env):
+        logging.getLogger().setLevel(logging.INFO)
+        debug_mod.configure_logging()  # unset → not debug
+        assert logging.getLogger().getEffectiveLevel() == logging.INFO
+
+    def test_idempotent_no_handler_accumulation(self, clean_debug_env, monkeypatch):
+        root = logging.getLogger()
+        n_handlers_before = len(root.handlers)
+        monkeypatch.setenv("AGENT_WINDOWS_DEBUG", "1")
+        debug_mod.configure_logging()
+        debug_mod.configure_logging()
+        assert len(root.handlers) == n_handlers_before
+        assert root.getEffectiveLevel() == logging.DEBUG
