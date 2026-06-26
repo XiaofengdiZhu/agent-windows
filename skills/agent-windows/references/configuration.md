@@ -49,6 +49,20 @@ as an empty config → merged defaults only (handy for testing against defaults
 without creating a file). A file that exists but is unreadable or has invalid
 TOML raises the usual error.
 
+### TLS path resolution
+
+Relative `[mcp] ssl_certfile` / `ssl_keyfile` paths are resolved against the
+**config file's directory** (`get_config_path().parent`), not the process
+working directory. This makes a config file self-contained: `mcp auth
+--with-tls` writes absolute paths, but a hand-edited relative path like
+`certs/server.pem` resolves next to the config regardless of where you launch
+`mcp serve` from. Absolute paths and `~`-prefixed paths are used as-is.
+
+If a configured TLS file is missing, `mcp serve` fails fast before uvicorn
+starts, reporting the resolved absolute path and the config file location —
+rather than surfacing as an opaque OpenSSL traceback. stdio transport ignores
+TLS (local IPC), so the check is skipped there.
+
 ### Example
 
 ```bash

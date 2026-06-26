@@ -224,6 +224,8 @@ agent-windows config doctor
 
 Config file: `~/.agent-windows/config.toml` (auto-created with owner-only permissions)
 
+> **Path resolution**: relative paths in `[mcp] ssl_certfile` / `ssl_keyfile` are resolved against the **config file's directory**, not the process working directory — so a config under `--config <path>` resolves its TLS paths next to itself. Absolute paths and `~`-prefixed paths are used as-is. If a configured TLS file is missing, `mcp serve` fails fast with the resolved path and config location before starting the server.
+
 > **Security**: The `vlm.api_key` is **encrypted at rest** with Windows DPAPI (current-user scope); the config file is also restricted to your Windows account via an owner-only ACL. Always set the key through `config set vlm.api_key sk-...` (or the `AGENT_WINDOWS_VLM_API_KEY` env var) — it is encrypted transparently on save and decrypted transparently on load, so you never handle the encrypted form. API keys in `config show` output are automatically masked. For CI/CD or shared environments, prefer the `AGENT_WINDOWS_VLM_API_KEY` environment variable — it takes priority over the config file and is never written to disk.
 
 > **When changes take effect**: The daemon re-reads the config file on every command (checking the file's modification time), so `config set` applies to the **next command** — no daemon restart needed. The one exception is `daemon.idle_timeout_minutes`: it's read once at daemon startup, so changing it requires a restart (`daemon stop` then `daemon start`, or just let the old one idle out).
