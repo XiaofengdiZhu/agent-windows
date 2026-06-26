@@ -19,12 +19,21 @@ def global_options(
     no_daemon: bool = typer.Option(False, "--no-daemon", help="Skip daemon, execute directly (debug)"),
     format: str = typer.Option("text", "--format", help="Output format: text|json"),
     debug: bool = typer.Option(False, "--debug", help="Enable verbose logging"),
+    config: str = typer.Option(
+        None, "--config",
+        help="Path to an alternate config.toml (default: ~/.agent-windows/config.toml). "
+             "Read by this process and propagated to the daemon. State files "
+             "(pid/lock/version/logs/screenshots) stay in the default location."),
 ) -> None:
     """agent-windows — Windows Computer-Use CLI for AI Agents."""
+    if config:
+        from agent_windows.utils.config import set_config_override
+        set_config_override(config)
     ctx.ensure_object(dict)
     ctx.obj["no_daemon"] = no_daemon
     ctx.obj["format"] = format
     ctx.obj["debug"] = debug
+    ctx.obj["config"] = config
 
 
 # ── Register top-level commands ───────────────────────────────────

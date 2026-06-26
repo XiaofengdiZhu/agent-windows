@@ -788,3 +788,32 @@ class TestMultiEditCommand:
         result = runner.invoke(app, ["multi-edit", json.dumps({"a": 1})])
         assert result.exit_code == 1
         assert "must be an array" in result.output
+
+
+class TestConfigGlobalFlag:
+    """The --config global flag sets the override for in-process config reads."""
+
+    def teardown_method(self, _method):
+        from agent_windows.utils import config as cfg
+        cfg.set_config_override(None)
+
+    def test_config_flag_sets_override(self, tmp_path):
+        # `config show` reads config via load_config() and prints the file path;
+        # with --config pointing at an alternate file, that path must appear and
+        # the override accessor must reflect it.
+        from agent_windows.utils import config as cfg
+        alt = tmp_path / "alt.toml"
+        alt.write_text('[shell]\ntimeout = 77\n', encoding="utf-8")
+        result = runner.invoke(app, ["--config", str(alt), "config", "show"])
+        assert result.exit_code == 0, result.output
+        assert cfg.get_config_override() == alt.resolve()
+        # config show prints "# Config file: <path>" — confirms load_config()
+        # read from the override, not the default.
+        assert str(alt.resolve()) in result.output
+
+    def test_no_config_flag_leaves_default(self):
+        from agent_windows.utils import config as cfg
+        cfg.set_config_override(None)
+        result = runner.invoke(app, ["config", "show"])
+        assert result.exit_code == 0, result.output
+        assert cfg.get_config_override() is None
