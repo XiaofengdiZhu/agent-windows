@@ -238,6 +238,25 @@ class IdleMonitorThread(threading.Thread):
 # ── Daemon Main Loop ──────────────────────────────────────────────
 
 
+def _parse_config_override_from_argv(argv: list[str]) -> str | None:
+    """Extract ``--config <path>`` / ``--config=<path>`` from argv.
+
+    Mirrors the Rust launcher's flag forms so both sides agree. Returns the
+    first match (left-to-right), or None when absent / when ``--config`` has no
+    following token. Does NOT match lookalikes like ``--config-file``.
+
+    Used by :func:`_init_daemon_state` to honor the ``--config`` the launcher
+    appended when spawning this daemon process — the same way it reads
+    ``--debug`` from argv.
+    """
+    for i, a in enumerate(argv):
+        if a == "--config" and i + 1 < len(argv):
+            return argv[i + 1]
+        if a.startswith("--config="):
+            return a[len("--config="):]
+    return None
+
+
 def _init_daemon_state():
     """Parse paths, load config, write PID/version files.
 
@@ -246,6 +265,14 @@ def _init_daemon_state():
     """
     debug = "--debug" in sys.argv
     _setup_logging(debug)
+
+    # Honor --config the launcher appended when spawning us (TODO #21-1).
+    # Must run before the first load_config() below so the daemon reads the
+    # same file the CLI/MCP process is using.
+    _cfg_override = _parse_config_override_from_argv(sys.argv)
+    if _cfg_override:
+        from agent_windows.utils.config import set_config_override
+        set_config_override(_cfg_override)
 
     logger.info("agent-windows daemon v%s starting (PID=%d)", __version__, os.getpid())
 
