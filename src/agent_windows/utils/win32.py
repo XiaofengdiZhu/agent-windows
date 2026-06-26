@@ -45,13 +45,24 @@ def elevation_hint() -> str | None:
 def get_process_name(pid: int) -> str:
     """Get process executable name from PID via Win32 API."""
     PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    ERROR_INSUFFICIENT_BUFFER = 122
     handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
     if not handle:
         return ""
     try:
-        buf = ctypes.create_unicode_buffer(260)
-        size = ctypes.wintypes.DWORD(260)
-        ctypes.windll.kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size))
+        # Start at MAX_PATH; a process image path can exceed it, so on
+        # ERROR_INSUFFICIENT_BUFFER grow the buffer and retry (QueryFullProcessImageNameW
+        # reports the required length via *size). The earlier code ignored the
+        # return value and could use a truncated/empty buffer for long paths.
+        capacity = 260
+        buf = ctypes.create_unicode_buffer(capacity)
+        size = ctypes.wintypes.DWORD(capacity)
+        ok = ctypes.windll.kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size))
+        if not ok and ctypes.windll.kernel32.GetLastError() == ERROR_INSUFFICIENT_BUFFER:
+            capacity = max(size.value + 1, capacity * 2)
+            buf = ctypes.create_unicode_buffer(capacity)
+            size = ctypes.wintypes.DWORD(capacity)
+            ok = ctypes.windll.kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size))
         return os.path.basename(buf.value)
     except Exception:
         logger.debug("Failed to get process name for pid %d", pid, exc_info=True)

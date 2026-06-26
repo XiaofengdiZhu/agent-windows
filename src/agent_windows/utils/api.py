@@ -162,7 +162,7 @@ def _call_anthropic(image: Image.Image, prompt: str, config: dict[str, Any], api
 
     image_format, jpeg_quality = _resolve_image_format(config)
     b64 = encode_image(image, format=image_format, quality=jpeg_quality)
-    model = config.get("model", "claude-sonnet-4-6-20250514")
+    model = config.get("model", "claude-sonnet-4-20250514")
 
     response = client.messages.create(
         model=model,
@@ -193,11 +193,14 @@ def _call_gemini(image: Image.Image, prompt: str, config: dict[str, Any], api_ke
     """Call Google Gemini vision API."""
     import google.generativeai as genai
 
-    cache_key = f"gemini:{api_key}"
+    # The cache key must include model_name: a GenerativeModel is bound to one
+    # model at construction, so reusing a cached entry after vlm.model changed
+    # would silently keep calling the old model. (api.py review finding)
+    model_name = config.get("model", "gemini-1.5-flash")
+    cache_key = f"gemini:{api_key}:{model_name}"
     with _client_lock:
         if cache_key not in _client_cache:
             genai.configure(api_key=api_key)
-            model_name = config.get("model", "gemini-1.5-flash")
             _client_cache[cache_key] = genai.GenerativeModel(model_name)
         model = _client_cache[cache_key]
     response = model.generate_content([prompt, image],

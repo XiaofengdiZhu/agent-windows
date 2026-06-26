@@ -290,10 +290,12 @@ class TestClientCache:
                 cfg = {"engine": "gemini", "api_key": "gk", "model": "gemini-x"}
                 r1 = call_vision_model(Image.new("RGB", (4, 4)), "p", cfg)
                 r2 = call_vision_model(Image.new("RGB", (4, 4)), "p", cfg)
-            # GenerativeModel built once (cached)
+            # GenerativeModel built once (cached). The cache key includes the
+            # model name, so changing vlm.model re-keys (and rebuilds) instead
+            # of reusing a model bound to the old name.
             assert fake_genai.GenerativeModel.call_count == 1
             assert r1 == "g" and r2 == "g"
-            assert "gemini:gk" in api._client_cache
+            assert "gemini:gk:gemini-x" in api._client_cache
         finally:
             sys.modules.pop("google", None)
             sys.modules.pop("google.generativeai", None)

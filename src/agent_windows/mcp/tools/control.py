@@ -10,6 +10,11 @@ from mcp.types import ToolAnnotations
 
 from agent_windows.mcp._call import _call
 
+# Floor for the poll interval: a caller-supplied 0 (or tiny) value would spin
+# without yielding, pinning the daemon's single STA worker for the whole
+# timeout. Clamp so the worker always gets a breather between probes.
+_MIN_POLL_INTERVAL = 0.05
+
 
 def ping_fn() -> str:
     return str(_call("ping").get("output", "pong"))
@@ -39,7 +44,8 @@ def wait_fn(
         if time.monotonic() - start >= timeout:
             who = f"Element {selector}" if selector else f"Text '{text}'"
             raise TimeoutError(f"{who} not found within {timeout}s")
-        time.sleep(min(interval, max(0.0, timeout - (time.monotonic() - start))))
+        time.sleep(min(max(interval, _MIN_POLL_INTERVAL),
+                        max(0.0, timeout - (time.monotonic() - start))))
 
 
 def wait_for_fn(
@@ -62,7 +68,8 @@ def wait_for_fn(
                 f"Condition '{condition}' not satisfied within {timeout}s: "
                 f"{result.get('detail', '')}"
             )
-        time.sleep(min(interval, max(0.0, timeout - (time.monotonic() - start))))
+        time.sleep(min(max(interval, _MIN_POLL_INTERVAL),
+                        max(0.0, timeout - (time.monotonic() - start))))
 
 
 def register(mcp) -> None:

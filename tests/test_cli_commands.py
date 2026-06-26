@@ -696,6 +696,17 @@ class TestDaemonCommand:
         mock_call.assert_called_once_with("shutdown")
         assert "shutdown requested" in result.output
 
+    @patch("agent_windows.ipc.client.call_daemon", side_effect=ConnectionError("pipe broke"))
+    @patch("agent_windows.ipc.pipe.pipe_exists", return_value=True)
+    def test_stop_returns_nonzero_on_error(self, mock_pipe, mock_call):
+        """A failed shutdown surfaces a non-zero exit (not the previous silent
+        exit 0) so scripts/agents can detect the failure. The error is echoed
+        to stderr."""
+        result = runner.invoke(app, ["daemon", "stop"])
+        assert result.exit_code == 1
+        mock_call.assert_called_once_with("shutdown")
+        assert "Error stopping daemon" in result.output
+
     @patch("agent_windows.ipc.pipe.pipe_exists", return_value=True)
     @patch("agent_windows.cli.commands.daemon_cmd.is_process_alive", return_value=True)
     @patch("agent_windows.cli.commands.daemon_cmd.read_pid_file", return_value=(1234, 0.0))

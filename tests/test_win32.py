@@ -76,6 +76,59 @@ def test_handles_path_without_directory(monkeypatch):
     assert win32.get_process_name(1) == "explorer.exe"
 
 
+def test_grows_buffer_on_insufficient_buffer(monkeypatch):
+    """A path longer than the initial 260-char buffer: the first call returns
+    FALSE with ERROR_INSUFFICIENT_BUFFER (122) and reports the required length;
+    the helper grows the buffer and retries, returning the basename. Locks the
+    return-value check that was previously ignored."""
+    kernel = MagicMock()
+    kernel.OpenProcess.return_value = 12345
+    # The real image path is longer than 260 chars (deeply nested install dir).
+    long_path = r"C:\a" + (r"\deep" * 60) + r"\app.exe"
+    required = len(long_path)
+
+    calls = {"n": 0}
+
+    def _fill(handle, flags, buf, size_ref):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # Buffer too small: report FALSE + the required length via *size.
+            size_ref._obj.value = required
+            kernel.GetLastError.return_value = 122  # ERROR_INSUFFICIENT_BUFFER
+            return False
+        # Retry on the grown buffer succeeds.
+        buf.value = long_path
+        size_ref._obj.value = required
+        return True
+
+    kernel.QueryFullProcessImageNameW.side_effect = _fill
+    monkeypatch.setattr(win32.ctypes.windll, "kernel32", kernel)
+
+    assert win32.get_process_name(9999) == "app.exe"
+    # Retried exactly once after the initial insufficient-buffer failure.
+    assert kernel.QueryFullProcessImageNameW.call_count == 2
+    # The second call's buffer must be at least as large as the required length.
+    second_buf = kernel.QueryFullProcessImageNameW.call_args_list[1].args[2]
+    assert len(second_buf) > required
+    kernel.CloseHandle.assert_called_once_with(12345)
+
+
+def test_non_insufficient_failure_returns_empty(monkeypatch):
+    """If QueryFullProcessImageNameW returns FALSE for a reason other than
+    ERROR_INSUFFICIENT_BUFFER (e.g. access revoked mid-call), the helper does
+    NOT retry — it returns "" but still closes the handle."""
+    kernel = MagicMock()
+    kernel.OpenProcess.return_value = 42
+    kernel.QueryFullProcessImageNameW.return_value = False
+    kernel.GetLastError.return_value = 5  # ERROR_ACCESS_DENIED, not 122
+    monkeypatch.setattr(win32.ctypes.windll, "kernel32", kernel)
+
+    assert win32.get_process_name(7) == ""
+    # No retry — a single query attempt.
+    assert kernel.QueryFullProcessImageNameW.call_count == 1
+    kernel.CloseHandle.assert_called_once_with(42)
+
+
 # ── is_elevated: Win32 IsUserAnAdmin wrapper ───────────────────────────
 
 

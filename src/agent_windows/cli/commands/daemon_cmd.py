@@ -62,7 +62,10 @@ def daemon_stop() -> None:
         call_daemon("shutdown")
         typer.echo("Daemon shutdown requested")
     except Exception as e:
+        # A non-zero exit distinguishes "shutdown failed" from success for
+        # scripts/agents; previously this swallowed the error and exited 0.
         typer.echo(f"Error stopping daemon: {e}", err=True)
+        raise typer.Exit(1)
 
 
 @app.command("status")
