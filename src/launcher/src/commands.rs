@@ -262,6 +262,11 @@ pub struct GlobalFlags {
     pub no_daemon: bool,
     pub format_json: bool,
     pub debug: bool,
+    /// `--config <path>` in the global-flag prefix: an alternate config.toml.
+    /// None when absent (use the default ~/.agent-windows/config.toml). When
+    /// set, the launcher appends `--config <path>` when spawning the daemon so
+    /// the daemon reads the same file (TODO #21-1).
+    pub config: Option<String>,
     /// `--no-daemon` appeared AFTER the command name (tail position). The
     /// launcher only honors --no-daemon in the prefix (where it triggers
     /// Python-CLI delegation); in the tail it's a usage error — the Python CLI

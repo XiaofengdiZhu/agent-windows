@@ -189,6 +189,19 @@ fn strip_global_flags(argv: &[String]) -> (GlobalFlags, Vec<String>) {
             s if s.starts_with("--format=") => {
                 g.format_json = &s["--format=".len()..] == "json";
             }
+            "--config" => {
+                // Value is the next token, only while still in the prefix.
+                // If --config is the last prefix token with no value, leave
+                // config at None (matches how --format with no value defaults;
+                // the launcher proceeds with the default config path).
+                if i + 1 < argv.len() {
+                    g.config = Some(argv[i + 1].clone());
+                    i += 1; // consume the value
+                }
+            }
+            s if s.starts_with("--config=") => {
+                g.config = Some(s["--config=".len()..].to_string());
+            }
             "--help" | "-h" => {
                 help_seen = true;
             }
@@ -864,6 +877,41 @@ mod tests {
         assert!(!g.no_daemon);
         assert!(g.no_daemon_in_tail);
         assert_eq!(rest, argv(&["screenshot", "--output", "x.png"]));
+    }
+
+    #[test]
+    fn config_flag_space_form_consumed_in_prefix() {
+        let (g, rest) = strip_global_flags(&argv(&["--config", "/tmp/x.toml", "screenshot"]));
+        assert_eq!(g.config.as_deref(), Some("/tmp/x.toml"));
+        assert_eq!(rest, argv(&["screenshot"]));
+    }
+
+    #[test]
+    fn config_flag_equals_form_consumed_in_prefix() {
+        let (g, rest) = strip_global_flags(&argv(&["--config=/tmp/x.toml", "screenshot"]));
+        assert_eq!(g.config.as_deref(), Some("/tmp/x.toml"));
+        assert_eq!(rest, argv(&["screenshot"]));
+    }
+
+    #[test]
+    fn config_flag_works_alongside_other_globals() {
+        let (g, rest) = strip_global_flags(&argv(
+            &["--debug", "--config", "p.toml", "--format", "json", "click", "1", "2"],
+        ));
+        assert!(g.debug);
+        assert!(g.format_json);
+        assert_eq!(g.config.as_deref(), Some("p.toml"));
+        assert_eq!(rest, argv(&["click", "1", "2"]));
+    }
+
+    #[test]
+    fn config_flag_after_command_is_flagged_not_consumed() {
+        // Mirrors the --no-daemon tail rule: --config after the command name is
+        // a usage error, not silently swallowed. It stays in `rest` (belongs to
+        // the command) and does NOT set g.config.
+        let (g, rest) = strip_global_flags(&argv(&["screenshot", "--config", "x.toml"]));
+        assert!(g.config.is_none(), "tail --config must NOT set g.config");
+        assert_eq!(rest, argv(&["screenshot", "--config", "x.toml"]));
     }
 
     #[test]
