@@ -26,3 +26,23 @@ if defined WINSDK_VER (
 )
 
 cargo %*
+if errorlevel 1 (
+    REM cargo already printed its error; surface its exit code.
+    exit /b %errorlevel%
+)
+
+REM Stage the release exe into prebuilt/ so `uv build` picks it up. prebuilt/
+REM is a sibling of this dir (src/launcher/prebuilt), so it's a local relative
+REM path. Only the release artifact is staged (debug builds stay out of the
+REM wheel). The prebuilt/ contents are gitignored — this is a local staging
+REM step, the exe is never committed. Skip silently for non-release invocations
+REM (cargo test/check have no release artifact to stage).
+if exist "target\release\agent-windows.exe" (
+    if not exist "prebuilt" mkdir "prebuilt"
+    copy /Y "target\release\agent-windows.exe" "prebuilt\agent-windows.exe" >nul
+    if errorlevel 1 (
+        echo [build] ERROR: failed to stage release exe to prebuilt
+        exit /b 1
+    )
+    echo [build] staged release exe to prebuilt\agent-windows.exe ^(gitignored, not committed^)
+)

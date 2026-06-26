@@ -43,7 +43,8 @@ To rebuild the native launcher from source (requires Rust + MSVC + Windows SDK):
 
 ```bash
 cd src/launcher && build.cmd build --release
-# the prebuilt exe at src/launcher/prebuilt/ is what ships in the wheel
+# the exe is staged to prebuilt/ (gitignored) and picked up by `uv build`
+# releases build it from source in CI — no binary is committed to the repo
 ```
 
 

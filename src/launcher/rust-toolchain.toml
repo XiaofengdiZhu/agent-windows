@@ -1,0 +1,6 @@
+# Pin the Rust toolchain for the native launcher so local and CI builds use the
+# same compiler — reproducible artifacts and consistent dependency resolution.
+# rustup reads this file when cargo runs in this directory. CI installs stable
+# via dtolnay/rust-toolchain@stable, which honors the channel pinned here.
+[toolchain]
+channel = "stable"

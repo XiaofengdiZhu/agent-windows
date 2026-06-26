@@ -8,9 +8,9 @@ on:
 jobs:
   build-and-publish:
     name: Build and publish to PyPI
-    # Build on Windows: the wheel ships a prebuilt Windows launcher .exe
-    # (src/launcher/prebuilt) and Windows-only metadata, so the build must
-    # run on windows-latest to produce a correct package.
+    # Build on Windows: the wheel ships a Windows launcher .exe (built from
+    # Rust source below) and Windows-only metadata, so the build must run on
+    # windows-latest to produce a correct package.
     runs-on: windows-latest
     environment:
       name: pypi
@@ -27,6 +27,26 @@ jobs:
         with:
           version: "latest"
 
+      # The native launcher is built from source (no committed binary). The
+      # .exe is staged into src/launcher/prebuilt/ so uv_build includes it in
+      # the wheel's data/scripts/. rustup reads src/launcher/rust-toolchain.toml
+      # (channel = stable); the windows-latest runner has MSVC preinstalled, so
+      # bare `cargo build` succeeds without build.cmd's local SDK-path setup.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build the native launcher
+        working-directory: src/launcher
+        run: |
+          cargo build --release
+          if (-not (Test-Path "target\release\agent-windows.exe")) {
+            throw "cargo build did not produce target/release/agent-windows.exe"
+          }
+          New-Item -ItemType Directory -Force -Path "prebuilt" | Out-Null
+          Copy-Item "target\release\agent-windows.exe" "prebuilt\agent-windows.exe" -Force
+          Write-Host "Staged launcher exe to prebuilt/ (SHA256 below)"
+          (Get-FileHash "prebuilt\agent-windows.exe" -Algorithm SHA256).Hash
+
       - name: Build package
         run: uv build
 
@@ -38,4 +58,11 @@ jobs:
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create ${{ github.ref_name }} dist/* --title "Release ${{ github.ref_name }}" --generate-notes
+        run: |
+          $exeHash = (Get-FileHash "src/launcher/prebuilt/agent-windows.exe" -Algorithm SHA256).Hash
+          $wheel = (Get-ChildItem dist/*.whl).FullName
+          $wheelHash = (Get-FileHash $wheel -Algorithm SHA256).Hash
+          # --notes prepends this checksum block before the auto-generated notes
+          # (from --generate-notes). See https://cli.github.com/manual/gh_release_create
+          $notes = "## Checksums`n`n- ``agent-windows.exe`` (in wheel): ``$exeHash```n- wheel SHA256: ``$wheelHash```n"
+          gh release create ${{ github.ref_name }} dist/* --title "Release ${{ github.ref_name }}" --generate-notes --notes "$notes"

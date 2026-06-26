@@ -69,19 +69,24 @@ mcp = ["fastmcp>=3.0"]
 dev = ["pytest>=9.0.3"]
 
 [project.scripts]
-# The native Rust launcher ships as a prebuilt `agent-windows.exe` (see
-# [tool.uv.build-backend] below) and lands in Scripts/ on install — that's the
-# fast (~15ms) entry point users get. This Python entry is the fallback for
-# --no-daemon mode and commands not yet ported to the launcher.
+# The native Rust launcher is built from source (build.cmd locally, or
+# `cargo build --release` in CI) and staged into src/launcher/prebuilt/ before
+# the wheel is packaged (see [tool.uv.build-backend] below). It lands in
+# Scripts/ on install as the fast (~15ms) entry point. This Python entry is the
+# fallback for --no-daemon mode and commands not yet ported to the launcher.
 agent-windows-python = "agent_windows.cli.main:app"
 
 [build-system]
 requires = ["uv_build>=0.11.20,<0.12.0"]
 build-backend = "uv_build"
 
-# Ship the prebuilt native launcher so `uv tool install` / `uvx` puts the fast
-# Rust binary on PATH. The .exe lives in wheel's {name}-{version}.data/scripts/
-# which pip/uv extracts into the install prefix's Scripts/ dir.
+# The native launcher exe is staged into src/launcher/prebuilt/ by build.cmd
+# (local) or cargo (CI) before packaging — it is NOT committed to the repo
+# (prebuilt/*.exe is gitignored). uv_build copies this dir's contents into the
+# wheel's {name}-{version}.data/scripts/, which pip/uv extract into the install
+# prefix's Scripts/ dir so `uv tool install` / `uvx` put the fast Rust binary on
+# PATH. An empty/missing prebuilt/ at build time yields a wheel without the exe
+# (the Python entry point still works) — run build.cmd first to include it.
 [tool.uv.build-backend.data]
 scripts = "src/launcher/prebuilt"
 

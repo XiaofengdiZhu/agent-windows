@@ -109,9 +109,11 @@ agent-windows publishes to [PyPI](https://pypi.org/project/agent-windows/) via t
    - `manifest.json` → `"version": "X.Y.Z"`
    - `server.json` → top-level `"version"` and `packages[0].version`
 2. **Verify drift guards pass**: `uv run pytest tests/test_manifest.py`.
-3. **Ensure the prebuilt launcher is current**: the wheel ships `src/launcher/prebuilt/agent-windows.exe` as-is (the workflow does **not** compile Rust). Rebuild if you changed the launcher:
+3. **Rebuild the launcher if you changed it** (`src/launcher/`): the launcher is built from source on release (the workflow runs `cargo build --release` on `windows-latest` — no binary is committed). For local development/testing, rebuild and the exe is staged automatically:
    ```bash
    cd src/launcher && build.cmd build --release
+   # the exe lands in prebuilt/ (gitignored); run this before `uv build`
+   # locally, or the wheel won't include the launcher
    ```
 4. **Tag and push**:
    ```bash
