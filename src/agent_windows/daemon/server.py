@@ -23,6 +23,7 @@ import win32event
 import win32pipe
 
 from agent_windows import __version__
+from agent_windows.utils.debug import is_debug
 from agent_windows.daemon.lifecycle import (
     write_pid_file,
     write_version_file,
@@ -263,8 +264,10 @@ def _init_daemon_state():
     Returns a dict with keys: pid_path, version_path, idle_timeout,
     shutdown_event, sta_thread, idle_monitor.
     """
-    debug = "--debug" in sys.argv
-    _setup_logging(debug)
+    if "--debug" in sys.argv:
+        from agent_windows.utils.debug import enable_debug
+        enable_debug()
+    _setup_logging(is_debug())
 
     # Honor --config the launcher appended when spawning us (TODO #21-1).
     # Must run before the first load_config() below so the daemon reads the
