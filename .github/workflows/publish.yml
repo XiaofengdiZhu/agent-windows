@@ -8,7 +8,10 @@ on:
 jobs:
   build-and-publish:
     name: Build and publish to PyPI
-    runs-on: ubuntu-latest
+    # Build on Windows: the wheel ships a prebuilt Windows launcher .exe
+    # (src/launcher/prebuilt) and Windows-only metadata, so the build must
+    # run on windows-latest to produce a correct package.
+    runs-on: windows-latest
     environment:
       name: pypi
       url: https://pypi.org/p/agent-windows
