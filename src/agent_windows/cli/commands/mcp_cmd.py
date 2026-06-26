@@ -252,6 +252,10 @@ def serve(
 
     # Debug mode (TODO #21-3): set the env var once at the entry point; run()
     # and UIA modules read it via is_debug(). No boolean threading into run().
+    # The env var is inherited by a Python-spawned daemon automatically; the
+    # Rust launcher path, however, does NOT set the env var (it appends
+    # --debug to argv instead, which the daemon's _init_daemon_state reads),
+    # so the argv flag remains load-bearing there.
     if debug:
         from agent_windows.utils.debug import enable_debug
         enable_debug()

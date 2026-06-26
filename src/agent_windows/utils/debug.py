@@ -30,7 +30,7 @@ def enable_debug() -> None:
     os.environ[_DEBUG_ENV] = "true"
 
 
-def configure_logging(component: str = "") -> None:
+def configure_logging() -> None:
     """When :func:`is_debug`, raise the root logger + verbose third-party
     loggers to ``DEBUG``; otherwise do nothing.
 
@@ -42,9 +42,6 @@ def configure_logging(component: str = "") -> None:
     NOT used by the daemon: ``daemon/server.py:_setup_logging`` has its own
     FileHandler+StreamHandler structure (writes daemon.log) and reads
     :func:`is_debug` for the level decision itself.
-
-    Args:
-        component: optional label for a one-time startup log line.
     """
     if not is_debug():
         return

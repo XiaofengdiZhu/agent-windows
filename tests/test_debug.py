@@ -57,11 +57,15 @@ class TestEnableDebug:
 
 class TestConfigureLogging:
     @pytest.fixture(autouse=True)
-    def _save_root_level(self):
+    def _save_log_levels(self):
         root = logging.getLogger()
-        saved = root.level
+        saved_root = root.level
+        saved_verbose = {n: logging.getLogger(n).level
+                         for n in debug_mod._VERBOSE_LOGGERS}
         yield
-        root.setLevel(saved)
+        root.setLevel(saved_root)
+        for n, lvl in saved_verbose.items():
+            logging.getLogger(n).setLevel(lvl)
 
     def test_debug_raises_root_to_debug(self, clean_debug_env, monkeypatch):
         logging.getLogger().setLevel(logging.INFO)

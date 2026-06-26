@@ -177,6 +177,12 @@ def _start_daemon_process(debug: bool = False) -> subprocess.Popen:
     CLI/MCP process reads the override — silent divergence.
     """
     cmd = [sys.executable, "-m", "agent_windows", "--daemon"]
+    # The --debug argv flag is load-bearing on the Rust-launcher spawn path
+    # (the launcher never sets AGENT_WINDOWS_DEBUG, so the daemon's
+    # _init_daemon_state reads "--debug" in argv and calls enable_debug()
+    # itself). On THIS Python spawn path the env var is already inherited
+    # (the caller ran enable_debug()), so the flag is redundant-but-harmless
+    # here — kept for parity with the launcher path. (TODO #21-3)
     if debug:
         cmd.append("--debug")
     from agent_windows.utils.config import get_config_override

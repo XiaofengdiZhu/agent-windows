@@ -194,6 +194,38 @@ def test_mcp_serve_delegates_explicit_flags_overriding_config():
                                      allowed_hosts=None, telemetry=False)
 
 
+def test_mcp_serve_debug_flag_calls_enable_debug():
+    """`mcp serve --debug` must call enable_debug() (TODO #21-3 wiring guard).
+
+    Without this assertion, dropping the `if debug: enable_debug()` block from
+    serve() would pass the whole suite while silently breaking debug mode.
+    Patches the source module attribute since serve() does a lazy
+    `from agent_windows.utils.debug import enable_debug` at call time.
+    """
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+
+    runner = CliRunner()
+    with patch("agent_windows.mcp.run"), \
+         patch("agent_windows.utils.debug.enable_debug") as mock_enable, \
+         patch.object(mcp_cmd, "load_config", return_value={"mcp": {}}):
+        runner.invoke(mcp_cmd.app, ["serve", "--debug"])
+    mock_enable.assert_called_once()
+
+
+def test_mcp_serve_without_debug_does_not_call_enable_debug(monkeypatch):
+    """No --debug → enable_debug() must NOT be called (TODO #21-3 wiring guard)."""
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+
+    runner = CliRunner()
+    with patch("agent_windows.mcp.run"), \
+         patch("agent_windows.utils.debug.enable_debug") as mock_enable, \
+         patch.object(mcp_cmd, "load_config", return_value={"mcp": {}}):
+        runner.invoke(mcp_cmd.app, ["serve"])
+    mock_enable.assert_not_called()
+
+
 def test_mcp_serve_defaults_come_from_config(monkeypatch, tmp_path):
     """No flags → use config [mcp] defaults (transport/host/port/auth_key).
     TLS relative paths resolve against the config-file dir; files must exist
