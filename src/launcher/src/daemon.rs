@@ -144,7 +144,11 @@ impl Drop for DaemonSpawnLock {
 /// + `kill_stale_daemon`. A missing version file also counts as a mismatch:
 /// reusing an unversioned daemon is exactly the stale-leftover bug the check
 /// exists to prevent.
-pub fn ensure_daemon_running(python_exe: &str, debug: bool) -> Result<(), String> {
+pub fn ensure_daemon_running(
+    python_exe: &str,
+    debug: bool,
+    config: Option<&str>,
+) -> Result<(), String> {
     // If the daemon process is alive, decide on its version *before* relying on
     // the pipe — a version mismatch needs to kill+respawn regardless of whether
     // the pipe is momentarily up or in its recreate gap.
@@ -170,7 +174,7 @@ pub fn ensure_daemon_running(python_exe: &str, debug: bool) -> Result<(), String
     // stderr on early exit. Shared with `daemon start` so both paths get the
     // same early-exit diagnostic (the #9 fix was asymmetric before: only this
     // cold-start path surfaced the traceback, `daemon start` didn't).
-    spawn_and_wait_for_pipe(python_exe, debug).map(|_| ())
+    spawn_and_wait_for_pipe(python_exe, debug, config).map(|_| ())
 }
 
 /// Spawn a daemon and wait for its pipe to come up, polling for early exit so
@@ -182,7 +186,11 @@ pub fn ensure_daemon_running(python_exe: &str, debug: bool) -> Result<(), String
 /// ready message (timed out). The caller owns closing the handles it still
 /// holds on the success path — here we close them internally since both callers
 /// (`ensure_daemon_running`, `daemon start`) only want the pid-or-error.
-pub(crate) fn spawn_and_wait_for_pipe(python_exe: &str, debug: bool) -> Result<u32, String> {
+pub(crate) fn spawn_and_wait_for_pipe(
+    python_exe: &str,
+    debug: bool,
+    config: Option<&str>,
+) -> Result<u32, String> {
     // Serialize the spawn across processes: hold DaemonSpawnLock for the whole
     // check-then-spawn-then-wait window so a concurrent spawner (another
     // launcher invocation, or a Python ensure_daemon_running) can't race in
@@ -206,7 +214,7 @@ pub(crate) fn spawn_and_wait_for_pipe(python_exe: &str, debug: bool) -> Result<u
     // `stderr_read` is the read end of an anonymous pipe wired to the daemon's
     // stderr, so if it exits early we can surface the real traceback (import
     // failure, etc.) instead of a generic "check the logs" message (#9).
-    let (handle, pid, stderr_read) = spawn_daemon(python_exe, debug)
+    let (handle, pid, stderr_read) = spawn_daemon(python_exe, debug, config)
         .map_err(|e| format!("Daemon not running, failed to start: {}", e))?;
 
     // Retry until the pipe appears, or the spawned process exits (fail fast —

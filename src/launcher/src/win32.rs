@@ -202,8 +202,8 @@ fn pipe_error(err: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        create_inheritable_pipe, filetime_to_u64, pipe_error, read_stderr_to_string,
-        truncate_for_error_msg,
+        build_daemon_args, create_inheritable_pipe, filetime_to_u64, pipe_error,
+        read_stderr_to_string, truncate_for_error_msg,
     };
     use windows_sys::Win32::Foundation::CloseHandle;
 
@@ -316,6 +316,35 @@ mod tests {
         unsafe { CloseHandle(read) };
         assert!(got.contains("ModuleNotFoundError: No module named 'pywintypes'"));
     }
+
+    #[test]
+    fn build_daemon_args_base_form() {
+        assert_eq!(build_daemon_args(false, None), "-m agent_windows --daemon");
+    }
+
+    #[test]
+    fn build_daemon_args_debug_appended() {
+        assert_eq!(
+            build_daemon_args(true, None),
+            "-m agent_windows --daemon --debug"
+        );
+    }
+
+    #[test]
+    fn build_daemon_args_config_appended() {
+        assert_eq!(
+            build_daemon_args(false, Some("/tmp/x.toml")),
+            "-m agent_windows --daemon --config \"/tmp/x.toml\""
+        );
+    }
+
+    #[test]
+    fn build_daemon_args_debug_and_config() {
+        assert_eq!(
+            build_daemon_args(true, Some("C:\\Program Files\\a.toml")),
+            "-m agent_windows --daemon --debug --config \"C:\\Program Files\\a.toml\""
+        );
+    }
 }
 
 /// `WaitNamedPipeW`: true if the pipe is available within the timeout.
@@ -401,6 +430,23 @@ fn filetime_to_u64(ft: &FILETIME) -> u64 {
     ((ft.dwHighDateTime as u64) << 32) | (ft.dwLowDateTime as u64)
 }
 
+/// Build the daemon's argument string (`-m agent_windows --daemon [--debug]
+/// [--config "<path>"]`). Pure/testable — `spawn_daemon` embeds it after the
+/// quoted interpreter path. The config path is double-quoted (Windows paths may
+/// contain spaces, e.g. `C:\Program Files\...`); embedded double-quotes are
+/// stripped as a defensive simplification (a legit path containing `"` is
+/// pathological). (TODO #21-1)
+pub fn build_daemon_args(debug: bool, config: Option<&str>) -> String {
+    let mut args = String::from("-m agent_windows --daemon");
+    if debug {
+        args.push_str(" --debug");
+    }
+    if let Some(c) = config {
+        args.push_str(&format!(" --config \"{}\"", c.replace('"', "")));
+    }
+    args
+}
+
 /// Spawn the daemon as a detached subprocess: `<python> -m agent_windows --daemon`.
 /// Returns (process handle, pid, stderr-read handle). The caller owns all three
 /// handles and must close them. `stderr_read` is the read end of an anonymous
@@ -420,11 +466,12 @@ fn filetime_to_u64(ft: &FILETIME) -> u64 {
 /// so the only post-startup stderr writes are catastrophic crashes that are
 /// already fatal. Keeping the read end open instead would risk the pipe
 /// buffer filling and blocking the daemon on a large stderr flood.
-pub fn spawn_daemon(python_exe: &str, debug: bool) -> Result<(HANDLE, u32, Option<HANDLE>), String> {
-    let mut args = format!("-m agent_windows --daemon");
-    if debug {
-        args.push_str(" --debug");
-    }
+pub fn spawn_daemon(
+    python_exe: &str,
+    debug: bool,
+    config: Option<&str>,
+) -> Result<(HANDLE, u32, Option<HANDLE>), String> {
+    let args = build_daemon_args(debug, config);
     // CreateProcessW wants a mutable command line; the app path is quoted.
     let cmdline = format!("\"{}\" {}", python_exe, args);
     let mut cmdline_w: Vec<u16> = cmdline.encode_utf16().chain(std::iter::once(0)).collect();

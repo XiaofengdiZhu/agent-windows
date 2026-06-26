@@ -250,7 +250,7 @@ fn run_call(method: &str, params: &serde_json::Value, global: &GlobalFlags) -> E
     // can never reach here. This function always goes through the daemon.
     let python = resolve_python_exe();
 
-    if let Err(e) = daemon::ensure_daemon_running(&python, global.debug) {
+    if let Err(e) = daemon::ensure_daemon_running(&python, global.debug, global.config.as_deref()) {
         report_error(&e, "daemon", global);
         return ExitCode::from(1);
     }
@@ -294,7 +294,7 @@ fn run_wait(spec: WaitSpec, global: &GlobalFlags) -> ExitCode {
     // NOTE: --no-daemon is intercepted in main() before parse() runs, so it
     // can never reach here. This function always goes through the daemon.
     let python = resolve_python_exe();
-    if let Err(e) = daemon::ensure_daemon_running(&python, global.debug) {
+    if let Err(e) = daemon::ensure_daemon_running(&python, global.debug, global.config.as_deref()) {
         report_error(&e, "daemon", global);
         return ExitCode::from(1);
     }
@@ -396,7 +396,7 @@ fn run_wait_for(spec: WaitForSpec, global: &GlobalFlags) -> ExitCode {
     // NOTE: --no-daemon is intercepted in main() before parse() runs, so it
     // can never reach here. This function always goes through the daemon.
     let python = resolve_python_exe();
-    if let Err(e) = daemon::ensure_daemon_running(&python, global.debug) {
+    if let Err(e) = daemon::ensure_daemon_running(&python, global.debug, global.config.as_deref()) {
         report_error(&e, "daemon", global);
         return ExitCode::from(1);
     }
@@ -572,7 +572,7 @@ fn run_local(local: LocalAction, global: &GlobalFlags) -> ExitCode {
     match local {
         LocalAction::DaemonStart => {
             let python = resolve_python_exe();
-            match daemon_spawn_and_wait(&python, global.debug) {
+            match daemon_spawn_and_wait(&python, global.debug, global.config.as_deref()) {
                 Ok(msg) => {
                     output::print_text(&msg);
                     ExitCode::SUCCESS
@@ -642,11 +642,15 @@ fn run_local(local: LocalAction, global: &GlobalFlags) -> ExitCode {
 /// interval) with the real traceback instead of hanging 5s on the generic
 /// "did not become ready" message. The earlier asymmetry (#9 was only applied
 /// to the cold-start path) is closed here.
-fn daemon_spawn_and_wait(python: &str, debug: bool) -> Result<String, String> {
+fn daemon_spawn_and_wait(
+    python: &str,
+    debug: bool,
+    config: Option<&str>,
+) -> Result<String, String> {
     if ipc::daemon_pipe_exists() {
         return Ok("Daemon already running".into());
     }
-    match daemon::spawn_and_wait_for_pipe(python, debug) {
+    match daemon::spawn_and_wait_for_pipe(python, debug, config) {
         // pid == 0 is the in-lock early return: another spawner won the race
         // while we held the spawn lock. Surface the same "already running"
         // message as the top-of-function fast path — NOT "PID 0" (no process
