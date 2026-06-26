@@ -31,8 +31,13 @@ def daemon_start() -> None:
             typer.echo(f"Daemon already running (PID={info[0]})")
             return
 
-        # Start daemon subprocess
+        # Start daemon subprocess. Propagate --config if an override is active
+        # in this process so the daemon reads the same file (TODO #21-1).
+        # Mirrors ipc.client._start_daemon_process.
         cmd = [sys.executable, "-m", "agent_windows", "--daemon"]
+        from agent_windows.utils.config import get_config_override
+        if (override := get_config_override()) is not None:
+            cmd += ["--config", str(override)]
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,

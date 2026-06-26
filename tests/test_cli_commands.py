@@ -662,6 +662,27 @@ class TestDaemonCommand:
         mock_popen.assert_called_once()
 
     @patch("agent_windows.ipc.pipe.pipe_exists", return_value=False)
+    @patch("subprocess.Popen")
+    @patch("agent_windows.cli.commands.daemon_cmd.is_process_alive", return_value=False)
+    @patch("agent_windows.cli.commands.daemon_cmd.read_pid_file", return_value=None)
+    def test_start_propagates_config_override(self, mock_pid, mock_alive, mock_popen, mock_pipe, tmp_path):
+        # `daemon start --config X` must spawn the daemon with --config so it
+        # reads the same file (TODO #21-1, review fix: this Python spawn path
+        # previously omitted --config).
+        mock_popen.return_value = MagicMock(pid=1)
+        alt = tmp_path / "alt.toml"
+        alt.write_text('[shell]\ntimeout = 5\n', encoding="utf-8")
+        try:
+            result = runner.invoke(app, ["--config", str(alt), "daemon", "start"])
+            assert result.exit_code == 0, result.output
+            cmd = mock_popen.call_args.args[0]
+            assert "--config" in cmd
+            assert cmd[cmd.index("--config") + 1] == str(alt)
+        finally:
+            from agent_windows.utils import config as cfg
+            cfg.set_config_override(None)
+
+    @patch("agent_windows.ipc.pipe.pipe_exists", return_value=False)
     def test_stop_when_not_running(self, mock_pipe):
         result = runner.invoke(app, ["daemon", "stop"])
         assert result.exit_code == 0

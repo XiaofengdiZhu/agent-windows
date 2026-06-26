@@ -345,6 +345,22 @@ mod tests {
             "-m agent_windows --daemon --debug --config \"C:\\Program Files\\a.toml\""
         );
     }
+
+    #[test]
+    fn build_daemon_args_doubles_trailing_backslashes() {
+        // A path ending in a backslash (e.g. a tab-completed directory) must
+        // have its trailing backslashes doubled, else CommandLineToArgvW reads
+        // the closing `\"` as an escaped quote and never terminates the arg.
+        assert_eq!(
+            build_daemon_args(false, Some("C:\\configs\\")),
+            "-m agent_windows --daemon --config \"C:\\configs\\\\\""
+        );
+        // Two trailing backslashes -> four.
+        assert_eq!(
+            build_daemon_args(false, Some("C:\\a\\b\\\\")),
+            "-m agent_windows --daemon --config \"C:\\a\\b\\\\\\\\\""
+        );
+    }
 }
 
 /// `WaitNamedPipeW`: true if the pipe is available within the timeout.
@@ -435,14 +451,24 @@ fn filetime_to_u64(ft: &FILETIME) -> u64 {
 /// quoted interpreter path. The config path is double-quoted (Windows paths may
 /// contain spaces, e.g. `C:\Program Files\...`); embedded double-quotes are
 /// stripped as a defensive simplification (a legit path containing `"` is
-/// pathological). (TODO #21-1)
+/// pathological). A trailing run of backslashes is doubled so CreateProcessW's
+/// CommandLineToArgvW doesn't read the final `\"` as an escaped quote (which
+/// would swallow the closing quote and mangle the argument). (TODO #21-1)
 pub fn build_daemon_args(debug: bool, config: Option<&str>) -> String {
     let mut args = String::from("-m agent_windows --daemon");
     if debug {
         args.push_str(" --debug");
     }
     if let Some(c) = config {
-        args.push_str(&format!(" --config \"{}\"", c.replace('"', "")));
+        // Strip embedded quotes (pathological), then double trailing
+        // backslashes so they survive the closing quote (MSDN argv rules).
+        let cleaned = c.replace('"', "");
+        let trailing_bs = cleaned.chars().rev().take_while(|&ch| ch == '\\').count();
+        let mut value = cleaned;
+        if trailing_bs > 0 {
+            value.push_str(&"\\".repeat(trailing_bs));
+        }
+        args.push_str(&format!(" --config \"{}\"", value));
     }
     args
 }
