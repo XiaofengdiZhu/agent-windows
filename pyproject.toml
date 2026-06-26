@@ -66,7 +66,7 @@ gemini = ["google-generativeai>=0.7"]
 diff = ["numpy>=1.26"]
 # MCP server: exposes every command as MCP tools via FastMCP (see docs/MCP-support.md)
 mcp = ["fastmcp>=3.0"]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=9.0.3"]
 
 [project.scripts]
 # The native Rust launcher ships as a prebuilt `agent-windows.exe` (see

@@ -325,12 +325,21 @@ def drag(x1: int, y1: int, x2: int, y2: int, right: bool = False,
 
 
 def _send_unicode_char(char: str) -> None:
-    """Send a single Unicode character via SendInput."""
-    code = ord(char)
-    _send_input(
-        _key_input(0, code, KEY_UNICODE | KEY_DOWN),
-        _key_input(0, code, KEY_UNICODE | KEY_UP),
-    )
+    """Send a single Unicode character via SendInput.
+
+    Win32 KEY_UNICODE takes a UTF-16 *code unit* in wScan, so a character
+    above U+FFFF (emoji, CJK Ext-B, …) must be sent as a high+low surrogate
+    pair — two KEY_UNICODE events per such character. Splitting the character
+    into UTF-16 code units handles both the BMP (1 unit) and supplementary
+    (2 units) planes uniformly.
+    """
+    encoded = char.encode("utf-16-le")
+    inputs = []
+    for i in range(0, len(encoded), 2):
+        code = int.from_bytes(encoded[i:i + 2], "little")
+        inputs.append(_key_input(0, code, KEY_UNICODE | KEY_DOWN))
+        inputs.append(_key_input(0, code, KEY_UNICODE | KEY_UP))
+    _send_input(*inputs)
 
 
 # Extended keys require KEY_EXTENDED flag for correct input.

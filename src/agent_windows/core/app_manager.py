@@ -239,7 +239,7 @@ def _find_window_by_title(title: str) -> int:
 
 def _find_window_by_process(name: str) -> int:
     """Find a window handle by process name match."""
-    target = name.lower().replace(".exe", "") + ".exe"
+    target = name.lower().removesuffix(".exe") + ".exe"
     result = ctypes.c_void_p(0)
 
     def _cb(hwnd, _):

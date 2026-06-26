@@ -265,7 +265,7 @@ pub struct GlobalFlags {
     /// `--config <path>` in the global-flag prefix: an alternate config.toml.
     /// None when absent (use the default ~/.agent-windows/config.toml). When
     /// set, the launcher appends `--config <path>` when spawning the daemon so
-    /// the daemon reads the same file (TODO #21-1).
+    /// the daemon reads the same file.
     pub config: Option<String>,
     /// `--no-daemon` appeared AFTER the command name (tail position). The
     /// launcher only honors --no-daemon in the prefix (where it triggers

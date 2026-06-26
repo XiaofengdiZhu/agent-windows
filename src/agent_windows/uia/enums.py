@@ -2076,7 +2076,7 @@ class UIAError(IntEnum):
     RPC_E_CONNECTION_TERMINATED = -2147418106  # 0x80010006 — connection terminated or in bogus state
     RPC_E_SERVER_DIED = -2147418105  # 0x80010007 — server gone, call may have executed
     RPC_E_SERVER_DIED_DNE = -2147418094  # 0x80010012 — server gone, call did NOT execute
-    RPC_E_SYS_CALL_FAILED = -2147417854  # 0x80010100 — underlying system call failed
+    RPC_E_SYS_CALL_FAILED = -2147417856  # 0x80010100 — underlying system call failed
     RPC_E_OUT_OF_RESOURCES = -2147417855  # 0x80010101 — could not allocate required resource
     RPC_E_ATTEMPTED_MULTITHREAD = -2147417854  # 0x80010102 — multiple threads in STA mode
     RPC_E_SERVERFAULT = -2147417851  # 0x80010105 — server threw an exception

@@ -494,8 +494,16 @@ def _encrypt_for_write(config: dict) -> dict:
 
 
 def _serialize(config: dict, path: Path) -> None:
-    """Write *config* to *path* as TOML, encrypting secrets first."""
-    path.write_text(toml.dumps(_encrypt_for_write(config)), encoding="utf-8")
+    """Write *config* to *path* as TOML, encrypting secrets first.
+
+    Atomic: writes to a sibling temp file then ``os.replace``s it into
+    place, so a crash mid-write can't truncate the existing config (which
+    also holds the DPAPI-encrypted api_key).
+    """
+    data = toml.dumps(_encrypt_for_write(config))
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(data, encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def write_config(config: dict, path: Path) -> None:

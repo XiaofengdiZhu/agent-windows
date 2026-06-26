@@ -362,7 +362,9 @@ def pipe_exists(pipe_name: str = PIPE_NAME) -> bool:
     import ctypes
 
     try:
-        # WaitNamedPipe returns True if the pipe is available (even with timeout=0)
+        # 100ms timeout — WaitNamedPipe returns True if the pipe exists/opens
+        # within the window, False (timeout) if not. (Non-zero to avoid a busy
+        # spin when the daemon is mid-startup.)
         return ctypes.windll.kernel32.WaitNamedPipeW(pipe_name, 100) != 0
     except Exception:
         return False

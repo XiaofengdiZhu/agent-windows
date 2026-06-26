@@ -4,7 +4,9 @@ Handles:
 - Auto-starting daemon if not running
 - Retrying connection during daemon startup
 - Sending JSON-RPC requests and reading responses
-- Version mismatch detection (auto-restart daemon)
+
+Note: version-mismatch detection / auto-restart lives in the daemon server
+(``daemon/server.py`` / ``daemon/lifecycle.py``), not here.
 """
 
 import logging
