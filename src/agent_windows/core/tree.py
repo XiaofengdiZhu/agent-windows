@@ -94,6 +94,16 @@ INTERACTIVE_TYPES = {
     "TextBoxControl", "SliderControl", "SpinnerControl", "ScrollBarControl",
     "DocumentControl",
 }
+# Structural container types — pure layout/grouping nodes (no action of their
+# own). Used by _traverse_node's empty-container pruning (TODO #6): a structural
+# node with NO useful descendants AND no name is dropped from the rendered tree
+# (it carries zero information for the agent). A named one is kept (it may label
+# a region even when empty). Mirrors the reference's
+# STRUCTURAL_CONTROL_TYPE_NAMES (tree/config.py:60). (TODO #6)
+_STRUCTURAL_TYPES = {
+    "PaneControl", "GroupControl", "CustomControl",
+    "ToolBarControl", "TabControl", "MenuBarControl",
+}
 
 # ── Data models ───────────────────────────────────────────────────
 
@@ -812,16 +822,26 @@ def _traverse_node(
     global_deadline: float,
     cache_request,
     in_modal_subtree: bool = False,
-) -> None:
-    """Recursively traverse a UIA node."""
+) -> bool:
+    """Recursively traverse a UIA node.
+
+    Returns ``produced_useful`` — whether this subtree rendered any line the
+    agent can act on (an interactive element, a named non-structural leaf, or a
+    descendant that did). Structural containers use it for empty-subtree
+    pruning (TODO #6): a structural node whose whole subtree produced nothing
+    useful AND which has no name is dropped from ``tree_lines`` (pure layout
+    noise), while a named one is kept. Interactive elements are ALWAYS collected
+    into ``interactive`` regardless of the prune decision, so ``@eN`` refs stay
+    stable and resolve_element is unaffected.
+    """
     if depth >= max_depth:
-        return
+        return False
     if time.time() - start_time > timeout:
-        return
+        return False
     if time.time() > global_deadline:
-        return
+        return False
     if max_elements > 0 and len(interactive) >= max_elements:
-        return
+        return False
 
     try:
         # Read the per-node properties from the element's cache (M-25) — each is
@@ -876,9 +896,9 @@ def _traverse_node(
 
         # Filter
         if bbox and bbox.area == 0 and not include_invisible:
-            return
+            return False
         if is_offscreen and not include_offscreen:
-            return
+            return False
 
         # Determine if interactive
         is_interactive = control_type in INTERACTIVE_TYPES and is_enabled
@@ -923,11 +943,61 @@ def _traverse_node(
                 logger.debug("Failed to get cached node property", exc_info=True)
         this_in_modal = in_modal_subtree or is_modal_window
 
-        # Build tree line
+        # Add to interactive elements list. Done for depth>0 nodes only (the
+        # window root at depth 0 is never an element) and UNCONDITIONALLY w.r.t.
+        # tree-line pruning — so the interactive list and @eN refs are
+        # independent of whether the node's TREE LINE is emitted: a pruned-away
+        # empty container still contributes its interactive children, and an
+        # element promoted to interactive by metadata (scrollable/expandable) is
+        # kept even if its structural parent is later dropped. (TODO #6)
+        if depth > 0 and is_interactive:
+            interactive.append(ElementInfo(
+                name=name,
+                control_type=control_type,
+                bbox=bbox,
+                is_interactive=True,
+                is_focused=is_focused,
+                is_enabled=is_enabled,
+                is_offscreen=is_offscreen,
+                is_modal=this_in_modal,
+                window_name=window.title,
+                metadata=metadata,
+            ))
+
+        # Recurse into children FIRST, collecting their lines into a local list
+        # (not straight into tree_lines). We need to know whether the subtree
+        # produced anything useful before deciding whether to emit THIS node's
+        # own line — that's the basis for empty-container pruning (TODO #6).
+        # PERF3-05: fetch all children pre-cached in one COM round-trip
+        # (``BuildUpdatedCache`` + ``GetCachedChildren``) instead of one
+        # ``GetNextSiblingElementBuildCache`` call per child.
+        child_lines: list[str] = []
+        any_child_useful = False
+        try:
+            for child in _get_cached_children(node, cache_request):
+                child_useful = _traverse_node(
+                    client, child, child_lines, interactive,
+                    window, max_depth, include_invisible, include_offscreen,
+                    indent, depth + 1, start_time, timeout,
+                    max_elements, global_deadline, cache_request,
+                    in_modal_subtree=this_in_modal,
+                )
+                if child_useful:
+                    any_child_useful = True
+                if max_elements > 0 and len(interactive) >= max_elements:
+                    break
+        except Exception as e:
+            # Backstop: _get_cached_children and _traverse_node swallow their own
+            # errors, so this only fires on something escaping both (e.g. a
+            # comtypes marshalling fault mid-iteration). Keeps a single bad node
+            # from aborting the whole subtree's siblings.
+            logger.debug("Error iterating children at depth %d: %s", depth, e)
+
+        # Build this node's own line (depth 0 = window root, no own line).
         prefix = " " * indent + "├─ " if depth > 0 else " " * indent
-        if depth == 0:
-            pass  # Window line already added
-        else:
+        own_line = None
+        is_self_useful = False
+        if depth > 0:
             type_label = control_type.replace("Control", "") if control_type else "?"
             name_label = f' "{name}"' if name else ""
             meta_parts = []
@@ -941,46 +1011,39 @@ def _traverse_node(
                 meta_parts.append("interactive")
             meta_str = " ".join(f"[{m}]" for m in meta_parts)
             bbox_str = f" {bbox}" if bbox else ""
-            tree_lines.append(f"{prefix}{type_label}{name_label}{bbox_str} {meta_str}".rstrip())
+            own_line = f"{prefix}{type_label}{name_label}{bbox_str} {meta_str}".rstrip()
+            # A node's own line is "useful" to the agent if it's actionable
+            # (interactive) or carries a name (a labeled leaf/label has info
+            # value; a structural container's usefulness also hinges on name —
+            # see the prune rule below).
+            is_self_useful = bool(is_interactive) or bool(name)
 
-            # Add to interactive elements list
-            if is_interactive:
-                interactive.append(ElementInfo(
-                    name=name,
-                    control_type=control_type,
-                    bbox=bbox,
-                    is_interactive=True,
-                    is_focused=is_focused,
-                    is_enabled=is_enabled,
-                    is_offscreen=is_offscreen,
-                    is_modal=this_in_modal,
-                    window_name=window.title,
-                    metadata=metadata,
-                ))
+        # Empty-container pruning (TODO #6). A structural container (Pane/Group/
+        # Custom/ToolBar/Tab/MenuBar) whose whole subtree produced nothing useful
+        # AND which has no name is dropped — it's pure layout noise. A named one
+        # is kept (it may label a region even when empty). Interactive elements
+        # were already collected above, so dropping the line never loses an
+        # @eN ref. The ``not is_interactive`` guard is key: a structural node
+        # PROMOTED to interactive by metadata (scrollable/expandable) is always
+        # shown even when childless — otherwise the tree would hide an actionable
+        # target that the Interactive Elements table still references via @eN.
+        # Non-structural nodes are always emitted (they have a reason: interactive
+        # or named).
+        emit_own_line = True
+        if (depth > 0 and control_type in _STRUCTURAL_TYPES
+                and not any_child_useful and not name and not is_interactive):
+            emit_own_line = False
 
-        # Recurse into children. PERF3-05: fetch all children pre-cached in one
-        # COM round-trip (``BuildUpdatedCache`` + ``GetCachedChildren``) instead
-        # of one ``GetNextSiblingElementBuildCache`` call per child.
-        try:
-            for child in _get_cached_children(node, cache_request):
-                _traverse_node(
-                    client, child, tree_lines, interactive,
-                    window, max_depth, include_invisible, include_offscreen,
-                    indent, depth + 1, start_time, timeout,
-                    max_elements, global_deadline, cache_request,
-                    in_modal_subtree=this_in_modal,
-                )
-                if max_elements > 0 and len(interactive) >= max_elements:
-                    break
-        except Exception as e:
-            # Backstop: _get_cached_children and _traverse_node swallow their own
-            # errors, so this only fires on something escaping both (e.g. a
-            # comtypes marshalling fault mid-iteration). Keeps a single bad node
-            # from aborting the whole subtree's siblings.
-            logger.debug("Error iterating children at depth %d: %s", depth, e)
+        if emit_own_line and own_line is not None:
+            tree_lines.append(own_line)
+        tree_lines.extend(child_lines)
+
+        produced_useful = any_child_useful or is_self_useful or (depth == 0)
+        return produced_useful
 
     except Exception as e:
         logger.debug("Error traversing node at depth %d: %s", depth, e)
+        return False
 
 
 # ── Rich metadata collection (TODO #15) ────────────────────────────

@@ -61,6 +61,8 @@ Desktop
 - Bounding box in `(left, top, right, bottom)` format
 - State flags: `[focused]`, `[disabled]`, `[interactive]`
 
+Empty structural containers (unnamed `Pane`/`Group`/`ToolBar`/`Tab`/`MenuBar`/`Custom` with no useful descendants) are pruned to reduce noise — only containers that group an interactive element or carry a name appear. This affects only the tree text, not the Interactive Elements table (`@eN` refs are unaffected).
+
 **Interactive Elements Table**: The primary targeting reference. Each row has:
 - `@eN` ref for addressing
 - Control type

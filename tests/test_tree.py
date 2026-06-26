@@ -1555,4 +1555,181 @@ class TestActionColumnRender:
         assert "scroll_pct:v:42%" in row
 
 
+# ── empty-container pruning (TODO #6) ──────────────────────────────
+
+# Structural control types not predefined as shorthand constants above.
+GROUP = getattr(ControlType, "GroupControl")
+TOOLBAR = getattr(ControlType, "ToolBarControl")
+TAB = getattr(ControlType, "TabControl")
+
+
+class TestEmptyContainerPruning:
+    """_traverse_node prunes unnamed structural containers whose whole subtree
+    produced nothing useful (no interactive element, no named leaf) — they're
+    pure layout noise. Named containers are kept. Interactive collection is
+    independent of the prune decision so @eN refs stay stable."""
+
+    def test_unnamed_empty_pane_pruned_from_tree(self):
+        """A nameless Pane with no useful descendants is dropped — it carries
+        zero information for the agent."""
+        root = FakeElement(control_type=PANE, children=[
+            FakeElement(control_type=PANE),  # unnamed, empty → pruned
+            FakeElement(name="OK", control_type=BUTTON),
+        ])
+        _link_siblings(root.children)
+        lines, _ = traverse(FakeClient(root), root)
+        joined = "\n".join(lines)
+        # The empty Pane leaves no line; the button still renders.
+        assert 'Button "OK"' in joined
+        # Exactly one Pane line remains — the unnamed empty one is gone. (The
+        # root Pane is depth 0 and never emits its own line, so the only Pane
+        # line that COULD appear is the pruned child — assert it doesn't.) Match
+        # by substring: the line is prefixed with a tree connector ("├─ Pane …").
+        pane_lines = [ln for ln in lines if "Pane" in ln]
+        assert pane_lines == []
+
+    def test_named_empty_pane_kept(self):
+        """A Pane WITH a name is kept even when empty — it may label a region
+        (matches the reference's 'promote named structural containers' rule)."""
+        root = FakeElement(control_type=PANE, children=[
+            FakeElement(name="Content region", control_type=PANE),  # named, empty → kept
+        ])
+        _link_siblings(root.children)
+        lines, _ = traverse(FakeClient(root), root)
+        joined = "\n".join(lines)
+        assert 'Pane "Content region"' in joined
+
+    def test_pane_with_interactive_child_kept(self):
+        """A Pane whose subtree has an interactive element is kept (it groups
+        that element) — pruning never loses useful descendants."""
+        root = FakeElement(control_type=PANE, children=[
+            FakeElement(control_type=PANE, children=[  # unnamed but has interactive child → kept
+                FakeElement(name="Submit", control_type=BUTTON),
+            ]),
+        ])
+        _link_siblings_and_grandchildren(root)
+        lines, interactive = traverse(FakeClient(root), root)
+        joined = "\n".join(lines)
+        # Both the inner Pane (grouping) and its button render.
+        assert "Pane" in joined
+        assert 'Button "Submit"' in joined
+        # And the button is still collected (prune didn't touch interactive list).
+        assert [e.name for e in interactive] == ["Submit"]
+
+    def test_nested_empty_containers_all_pruned(self):
+        """Empty containers nested inside empty containers collapse entirely —
+        pruning is recursive bottom-up (mirrors reference _prune_structural)."""
+        root = FakeElement(control_type=PANE, children=[
+            FakeElement(control_type=PANE, children=[  # unnamed, only has empty child → pruned
+                FakeElement(control_type=GROUP),  # unnamed, empty → pruned
+            ]),
+        ])
+        _link_siblings_and_grandchildren(root)
+        lines, _ = traverse(FakeClient(root), root)
+        # No Pane or Group lines survive — the whole empty chain is gone. Match
+        # by substring: lines are prefixed with a tree connector ("├─ Pane …").
+        structural_lines = [ln for ln in lines
+                            if "Pane" in ln or "Group" in ln]
+        assert structural_lines == []
+
+    def test_all_structural_types_pruned_when_unnamed_empty(self):
+        """Every type in _STRUCTURAL_TYPES is pruned the same way when unnamed
+        and empty — not just Pane."""
+        from agent_windows.core.tree import _STRUCTURAL_TYPES
+        # Build a control-type id for each structural name via getattr.
+        ct_ids = {getattr(ControlType, ct): ct for ct in _STRUCTURAL_TYPES}
+        for ct_id, ct_name in ct_ids.items():
+            root = FakeElement(control_type=PANE, children=[
+                FakeElement(control_type=ct_id),  # unnamed, empty structural
+            ])
+            _link_siblings(root.children)
+            lines, _ = traverse(FakeClient(root), root)
+            label = ct_name.replace("Control", "")
+            # Match by substring: the line is prefixed with a tree connector
+            # ("├─ Pane …"), so startswith would miss it.
+            struct_lines = [ln for ln in lines if label in ln]
+            assert struct_lines == [], f"{ct_name} should be pruned when unnamed+empty"
+
+    def test_interactive_collected_even_when_parent_line_pruned(self):
+        """Interactive collection is independent of tree-line pruning: a truly
+        pruned container (unnamed empty) contributes nothing to `interactive`,
+        and any interactive element under a KEPT container is collected. Uses a
+        container kept only because it has an interactive descendant — the
+        invariant the prune logic relies on (a subtree with an interactive
+        element is, by construction, useful and unpruned)."""
+        root = FakeElement(control_type=PANE, children=[
+            FakeElement(control_type=GROUP, children=[
+                FakeElement(name="OK", control_type=BUTTON),
+            ]),
+        ])
+        _link_siblings_and_grandchildren(root)
+        _, interactive = traverse(FakeClient(root), root)
+        assert [e.name for e in interactive] == ["OK"]
+
+    def test_promoted_scrollable_childless_pane_line_kept(self):
+        """A structural Pane PROMOTED to interactive by metadata (scrollable)
+        is kept even when childless and nameless — otherwise the tree would hide
+        an actionable target the Interactive Elements table still references via
+        @eN. This is the ``not is_interactive`` guard on the prune rule (review
+        finding E)."""
+        root = FakeElement(control_type=PANE, children=[
+            FakeElement(control_type=PANE, extra_props={  # nameless, no children
+                PropertyId.ScrollVerticallyScrollableProperty: True,
+                PropertyId.ScrollHorizontallyScrollableProperty: False,
+                PropertyId.ScrollVerticalScrollPercentProperty: 0.0,
+            }),
+        ])
+        _link_siblings(root.children)
+        lines, interactive = traverse(FakeClient(root), root)
+        joined = "\n".join(lines)
+        # The childless scrollable Pane is BOTH in the tree (a line survives)...
+        pane_lines = [ln for ln in lines if "Pane" in ln]
+        assert len(pane_lines) == 1, f"expected scrollable pane line kept, got {pane_lines}"
+        assert "[interactive]" in pane_lines[0]
+        # ...AND in the interactive list (collected regardless of prune).
+        assert len(interactive) == 1
+        assert interactive[0].metadata.get("scrollable") == "v"
+
+    def test_non_structural_node_with_name_always_emitted(self):
+        """A non-structural node (e.g. Text) is never pruned — it's emitted
+        whenever it has a name, even with no descendants."""
+        root = FakeElement(control_type=PANE, children=[
+            FakeElement(name="Hello world", control_type=TEXT),
+        ])
+        _link_siblings(root.children)
+        lines, _ = traverse(FakeClient(root), root)
+        joined = "\n".join(lines)
+        assert 'Text "Hello world"' in joined
+
+    def test_traverse_node_returns_useful_bool(self):
+        """_traverse_node returns True when the subtree produced useful content,
+        False when it was pruned to nothing — the signal parents prune on."""
+        win = WindowInfo(title="W", process_name="p", handle=1,
+                         bbox=BoundingBox(0, 0, 10, 10))
+        client = FakeClient(FakeElement(control_type=PANE))
+        cache_request = tree._build_traversal_cache(client)
+        # Subtree with an interactive button → useful.
+        useful_node = FakeElement(control_type=GROUP, children=[
+            FakeElement(name="Go", control_type=BUTTON)])
+        _link_siblings(useful_node.children)
+        assert tree._traverse_node(client, useful_node, [], [], win,
+                                   15, False, False, 4, 1, time.time(), 10.0,
+                                   0, float("inf"), cache_request) is True
+        # Empty unnamed structural → not useful.
+        empty_node = FakeElement(control_type=GROUP)
+        assert tree._traverse_node(client, empty_node, [], [], win,
+                                   15, False, False, 4, 1, time.time(), 10.0,
+                                   0, float("inf"), cache_request) is False
+
+
+def _link_siblings_and_grandchildren(root):
+    """Link children of the root AND children of each root child (two levels),
+    for nesting tests. _link_siblings only does one level."""
+    _link_siblings(root.children)
+    for child in root.children:
+        if child.children:
+            _link_siblings(child.children)
+
+
+
 
