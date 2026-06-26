@@ -32,6 +32,8 @@ When no flags are given, defaults to `--snapshot --screenshot`.
 
 **Output**: Desktop State (cursor, resolution, active window), Windows table, Accessibility Tree, Interactive Elements table.
 
+> **Windows table** (`# | Title | App | Status | Position`): the `Status` column reports the window's placement — `Maximized`, `Minimized`, or `Normal` — and appends `(active)` for the foreground window (e.g. `Normal (active)`). A `Minimized` window's `Position` is its icon rectangle, not a usable client area, so don't click into it from those coordinates — restore/switch to it first. The `App` cell appends `(browser)` when the process is a known web browser (chrome/msedge/firefox), signalling that the window renders a web page — prefer keyboard shortcuts or `@eN` tree refs over coordinate guesses on its content.
+
 ### snapshot
 
 UIA accessibility tree traversal. Returns the full structured text view.

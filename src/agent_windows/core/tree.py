@@ -159,9 +159,46 @@ class WindowInfo:
     # Win32 window class name (e.g. "Progman" for the desktop). Used to skip
     # traversing low-value subtrees without relying on the locale-dependent title.
     class_name: str = ""
+    # Window placement state: "Maximized", "Minimized", or "Normal". Computed in
+    # enumerate_windows via IsIconic/IsZoomed. (Invisible windows are filtered
+    # before appending, so a fourth "Hidden" state never reaches here.) Useful to
+    # the agent because a minimized window's bbox is an icon rect, not a usable
+    # click target — surfacing this avoids clicking into empty space (TODO #2).
+    status: str = "Normal"
+    # True when the owning process is a known web browser (chrome/msedge/firefox).
+    # Hint for the agent: browser windows need keyboard shortcuts / @eN refs from
+    # the tree rather than coordinate guesses on the rendered page area. Derived
+    # from process_name (already fetched) at zero extra cost (TODO #2).
+    is_browser: bool = False
 
 
 # ── Window enumeration ────────────────────────────────────────────
+
+# Process image names (lowercased, with .exe) of known web browsers. Used to flag
+# WindowInfo.is_browser — a hint that the window is a browser, so the agent prefers
+# keyboard shortcuts / tree refs over coordinate guesses on page content. Matches
+# the reference's Browser enum (chrome/msedge/firefox).
+_BROWSER_PROCESS_NAMES = frozenset({"chrome.exe", "msedge.exe", "firefox.exe"})
+
+
+def _window_status_from_placement(is_iconic: bool, is_zoomed: bool) -> str:
+    """Map Win32 placement flags to a status string. Extracted from
+    enumerate_windows so the logic is unit-testable without driving the real
+    EnumWindows callback (which needs live ctypes structs). ``is_iconic`` wins
+    over ``is_zoomed`` to match the reference's if/elif order — in practice the
+    flags are mutually exclusive (TODO #2)."""
+    if is_iconic:
+        return "Minimized"
+    if is_zoomed:
+        return "Maximized"
+    return "Normal"
+
+
+def _is_browser_process(process_name: str) -> bool:
+    """True if ``process_name`` is a known browser image (case-insensitive).
+    ``process_name`` comes from QueryFullProcessImageNameW's basename, so it
+    includes the ``.exe`` suffix (TODO #2)."""
+    return process_name.lower() in _BROWSER_PROCESS_NAMES
 
 
 def enumerate_windows() -> list[WindowInfo]:
@@ -169,7 +206,8 @@ def enumerate_windows() -> list[WindowInfo]:
     import ctypes
     import ctypes.wintypes
 
-    foreground = ctypes.windll.user32.GetForegroundWindow()
+    user32 = ctypes.windll.user32
+    foreground = user32.GetForegroundWindow()
     windows: list[WindowInfo] = []
 
     # Callback for EnumWindows
@@ -181,25 +219,25 @@ def enumerate_windows() -> list[WindowInfo]:
 
     def _enum_cb(hwnd, _lparam):
         # Skip invisible windows
-        if not ctypes.windll.user32.IsWindowVisible(hwnd):
+        if not user32.IsWindowVisible(hwnd):
             return True
 
         # Get window title
-        length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
+        length = user32.GetWindowTextLengthW(hwnd)
         if length == 0:
             return True
         buf = ctypes.create_unicode_buffer(length + 1)
-        ctypes.windll.user32.GetWindowTextW(hwnd, buf, length + 1)
+        user32.GetWindowTextW(hwnd, buf, length + 1)
         title = buf.value
 
         # Get process name
         pid = ctypes.wintypes.DWORD()
-        ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
         process_name = get_process_name(pid.value)
 
         # Get window rect
         rect = ctypes.wintypes.RECT()
-        ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        user32.GetWindowRect(hwnd, ctypes.byref(rect))
         bbox = BoundingBox(rect.left, rect.top, rect.right, rect.bottom)
 
         # Skip zero-size windows
@@ -210,8 +248,17 @@ def enumerate_windows() -> list[WindowInfo]:
         # Used to skip low-value subtrees; cheaper to fetch here once than to read
         # via UIA ClassNameProperty per-element during traversal.
         cls_buf = ctypes.create_unicode_buffer(257)
-        cls_len = ctypes.windll.user32.GetClassNameW(hwnd, cls_buf, 257)
+        cls_len = user32.GetClassNameW(hwnd, cls_buf, 257)
         class_name = cls_buf.value if cls_len else ""
+
+        # Window placement. IsIconic == minimized (still "visible" to
+        # IsWindowVisible, but shown as an icon — its bbox is the icon rect, not a
+        # usable client area). IsZoomed == maximized. Otherwise normal. Done with
+        # the same user32 handle already in scope; two cheap bool calls per window.
+        # Logic lives in _window_status_from_placement so it's unit-testable sans
+        # ctypes (TODO #2).
+        status = _window_status_from_placement(
+            bool(user32.IsIconic(hwnd)), bool(user32.IsZoomed(hwnd)))
 
         windows.append(WindowInfo(
             title=title,
@@ -220,10 +267,12 @@ def enumerate_windows() -> list[WindowInfo]:
             bbox=bbox,
             is_active=(hwnd == foreground),
             class_name=class_name,
+            status=status,
+            is_browser=_is_browser_process(process_name),
         ))
         return True
 
-    ctypes.windll.user32.EnumWindows(WNDENUMPROC(_enum_cb), 0)
+    user32.EnumWindows(WNDENUMPROC(_enum_cb), 0)
     return windows
 
 
@@ -1167,9 +1216,23 @@ def render_snapshot(data: dict[str, Any]) -> str:
         parts.append("| # | Title | App | Status | Position |")
         parts.append("|---|-------|-----|--------|----------|")
         for i, w in enumerate(windows, 1):
-            status = "active" if w.is_active else ""
+            # Status reflects placement (Maximized/Minimized/Normal). is_active is
+            # orthogonal (the foreground window can be any of the three), so append
+            # "(active)" rather than overwriting — keeps both signals. A minimized
+            # window's bbox is an icon rect; the agent should treat it as not a
+            # usable click target (TODO #2).
+            status = w.status
+            if w.is_active:
+                status = f"{status} (active)"
+            # Surface is_browser as a marker on the App cell so the hint actually
+            # reaches the agent (otherwise the field is dead data). Tells it this
+            # window renders a web page — prefer keyboard shortcuts / tree refs
+            # over coordinate guesses on page content (TODO #2).
+            app = w.process_name
+            if w.is_browser:
+                app = f"{app} (browser)"
             pos = str(w.bbox) if w.bbox else "N/A"
-            parts.append(f"| {i} | {w.title[:40]} | {w.process_name} | {status} | {pos} |")
+            parts.append(f"| {i} | {w.title[:40]} | {app} | {status} | {pos} |")
         parts.append("")
 
     # Semantic tree. NOTE: the tree text is NOT display-filtered (TODO #9-B) —

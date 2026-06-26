@@ -306,6 +306,81 @@ class TestElementWindowName:
         assert "| Window |" in rendered
 
 
+class TestWindowStatusRender:
+    """The Windows-table Status column now reports placement (Maximized/
+    Minimized/Normal) and folds in the active signal as '(active)' rather than
+    only ever showing 'active' (TODO #2)."""
+
+    def _render(self, windows):
+        return render_snapshot({
+            "cursor": (0, 0), "resolution": (1920, 1080), "displays": 1,
+            "active_window": None, "windows": windows, "semantic_tree": "",
+            "interactive_elements": [],
+        })
+
+    def test_minimized_window_shows_minimized_status(self):
+        win = WindowInfo(title="W", process_name="app", handle=1,
+                         bbox=BoundingBox(0, 0, 10, 10), status="Minimized")
+        rendered = self._render([win])
+        assert "| Minimized |" in rendered
+
+    def test_maximized_and_active_shows_active_suffix(self):
+        win = WindowInfo(title="W", process_name="app", handle=1,
+                         bbox=BoundingBox(0, 0, 10, 10),
+                         status="Maximized", is_active=True)
+        rendered = self._render([win])
+        assert "| Maximized (active) |" in rendered
+
+    def test_normal_inactive_shows_plain_normal(self):
+        win = WindowInfo(title="W", process_name="app", handle=1,
+                         bbox=BoundingBox(0, 0, 10, 10), status="Normal")
+        rendered = self._render([win])
+        assert "| Normal |" in rendered
+        assert "active" not in rendered  # not active → no suffix
+
+    def test_browser_window_marked_in_app_cell(self):
+        # is_browser is surfaced as a "(browser)" marker on the App cell so the
+        # hint reaches the agent rather than staying dead data (TODO #2).
+        win = WindowInfo(title="W", process_name="chrome.exe", handle=1,
+                         bbox=BoundingBox(0, 0, 10, 10), is_browser=True)
+        rendered = self._render([win])
+        assert "| chrome.exe (browser) |" in rendered
+
+
+class TestEnumerateWindowStatusFields:
+    """enumerate_windows computes status (IsIconic/IsZoomed) and is_browser
+    (process name match) per window (TODO #2). The logic is extracted into
+    _window_status_from_placement / _is_browser_process so it's testable without
+    driving the real EnumWindows callback (which needs live ctypes structs)."""
+
+    def test_iconic_is_minimized(self):
+        from agent_windows.core.tree import _window_status_from_placement as f
+        assert f(is_iconic=True, is_zoomed=False) == "Minimized"
+
+    def test_zoomed_is_maximized(self):
+        from agent_windows.core.tree import _window_status_from_placement as f
+        assert f(is_iconic=False, is_zoomed=True) == "Maximized"
+
+    def test_neither_is_normal(self):
+        from agent_windows.core.tree import _window_status_from_placement as f
+        assert f(is_iconic=False, is_zoomed=False) == "Normal"
+
+    def test_iconic_wins_over_zoomed(self):
+        # Matches reference if/elif order; flags are mutually exclusive in practice.
+        from agent_windows.core.tree import _window_status_from_placement as f
+        assert f(is_iconic=True, is_zoomed=True) == "Minimized"
+
+    def test_browser_detection_case_insensitive(self):
+        from agent_windows.core.tree import _is_browser_process
+        assert _is_browser_process("chrome.exe")
+        assert _is_browser_process("Chrome.exe")   # case-insensitive
+        assert _is_browser_process("MSEdge.exe")
+        assert _is_browser_process("firefox.exe")
+        assert not _is_browser_process("explorer.exe")
+        assert not _is_browser_process("notepad.exe")
+        assert not _is_browser_process("")
+
+
 # ── depth limit ──────────────────────────────────────────────────────
 
 
