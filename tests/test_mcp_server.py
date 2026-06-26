@@ -1605,3 +1605,38 @@ def test_mcp_uninstall_deletes_task_and_script(monkeypatch, tmp_path):
     assert any("/Delete" in " ".join(c) and "agent-windows-mcp" in " ".join(c) for c in calls)
     # the wrapper script was removed
     assert not script.exists()
+
+
+class TestCheckTlsFiles:
+    """_check_tls_files: HTTP 配置的 cert/key 缺失时 fail-fast。
+    stdio 场景传 None → no-op（不抛）。"""
+
+    def test_both_present_no_raise(self, tmp_path):
+        from agent_windows.cli.commands import mcp_cmd
+        cert = tmp_path / "c.pem"; cert.write_text("c", encoding="utf-8")
+        key = tmp_path / "k.pem"; key.write_text("k", encoding="utf-8")
+        # 不抛即通过
+        mcp_cmd._check_tls_files(str(cert), str(key))
+
+    def test_none_args_no_raise(self):
+        # stdio 场景：ssl_certfile/ssl_keyfile 为 None
+        from agent_windows.cli.commands import mcp_cmd
+        mcp_cmd._check_tls_files(None, None)
+
+    def test_missing_cert_raises(self, tmp_path):
+        import typer
+        from agent_windows.cli.commands import mcp_cmd
+        key = tmp_path / "k.pem"; key.write_text("k", encoding="utf-8")
+        missing = tmp_path / "nope-cert.pem"
+        with pytest.raises(typer.BadParameter) as exc_info:
+            mcp_cmd._check_tls_files(str(missing), str(key))
+        assert str(missing) in str(exc_info.value)
+
+    def test_missing_key_raises(self, tmp_path):
+        import typer
+        from agent_windows.cli.commands import mcp_cmd
+        cert = tmp_path / "c.pem"; cert.write_text("c", encoding="utf-8")
+        missing = tmp_path / "nope-key.pem"
+        with pytest.raises(typer.BadParameter) as exc_info:
+            mcp_cmd._check_tls_files(str(cert), str(missing))
+        assert str(missing) in str(exc_info.value)
