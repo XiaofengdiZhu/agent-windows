@@ -27,6 +27,8 @@ from _ctypes import COMError
 from io import TextIOWrapper
 from typing import Any, Callable, Dict, Generator, List, Tuple, Union
 
+from agent_windows.utils.debug import is_debug
+
 
 METRO_WINDOW_CLASS_NAME = "Windows.UI.Core.CoreWindow"  # for Windows 8 and 8.1
 SEARCH_INTERVAL = 0.5  # search control interval seconds
@@ -34,8 +36,8 @@ MAX_MOVE_SECOND = 1  # simulate mouse move or drag max seconds
 TIME_OUT_SECOND = 10
 OPERATION_WAIT_TIME = 0.5
 MAX_PATH = 260
-DEBUG_SEARCH_TIME = False
-DEBUG_EXIST_DISAPPEAR = False
+DEBUG_SEARCH_TIME = is_debug()
+DEBUG_EXIST_DISAPPEAR = is_debug()
 S_OK = 0
 
 IsPy38OrHigher = sys.version_info[:2] >= (3, 8)
