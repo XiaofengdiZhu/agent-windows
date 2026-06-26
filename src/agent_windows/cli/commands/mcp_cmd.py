@@ -392,10 +392,48 @@ def auth(
     from agent_windows.utils.config import get_config_path
     typer.echo(f"\nSaved to {get_config_path()}")
 
+    # Claude Desktop detection (TODO #21-4): print the REAL resolved config
+    # path (MSIX virtualized path first, standard %APPDATA%\Claude fallback)
+    # instead of making the user hunt for it. Does NOT auto-write the file —
+    # we only point at where it lives. The stdio snippet below also adapts to
+    # MSIX (absolute exe path, since the sandbox doesn't inherit PATH).
+    from agent_windows.utils.paths import (
+        get_claude_config_path, get_claude_data_dir, is_msix_install)
+    claude_cfg = get_claude_config_path()   # None = file not yet created
+    claude_dir = get_claude_data_dir()      # None = Claude Desktop not installed
+    msix = is_msix_install()
+    if claude_cfg is not None or claude_dir is not None:
+        shown = claude_cfg or (claude_dir / "claude_desktop_config.json")
+        typer.echo(f"\nDetected Claude Desktop config: {shown}")
+        if msix:
+            typer.echo("  (MSIX install — sandboxed; PATH is not inherited.)")
+    else:
+        appdata = os.environ.get("APPDATA")
+        typer.echo("\nClaude Desktop not detected.")
+        if appdata:
+            typer.echo(f"Standard config location: "
+                       f"{Path(appdata) / 'Claude' / 'claude_desktop_config.json'}")
+        else:
+            typer.echo("Set %APPDATA%\\Claude\\claude_desktop_config.json manually.")
+
     # Print the ready-to-paste MCP client config snippet.
     if transport == "stdio":
         typer.echo("\n─── Claude Desktop config (stdio) ───")
-        typer.echo("""\
+        if msix:
+            # MSIX sandbox doesn't inherit PATH → use the absolute exe path.
+            cmd, prefix = _resolve_exe_path()
+            args_json = ", ".join([*_json_strs(prefix), _json_str("mcp"), _json_str("serve")])
+            typer.echo(
+                "{\n"
+                "  \"mcpServers\": {\n"
+                "    \"agent-windows\": {\n"
+                f"      \"command\": {_json_str(cmd)},\n"
+                f"      \"args\": [{args_json}]\n"
+                "    }\n"
+                "  }\n"
+                "}")
+        else:
+            typer.echo("""\
 {
   "mcpServers": {
     "agent-windows": {
