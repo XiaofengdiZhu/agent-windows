@@ -23,6 +23,14 @@ _config_cache: dict[str, Any] | None = None
 _config_cache_mtime: float = 0.0
 _config_lock = threading.Lock()
 
+# ── Config override (--config) ─────────────────────────────────────
+# When set (by the CLI --config flag or the daemon's argv scan),
+# get_config_path() returns this instead of the default data-dir path.
+# set_config_override() also invalidates the cache so the next load_config()
+# re-reads from the new path. State files (pid/lock/version/logs) are NOT
+# affected — they stay in get_data_dir() (the override is config-file-only).
+_config_override: Path | None = None
+
 # ── Paths ─────────────────────────────────────────────────────────
 
 
@@ -34,8 +42,46 @@ def get_data_dir() -> Path:
 
 
 def get_config_path() -> Path:
-    """Return path to config.toml."""
+    """Return path to config.toml (override > default).
+
+    The override is set by ``--config`` (CLI Typer callback, or the daemon's
+    argv scan) and applies to reads *and* writes (``config set``/``mcp auth``
+    write to the override file when one is set). State files
+    (pid/lock/version/logs/screenshots) are unaffected — they stay in
+    :func:`get_data_dir`.
+    """
+    if _config_override is not None:
+        return _config_override
     return get_data_dir() / "config.toml"
+
+
+def set_config_override(path: str | Path | None) -> None:
+    """Set (or clear, if *path* is None) the config-file path override.
+
+    Expands ``~``/``~user`` and resolves to absolute. Invalidates the in-memory
+    cache so the next :func:`load_config` re-reads from the new path
+    (mtime-based caching would otherwise serve stale contents if the default
+    and override files happened to share an mtime). Thread-safe (reuses
+    ``_config_lock``).
+
+    Called once at process start: from the CLI Typer ``--config`` callback
+    (CLI/MCP process) and from ``_init_daemon_state`` (daemon process, reading
+    ``--config`` off argv).
+    """
+    global _config_override, _config_cache, _config_cache_mtime
+    with _config_lock:
+        if path is None:
+            _config_override = None
+        else:
+            _config_override = Path(os.path.expanduser(str(path))).resolve()
+        # Force reload regardless of mtime.
+        _config_cache = None
+        _config_cache_mtime = 0.0
+
+
+def get_config_override() -> Path | None:
+    """Return the active config override path, or None (default location)."""
+    return _config_override
 
 
 def get_pid_path() -> Path:

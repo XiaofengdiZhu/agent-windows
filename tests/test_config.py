@@ -749,3 +749,79 @@ class TestValidateConfig:
         msg = str(exc_info.value)
         assert "mcp.port" in msg
         assert "telemetry.enabled" in msg
+
+
+class TestConfigOverride:
+    """--config override: set_config_override redirects get_config_path and
+    invalidates the cache. Module-global state — each test resets it."""
+
+    def teardown_method(self, _method):
+        # Module-global override must not leak into other tests.
+        from agent_windows.utils import config as cfg
+        cfg.set_config_override(None)
+
+    def test_get_config_path_defaults_to_data_dir(self):
+        from agent_windows.utils import config as cfg
+        cfg.set_config_override(None)
+        assert cfg.get_config_path() == cfg.get_data_dir() / "config.toml"
+
+    def test_set_override_redirects_get_config_path(self, tmp_path):
+        from agent_windows.utils import config as cfg
+        alt = tmp_path / "alt.toml"
+        cfg.set_config_override(str(alt))
+        assert cfg.get_config_path() == alt.resolve()
+
+    def test_set_override_expands_user(self, monkeypatch, tmp_path):
+        from agent_windows.utils import config as cfg
+        # config.py calls os.path.expanduser at call time, so patching the
+        # stdlib function is sufficient (no module-attribute rebinding needed).
+        monkeypatch.setattr(
+            "os.path.expanduser",
+            lambda p: str(tmp_path / "x.toml") if p == "~/x.toml" else p)
+        cfg.set_config_override("~/x.toml")
+        assert cfg.get_config_path() == (tmp_path / "x.toml").resolve()
+
+    def test_get_config_override_accessor(self, tmp_path):
+        from agent_windows.utils import config as cfg
+        assert cfg.get_config_override() is None
+        alt = tmp_path / "alt.toml"
+        cfg.set_config_override(str(alt))
+        assert cfg.get_config_override() == alt.resolve()
+        cfg.set_config_override(None)
+        assert cfg.get_config_override() is None
+
+    def test_load_reads_override_file(self, tmp_path, monkeypatch):
+        # Write a real alt config; load_config must read it, not the default.
+        from agent_windows.utils import config as cfg
+        alt = tmp_path / "alt.toml"
+        alt.write_text('[shell]\ntimeout = 99\n', encoding="utf-8")
+        monkeypatch.delenv("AGENT_WINDOWS_VLM_API_KEY", raising=False)
+        cfg._config_cache = None  # reset, mirroring other tests
+        cfg.set_config_override(str(alt))
+        loaded = cfg.load_config()
+        assert loaded["shell"]["timeout"] == 99
+
+    def test_load_override_file_absent_yields_defaults(self, tmp_path, monkeypatch):
+        # Non-existent override file behaves like a non-existent default file:
+        # empty user config -> merged defaults. No crash.
+        from agent_windows.utils import config as cfg
+        alt = tmp_path / "does-not-exist.toml"
+        monkeypatch.delenv("AGENT_WINDOWS_VLM_API_KEY", raising=False)
+        cfg._config_cache = None
+        cfg.set_config_override(str(alt))
+        loaded = cfg.load_config()
+        # A default key round-trips (proves defaults were merged, not an error).
+        assert loaded["shell"]["timeout"] == 30  # DEFAULT_CONFIG value
+
+    def test_set_override_invalidates_cache(self, tmp_path, monkeypatch):
+        # After set_config_override, a stale cache must NOT be served.
+        from agent_windows.utils import config as cfg
+        monkeypatch.delenv("AGENT_WINDOWS_VLM_API_KEY", raising=False)
+        # Prime cache against default (no override).
+        cfg._config_cache = None
+        cfg.set_config_override(None)
+        cfg.load_config()
+        assert cfg._config_cache is not None
+        # Set override -> cache cleared.
+        cfg.set_config_override(str(tmp_path / "alt.toml"))
+        assert cfg._config_cache is None
