@@ -48,6 +48,10 @@ Every desktop interaction follows this cycle:
 # Initialize config (first time only)
 agent-windows config init
 
+# Tip: --config <path> runs against an alternate config.toml (propagated to the
+# daemon; state files stay put). Use for isolated/test profiles:
+#   agent-windows --config /tmp/ci.toml mcp serve
+
 # See the screen
 agent-windows observe
 

@@ -836,3 +836,4 @@ Available on all commands:
 | `--no-daemon` | Direct execution (bypass daemon, for debugging) |
 | `--format text\|json` | Output format |
 | `--debug` | Verbose logging |
+| `--config <path>` | Alternate config.toml (default `~/.agent-windows/config.toml`). Propagated to the daemon; reads *and* writes (`config set`/`mcp auth`) target this file. State files (pid/lock/logs) stay in the default location. Missing file = defaults. |

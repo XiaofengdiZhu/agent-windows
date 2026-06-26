@@ -10,6 +10,8 @@ The server auto-starts the daemon on the first tool call — no separate `daemon
 agent-windows mcp serve          # stdio (default) — for local clients
 ```
 
+> **Alternate config (`--config`):** `mcp serve` accepts the global `--config <path>` flag to run against an alternate `config.toml` — useful for CI, multiple profiles, or testing without touching your real config. The flag propagates to the daemon the server auto-starts, so tool calls use the same config as the server process. State files (pid/lock/logs) stay in the default location. See the Configuration reference.
+
 > **Per-call screenshot resolution:** the `screenshot` tool accepts optional `scale` (e.g. `0.5` for half-resolution), `max_width`, and `max_height` params that override the config defaults for that one capture — handy for a quick low-res peek without changing config. Omit them to use the configured `[screenshot]` values. The returned metadata reports a `Coordinate Scale` factor to apply to image-pixel coords before clicking when a downscale occurred.
 
 ## Install in a client

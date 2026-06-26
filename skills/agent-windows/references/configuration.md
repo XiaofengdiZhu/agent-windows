@@ -18,6 +18,37 @@ agent-windows config doctor            # Check whether the vision model is confi
 > The launcher forwards `config` to the bundled Python CLI transparently — no
 > need to call `agent-windows-python` directly for config.
 
+### `--config` override
+
+Pass `--config <path>` to point at an alternate config file for one invocation
+(useful for testing, CI, or multiple profiles without touching your real config):
+
+```bash
+agent-windows --config /tmp/profile.toml config show
+agent-windows --config ~/profiles/ci.toml mcp serve
+```
+
+**Precedence:** `--config <path>` (if given) > `~/.agent-windows/config.toml`.
+
+**Propagation:** `--config` applies to the current process *and* is forwarded
+to the daemon the launcher spawns — so the daemon reads the same file. Without
+this, the daemon would silently use the default while your CLI uses the override.
+
+**Scope — config file only.** `--config` redirects config reads and writes
+(`load_config`, `config set`, `mcp auth`). It does **not** move state files —
+`daemon.pid`, `daemon.lock`, `daemon.version`, `logs/`, `screenshots/`, and
+`prompts/` stay in `~/.agent-windows/`. Different profiles therefore share one
+daemon instance and one log stream.
+
+**Writes go to the override file.** When `--config` is set, `config set` and
+`mcp auth` write to the override file (you pointed at it; writes follow). This
+lets you fully manage an isolated profile.
+
+**Missing file = defaults.** If the `--config` path does not exist, it's treated
+as an empty config → merged defaults only (handy for testing against defaults
+without creating a file). A file that exists but is unreadable or has invalid
+TOML raises the usual error.
+
 ### Example
 
 ```bash
