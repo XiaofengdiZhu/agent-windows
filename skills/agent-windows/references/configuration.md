@@ -63,6 +63,19 @@ starts, reporting the resolved absolute path and the config file location —
 rather than surfacing as an opaque OpenSSL traceback. stdio transport ignores
 TLS (local IPC), so the check is skipped there.
 
+### Debug mode
+
+Global debug state lives in the `AGENT_WINDOWS_DEBUG` environment variable. The
+CLI/MCP/daemon entry points call `enable_debug()` when given `--debug`, which
+sets that env var. Any module can read it with `is_debug()` (from
+`agent_windows.utils.debug`) — no `--debug` boolean needs to be threaded
+through function parameters. The spawned daemon subprocess inherits the env var
+automatically, so debug mode crosses the process boundary without explicit
+forwarding. `configure_logging()` raises the root logger plus the verbose
+third-party loggers (`fastmcp`, `uvicorn.*`) to `DEBUG` when `is_debug()`; the
+daemon uses its own `_setup_logging` (file + stderr handlers) but reads
+`is_debug()` for the level decision.
+
 ### Example
 
 ```bash

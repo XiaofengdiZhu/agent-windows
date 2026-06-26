@@ -281,7 +281,10 @@ Every option below can be set as an env var instead of (or in addition to) the c
 | `AGENT_WINDOWS_PYTHON` | Launcher | Explicit Python interpreter for the daemon (highest priority; otherwise `python` on PATH). |
 | `AGENT_WINDOWS_E2E` | Testing | `1` → enable end-to-end daemon smoke tests (opt-in `@pytest.mark.e2e`). |
 
-> `--debug` (verbose logging) is a **flag, not an env var** — pass it on the command line.
+> `--debug` (verbose logging) sets the `AGENT_WINDOWS_DEBUG` env var via
+> `enable_debug()`. Any module reads it with `is_debug()` instead of receiving a
+> debug flag as a parameter; the spawned daemon inherits it automatically. You
+> can also export `AGENT_WINDOWS_DEBUG=1` directly.
 
 ## Desktop Automation Tips
 

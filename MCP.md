@@ -4,7 +4,7 @@ agent-windows ships a complete [MCP](https://modelcontextprotocol.io/) server (b
 
 > Requires the `mcp` extra: `uv tool install agent-windows` installs it by default; from source run `uv sync --extra mcp`.
 
-The server auto-starts the daemon on the first tool call — no separate `daemon start` needed. Use `--debug` for verbose logging.
+The server auto-starts the daemon on the first tool call — no separate `daemon start` needed. Use `--debug` for verbose logging (`--debug` sets the `AGENT_WINDOWS_DEBUG` env var via `enable_debug()`; the auto-started daemon inherits it automatically, and any module reads it with `is_debug()` instead of receiving a flag).
 
 ```bash
 agent-windows mcp serve          # stdio (default) — for local clients

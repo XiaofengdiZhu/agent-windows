@@ -835,5 +835,5 @@ Available on all commands:
 |------|-------------|
 | `--no-daemon` | Direct execution (bypass daemon, for debugging) |
 | `--format text\|json` | Output format |
-| `--debug` | Verbose logging |
+| `--debug` | Verbose logging. Sets the `AGENT_WINDOWS_DEBUG` env var (`enable_debug()`); the auto-started daemon inherits it, and any module reads it via `is_debug()` instead of receiving a flag. Also settable directly as `AGENT_WINDOWS_DEBUG=1`. |
 | `--config <path>` | Alternate config.toml (default `~/.agent-windows/config.toml`). Propagated to the daemon; reads *and* writes (`config set`/`mcp auth`) target this file. State files (pid/lock/logs) stay in the default location. Missing file = defaults. |
