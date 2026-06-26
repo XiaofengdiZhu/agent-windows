@@ -194,10 +194,18 @@ def test_mcp_serve_delegates_explicit_flags_overriding_config():
                                      allowed_hosts=None, telemetry=False)
 
 
-def test_mcp_serve_defaults_come_from_config():
-    """No flags → use config [mcp] defaults (transport/host/port/auth_key)."""
+def test_mcp_serve_defaults_come_from_config(monkeypatch, tmp_path):
+    """No flags → use config [mcp] defaults (transport/host/port/auth_key).
+    TLS relative paths resolve against the config-file dir; files must exist
+    for the serve-time pre-flight (TODO #21-2)."""
     from typer.testing import CliRunner
     from agent_windows.cli.commands import mcp_cmd
+    from agent_windows.utils import config as cfg
+
+    # 配置文件在 tmp_path/cfg.toml → 相对 c.pem/k.pem 解析到 tmp_path 下。
+    monkeypatch.setattr(cfg, "get_config_path", lambda: tmp_path / "cfg.toml")
+    (tmp_path / "c.pem").write_text("cert", encoding="utf-8")
+    (tmp_path / "k.pem").write_text("key", encoding="utf-8")
 
     runner = CliRunner()
     with patch("agent_windows.mcp.run") as mock_run, \
@@ -209,7 +217,8 @@ def test_mcp_serve_defaults_come_from_config():
         runner.invoke(mcp_cmd.app, ["serve"])
     mock_run.assert_called_once_with(transport="streamable-http", host="1.2.3.4",
                                      port=7000, debug=False, auth_key="k",
-                                     ssl_certfile="c.pem", ssl_keyfile="k.pem",
+                                     ssl_certfile=str((tmp_path / "c.pem").resolve()),
+                                     ssl_keyfile=str((tmp_path / "k.pem").resolve()),
                                      ip_allowlist=None, cors_origins=None,
                                      tools=None, exclude_tools=None, stateless_http=False,
                                      oauth_client_id=None, oauth_client_secret=None,
