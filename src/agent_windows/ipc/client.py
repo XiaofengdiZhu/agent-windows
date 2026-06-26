@@ -27,19 +27,41 @@ from agent_windows.ipc.pipe import (
 logger = logging.getLogger(__name__)
 
 
+class DaemonError(RuntimeError):
+    """A typed daemon error carrying the JSON-RPC error ``code``.
+
+    Raised by :func:`unwrap_response` so callers can distinguish error
+    *classes* (ELEMENT_NOT_FOUND vs WAIT_TIMEOUT vs PERMISSION_DENIED vs …)
+    instead of parsing a message string. Subclasses ``RuntimeError`` so the
+    existing ``except RuntimeError`` sites (and ``pytest.raises(RuntimeError)``
+    tests) keep catching it unchanged; ``.code`` carries the numeric JSON-RPC
+    code (e.g. -32602 INVALID_PARAMS, -1001 ELEMENT_NOT_FOUND). The CLI error
+    boundary maps ``.code`` to exit codes and JSON error objects.
+    """
+
+    def __init__(self, code: int, message: str) -> None:
+        # Keep the "Daemon error [<code>]: <message>" string shape so existing
+        # tests (match="-32602", "bad params" in str) and log scrapers still work.
+        super().__init__(f"Daemon error [{code}]: {message}")
+        self.code = code
+        self.message = message
+
+
 def unwrap_response(response: JSONRPCResponse) -> dict:
     """Return a JSON-RPC response's result, or raise if it carries an error.
 
     Centralizes the error→exception mapping so the daemon path
     (:func:`call_daemon`) and the in-process ``--no-daemon`` path
     (:func:`agent_windows.cli.dispatcher.dispatch`) surface identical errors.
-    A response with ``error`` becomes ``RuntimeError("Daemon error [<code>]:
-    <message>")`` — matching the codes :func:`route_request` produces
-    (INVALID_PARAMS / WAIT_TIMEOUT / METHOD_NOT_FOUND / DAEMON_INTERNAL_ERROR).
+    A response with ``error`` becomes a :class:`DaemonError` carrying the
+    JSON-RPC code — matching the codes :func:`route_request` produces
+    (INVALID_PARAMS / WAIT_TIMEOUT / METHOD_NOT_FOUND / DAEMON_INTERNAL_ERROR /
+    ELEMENT_NOT_FOUND / COORDINATE_OUT_OF_RANGE / PERMISSION_DENIED).
     """
     if response.error is not None:
-        raise RuntimeError(
-            f"Daemon error [{response.error.get('code')}]: {response.error.get('message')}"
+        raise DaemonError(
+            response.error.get("code"),
+            response.error.get("message", ""),
         )
     return response.result
 
@@ -61,7 +83,7 @@ def call_daemon(
 
     Raises:
         ConnectionError: If daemon is unreachable.
-        RuntimeError: If daemon returns an error.
+        DaemonError: If daemon returns a JSON-RPC error (carries ``.code``).
 
     Note:
         This is the daemon-backed path only. The ``--no-daemon`` direct-execution

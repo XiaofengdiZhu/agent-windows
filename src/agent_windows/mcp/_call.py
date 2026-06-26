@@ -27,9 +27,11 @@ def _call(method: str, **params: Any) -> dict[str, Any]:
 
     ``None`` params are dropped: optional kwargs the caller didn't pass must
     not reach the daemon as ``null`` (some handlers treat a present-None as
-    "explicitly empty"). A daemon error (``RuntimeError`` from
-    ``unwrap_response``) propagates unchanged — FastMCP surfaces it as a tool
-    error, and the message already carries the JSON-RPC code.
+    "explicitly empty"). A daemon error (``DaemonError`` — a ``RuntimeError``
+    subclass carrying ``.code`` — from :func:`unwrap_response`) propagates
+    unchanged: FastMCP surfaces it as a tool error, and the message already
+    carries the JSON-RPC code. The MCP layer does not map ``.code`` itself;
+    typed handling lives at the CLI boundary (cli/dispatcher._print_error).
     """
     clean = {k: v for k, v in params.items() if v is not None}
     return call_daemon(method, clean)

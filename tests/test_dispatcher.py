@@ -231,3 +231,110 @@ class TestStdoutRobustness:
         out = "".join(fake.parts)
         assert "caf" in out          # text still emitted
         assert "é" not in out        # non-ASCII coerced (replaced), not raised
+
+
+class TestCmdErrorBoundary:
+    """review #4: _cmd wraps dispatch in an error boundary. A daemon/connection
+    error surfaces as a one-line message (or a JSON error object under
+    --format json) with a non-zero exit, instead of an uncaught traceback."""
+
+    def _ctx(self, fmt="text"):
+        ctx = MagicMock()
+        ctx.obj = {"no_daemon": False, "debug": False, "format": fmt}
+        return ctx
+
+    def test_daemon_error_text_mode_prints_message(self, capsys):
+        """A DaemonError in text mode prints 'Error: <msg>'. An application-range
+        code (-1001 ELEMENT_NOT_FOUND) exits 1."""
+        import typer
+        from agent_windows.cli.dispatcher import _cmd
+        from agent_windows.ipc.client import DaemonError
+        with patch("agent_windows.cli.dispatcher.dispatch",
+                   side_effect=DaemonError(-1001, "no such element")):
+            with pytest.raises(typer.Exit) as ei:
+                _cmd(self._ctx("text"), "click", x=1, y=2)
+        assert ei.value.exit_code == 1
+        assert "no such element" in capsys.readouterr().out
+
+    def test_protocol_error_exits_two(self, capsys):
+        """A protocol-range code (-32602 INVALID_PARAMS) exits 2, NOT 1 — matching
+        the Rust launcher's exit_code_for so both entry points agree. This is the
+        key consistency property: a script can't get exit 1 (app error) from one
+        binary and exit 2 (bad params) from the other for the same daemon error."""
+        import typer
+        from agent_windows.cli.dispatcher import _cmd
+        from agent_windows.ipc.client import DaemonError
+        with patch("agent_windows.cli.dispatcher.dispatch",
+                   side_effect=DaemonError(-32602, "bad params")):
+            with pytest.raises(typer.Exit) as ei:
+                _cmd(self._ctx("text"), "click", x=1, y=2)
+        assert ei.value.exit_code == 2
+
+    def test_daemon_error_json_mode_emits_structured_object(self, capsys):
+        """--format json on the error path emits {"error":..,"code":..} (previously
+        --format json was silently dropped on errors and a traceback escaped)."""
+        import typer
+        from agent_windows.cli.dispatcher import _cmd
+        from agent_windows.ipc.client import DaemonError
+        with patch("agent_windows.cli.dispatcher.dispatch",
+                   side_effect=DaemonError(-32602, "bad params")):
+            with pytest.raises(typer.Exit) as ei:
+                _cmd(self._ctx("json"), "click", x=1, y=2)
+        assert ei.value.exit_code == 2  # protocol-range code → exit 2
+        data = json.loads(capsys.readouterr().out)
+        assert data == {"error": "bad params", "code": -32602}
+
+    def test_connection_error_exits_two(self, capsys):
+        """ConnectionError (daemon down) is a distinct infra failure → exit 2,
+        separable from an app error (exit 1) so scripts can tell them apart."""
+        import typer
+        from agent_windows.cli.dispatcher import _cmd
+        with patch("agent_windows.cli.dispatcher.dispatch",
+                   side_effect=ConnectionError("daemon did not become ready")):
+            with pytest.raises(typer.Exit) as ei:
+                _cmd(self._ctx("text"), "ping")
+        assert ei.value.exit_code == 2
+        assert "daemon did not become ready" in capsys.readouterr().out
+
+    def test_connection_error_json_mode(self, capsys):
+        """ConnectionError under --format json: code is omitted (no JSON-RPC code)."""
+        import typer
+        from agent_windows.cli.dispatcher import _cmd
+        with patch("agent_windows.cli.dispatcher.dispatch",
+                   side_effect=ConnectionError("pipe broke")):
+            with pytest.raises(typer.Exit) as ei:
+                _cmd(self._ctx("json"), "ping")
+        assert ei.value.exit_code == 2
+        data = json.loads(capsys.readouterr().out)
+        assert data == {"error": "pipe broke"}
+
+    def test_unexpected_exception_not_swallowed(self):
+        """Genuinely unexpected bugs must still propagate as tracebacks — the
+        boundary catches only ConnectionError/DaemonError, not BaseException."""
+        from agent_windows.cli.dispatcher import _cmd
+        with patch("agent_windows.cli.dispatcher.dispatch",
+                   side_effect=RuntimeError("unexpected")):
+            # A plain RuntimeError (not a DaemonError) is NOT caught by the
+            # boundary — only DaemonError/ConnectionError are.
+            with pytest.raises(RuntimeError, match="unexpected"):
+                _cmd(self._ctx("text"), "ping")
+
+    def test_success_path_still_prints_result(self, capsys):
+        """Regression guard for the _write_output/_format refactor: a successful
+        dispatch must still reach print_result → stdout in both formats. The
+        error-boundary tests all exercise the except branch; this locks the
+        success branch end-to-end through _cmd."""
+        from agent_windows.cli.dispatcher import _cmd
+        with patch("agent_windows.cli.dispatcher.dispatch",
+                   return_value={"output": "## Snapshot\nok"}):
+            _cmd(self._ctx("text"), "snapshot")
+        assert "## Snapshot" in capsys.readouterr().out
+
+    def test_success_path_json(self, capsys):
+        """Success path under --format json: the full result dict is emitted as JSON."""
+        from agent_windows.cli.dispatcher import _cmd
+        with patch("agent_windows.cli.dispatcher.dispatch",
+                   return_value={"output": "ok", "count": 3}):
+            _cmd(self._ctx("json"), "snapshot")
+        data = json.loads(capsys.readouterr().out)
+        assert data == {"output": "ok", "count": 3}

@@ -7,7 +7,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from agent_windows.ipc.client import unwrap_response, call_daemon, _start_daemon_process
+from agent_windows.ipc.client import unwrap_response, call_daemon, _start_daemon_process, DaemonError
 from agent_windows.ipc.protocol import JSONRPCRequest, JSONRPCResponse
 
 
@@ -26,6 +26,28 @@ class TestUnwrapResponse:
     def test_success_returns_result(self):
         resp = JSONRPCResponse(id=1, result={"status": "ok"})
         assert unwrap_response(resp) == {"status": "ok"}
+
+    def test_error_raises_daemon_error_with_code(self):
+        """unwrap_response raises DaemonError (a RuntimeError subclass) carrying
+        the JSON-RPC code on ``.code`` and ``.message``, so callers can branch on
+        error class instead of parsing the message string. The message keeps the
+        ``Daemon error [<code>]: <msg>`` shape for back-compat with log scrapers
+        and the match="-32602" assertions elsewhere."""
+        resp = JSONRPCResponse(id=1, error={"code": -1001, "message": "no such element"})
+        with pytest.raises(DaemonError) as exc_info:
+            unwrap_response(resp)
+        err = exc_info.value
+        assert err.code == -1001                       # typed code attribute
+        assert err.message == "no such element"
+        assert isinstance(err, RuntimeError)            # back-compat: still a RuntimeError
+        assert "-1001" in str(err)                      # message shape preserved
+        assert "no such element" in str(err)
+
+    def test_daemon_error_is_runtime_error_subclass(self):
+        """Existing ``except RuntimeError`` sites must still catch DaemonError —
+        the typed exception is an additive refinement, not a breaking change."""
+        err = DaemonError(-32602, "bad params")
+        assert isinstance(err, RuntimeError)
 
 
 class TestEnsureDaemonRunning:

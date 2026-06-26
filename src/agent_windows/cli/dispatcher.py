@@ -14,7 +14,7 @@ import typer
 
 logger = logging.getLogger(__name__)
 
-from agent_windows.ipc.client import call_daemon, unwrap_response
+from agent_windows.ipc.client import call_daemon, unwrap_response, DaemonError
 
 # Whether the CLI-side telemetry switch has been resolved for this process.
 # Env > config; no flag for the CLI path (there are too many subcommands to add
@@ -129,36 +129,17 @@ def _dispatch_no_daemon(method: str, params: dict[str, Any] | None) -> dict[str,
         pythoncom.CoUninitialize()
 
 
-def print_result(result: dict[str, Any], ctx: typer.Context | None = None) -> None:
-    """Print a result dict as formatted text or JSON.
+def _write_output(text: str) -> None:
+    """Write ``text`` to stdout, GBK-safe (the shared print primitive).
 
-    Handles Windows console encoding (GBK) gracefully by writing directly
-    to stdout buffer with UTF-8 encoding.
+    Bypasses Windows' GBK console codepage via the raw buffer with UTF-8.
+    Robust to streams that have no ``.buffer`` (IDLE, test captures, redirected
+    text streams) and to characters the console codepage can't encode: the echo
+    fallback coerces through the stream's own encoding with ``errors="replace"``
+    instead of raising ``UnicodeEncodeError`` (L-15). Used by both
+    :func:`print_result` (success path) and the error boundary (error path) so
+    ``--format json`` works identically on both.
     """
-    fmt = "text"
-    if ctx and ctx.obj:
-        fmt = ctx.obj.get("format", "text")
-
-    if fmt == "json":
-        import json
-        text = json.dumps(result, ensure_ascii=False, indent=2)
-    else:
-        output = result.get("output")
-        if output:
-            text = output
-        else:
-            lines = []
-            for key, value in result.items():
-                if key == "output":
-                    continue
-                lines.append(f"{key}: {value}")
-            text = "\n".join(lines)
-
-    # Write to stdout, bypassing Windows' GBK console codepage via the raw
-    # buffer with UTF-8. Robust to streams that have no ``.buffer`` (IDLE, test
-    # captures, redirected text streams) and to characters the console codepage
-    # can't encode: the echo fallback coerces through the stream's own encoding
-    # with ``errors="replace"`` instead of raising ``UnicodeEncodeError`` (L-15).
     out = sys.stdout
     buf = getattr(out, "buffer", None)
     if buf is not None:
@@ -177,6 +158,95 @@ def print_result(result: dict[str, Any], ctx: typer.Context | None = None) -> No
     typer.echo(text.encode(enc, errors="replace").decode(enc, errors="replace"))
 
 
+def _format(ctx: typer.Context | None) -> str:
+    """Read the --format option from the Typer context (default 'text')."""
+    if ctx and ctx.obj:
+        return ctx.obj.get("format", "text")
+    return "text"
+
+
+def print_result(result: dict[str, Any], ctx: typer.Context | None = None) -> None:
+    """Print a result dict as formatted text or JSON.
+
+    Handles Windows console encoding (GBK) gracefully by writing directly
+    to stdout buffer with UTF-8 encoding.
+    """
+    fmt = _format(ctx)
+
+    if fmt == "json":
+        import json
+        text = json.dumps(result, ensure_ascii=False, indent=2)
+    else:
+        output = result.get("output")
+        if output:
+            text = output
+        else:
+            lines = []
+            for key, value in result.items():
+                if key == "output":
+                    continue
+                lines.append(f"{key}: {value}")
+            text = "\n".join(lines)
+
+    _write_output(text)
+
+
+def _exit_code_for_daemon_error(code: int) -> int:
+    """Map a JSON-RPC error code to a process exit code.
+
+    Mirrors the Rust launcher's ``exit_code_for`` (launcher/src/main.rs) so the
+    Python and native entry points agree on exit semantics: protocol errors
+    (the JSON-RPC 2.0 reserved range -32700..=-32000, e.g. PARSE_ERROR /
+    INVALID_REQUEST / METHOD_NOT_FOUND / INVALID_PARAMS) exit 2; application
+    errors (ELEMENT_NOT_FOUND / WAIT_TIMEOUT / PERMISSION_DENIED /
+    DAEMON_INTERNAL_ERROR, the -1001..=-1999 range) exit 1. A script can thus
+    tell "bad params / unknown method" (2) from "element not found / timed out"
+    (1) regardless of which binary it invoked.
+    """
+    if -32700 <= code <= -32000:
+        return 2  # protocol error
+    return 1      # application error
+
+
+def _print_error(exc: BaseException, ctx: typer.Context | None) -> None:
+    """Surface a dispatch error honoring ``--format``, then exit non-zero.
+
+    - ``ConnectionError`` (daemon unreachable / died during startup) → a clear
+      one-line message, exit 2 (infrastructure failure, distinct from an app
+      error so scripts/agents can tell "daemon down" from "command failed").
+    - ``DaemonError`` (the daemon returned a JSON-RPC error) → the daemon's own
+      message + code, exit code derived from ``.code`` via
+      :func:`_exit_code_for_daemon_error` (protocol range → 2, app range → 1),
+      matching the Rust launcher so both entry points agree.
+    In ``--format json`` mode both emit a ``{"error": ..., "code": ...}`` object
+    so JSON consumers get structured errors instead of a raw traceback (which
+    previously escaped unwrapped from ``__main__`` and dropped the --format flag).
+    Other exceptions are not caught here — let them propagate so genuinely
+    unexpected bugs still surface as tracebacks during development.
+    """
+    fmt = _format(ctx)
+    if isinstance(exc, ConnectionError):
+        exit_code = 2
+        message = str(exc) or "Could not connect to the daemon"
+        code = None
+    elif isinstance(exc, DaemonError):
+        message = exc.message
+        code = exc.code
+        exit_code = _exit_code_for_daemon_error(code)
+    else:  # pragma: no cover - unexpected; re-raised by the caller
+        raise exc
+
+    if fmt == "json":
+        import json
+        payload = {"error": message}
+        if code is not None:
+            payload["code"] = code
+        _write_output(json.dumps(payload, ensure_ascii=False))
+    else:
+        _write_output(f"Error: {message}")
+    raise typer.Exit(code=exit_code)
+
+
 def _cmd(ctx: typer.Context, method: str, **params: Any) -> None:
     """Dispatch ``method`` to the daemon and print the result.
 
@@ -187,5 +257,14 @@ def _cmd(ctx: typer.Context, method: str, **params: Any) -> None:
     conditionally keep their logic verbatim. ``params`` is always a dict
     (``{}`` for no-arg commands), matching what every command passed before —
     never ``None``.
+
+    Wraps dispatch in an error boundary: a daemon/connection error is surfaced
+    as a one-line message (or a JSON error object under ``--format json``) with
+    a non-zero exit, instead of an uncaught Python traceback. (review #4)
     """
-    print_result(dispatch(method, params, ctx), ctx)
+    try:
+        result = dispatch(method, params, ctx)
+    except (ConnectionError, DaemonError) as exc:
+        _print_error(exc, ctx)
+        return  # typer.Exit raised above; unreachable, keeps type checkers calm
+    print_result(result, ctx)
