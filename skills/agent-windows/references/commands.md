@@ -80,6 +80,8 @@ agent-windows screenshot --annotate --grid-w 3 --grid-h 3   # + 3×3 reference g
 
 **Output**: `{output, path, width, height, coord_scale, backend, region}`
 
+> **MCP tool only** — the `screenshot` MCP tool additionally takes `scale` (float, default `screenshot.scale` = `1.0`), `max_width` (int, default `screenshot.max_width` = `1920`), and `max_height` (int, default `screenshot.max_height` = `1080`) to downscale the capture for cheaper vision-model input. These are not CLI flags; set them via the `[screenshot]` config or override per-call over MCP.
+
 ### ground
 
 Visual model grounding: locate element coordinates from a description.
@@ -483,19 +485,20 @@ Each field is clicked, cleared (Ctrl+A + Delete), then typed into. Capped at 50 
 
 ### app launch
 
-Launch application by name or executable path.
+Launch an application. By name (resolved via the Start Menu, so **friendly names work — including UWP/Store apps** like `calculator`, `edge`, `photos`), by executable name on PATH, or by full path. Trailing tokens after the name/path are passed as arguments.
 
 ```bash
 agent-windows app launch Notepad
-agent-windows app launch "C:\Program Files\app\test.exe" --args --flag
+agent-windows app launch calculator              # UWP/Store app by friendly name
+agent-windows app launch "C:\Program Files\app\test.exe" --flag value
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `name_or_path` | str | **required** | App name or executable path |
-| `args` | list[str] | `None` | Application arguments |
+| `name_or_path` | str | **required** | App name (Start-Menu friendly name, incl. UWP) or executable path |
+| `args` | list[str] | `None` | Trailing positional arguments passed to the app |
 
-**Output**: PID of the launched process.
+**Output**: `PID: N` for a Win32 process; `AppID: ...` (with `PID: 0`) for a UWP/Store app launched via its AppUserModelID.
 
 ### app switch
 
@@ -583,7 +586,7 @@ agent-windows fs info C:\Users\test\file.txt
 
 | Command | Parameters |
 |---------|-----------|
-| `fs read` | `path` (str, **required**), `--offset` (int, default 0 — 1-based start line, 0 = whole file), `--limit` (int, default 0 — max lines, 0 = to EOF) |
+| `fs read` | `path` (str, **required**), `--offset` (int, default 0 — 1-based start line, 0 = whole file), `--limit` (int, default 0 — max lines, 0 = to EOF), `--encoding` (str, default `""` = UTF-8 — override for legacy codepage files, e.g. `gbk`, `latin-1`, `cp1252`) |
 | `fs write` | `path` (str, **required**), `content` (str, **required**), `--append` (bool, default `false` — append instead of overwriting) |
 | `fs list` | `path` (str, **required**), `--pattern` (str, default `""` — name glob filter), `--recursive` (bool, default `false` — walk subdirectories), `--show-hidden` (bool, default `false` — include dotfiles) |
 | `fs copy` | `path` (str, **required**), `destination` (str, **required**), `--overwrite` (bool, default `false` — replace existing destination) |
@@ -605,8 +608,8 @@ agent-windows clipboard set "text" --keyboard   # Simulate Ctrl+V after
 
 | Command | Parameters |
 |---------|-----------|
-| `clipboard get` | `--keyboard` / `-k` (bool, optional — **optional**, not tri-state) |
-| `clipboard set` | `text` (str, **required**), `--keyboard` / `-k` (bool, optional) |
+| `clipboard get` | `--keyboard` / `-k` (bool, optional — tri-state: omitted → fall back to config) |
+| `clipboard set` | `text` (str, **required**), `--keyboard` / `-k` (bool, optional — tri-state: omitted → fall back to config) |
 
 `--keyboard` is an **optional** flag: when **omitted**, the command forwards no `keyboard` param to the daemon and behavior falls back to config (`clipboard.method`, default `"system"` — PowerShell API); when **present**, it forces keyboard simulation (Ctrl+C/V). There is **no** `--no-keyboard` form. So the effective default depends on config, not a hardcoded value.
 
@@ -616,14 +619,17 @@ Process management.
 
 ```bash
 agent-windows process list
-agent-windows process kill 1234       # By PID
-agent-windows process kill notepad     # By name
+agent-windows process list --sort-by cpu --limit 20
+agent-windows process list --name chrome          # filter by name substring
+agent-windows process kill 1234                   # By PID
+agent-windows process kill notepad                # By name
+agent-windows process kill notepad --force        # 强杀 immediately (default: graceful)
 ```
 
 | Command | Parameters |
 |---------|-----------|
-| `process list` | (none) |
-| `process kill` | `pid_or_name` (str, **required**) |
+| `process list` | `--sort-by` (str, default `memory` — `memory`/`cpu`/`name`, descending), `--limit` (int, default `0` = all — cap rows to top-N), `--name` (str, default `""` — case-insensitive substring filter) |
+| `process kill` | `pid_or_name` (str/int, **required**), `--force` (bool, default `false` — `false` = graceful/WM_CLOSE lets the app save, `true` = immediate 强杀) |
 
 ### notify
 

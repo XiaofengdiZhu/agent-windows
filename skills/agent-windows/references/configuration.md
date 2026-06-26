@@ -65,6 +65,7 @@ Screenshot capture and storage settings.
 | `max_screenshot_age_days` | int | `7` | Auto-delete screenshots older than this |
 | `max_screenshot_dir_mb` | int | `500` | Auto-cleanup when screenshot dir exceeds this size |
 | `cleanup_interval_minutes` | int | `10` | How often to run auto-cleanup check |
+| `dir` | str | `""` | Override the screenshot save directory. Empty (default) = `~/.agent-windows/screenshots/`. Unlike the keys above, this is NOT in the default TOML — it's an optional settable key read with a fallback. Set via `config set screenshot.dir "D:\\shots"`. |
 
 ### [tree]
 
@@ -133,6 +134,26 @@ Client-side read timeout — prevents the CLI from hanging if the daemon is unre
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `read_timeout_seconds` | int | `150` | Seconds the client waits for a daemon response before raising `ConnectionError`. Must be long enough for the slowest commands |
+
+### [telemetry]
+
+Local-only tool-call telemetry.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `enabled` | bool | `false` | When true, each tool call (source `mcp`\|`cli`, tool name, success/failure, `duration_ms`) is appended as one line to `~/.agent-windows/logs/telemetry.log`. Zero network, zero new deps. Opt in via `--telemetry`, the `AGENT_WINDOWS_TELEMETRY` env var, or this key. |
+
+### [mcp] · [security] · [tools]
+
+These sections configure the **MCP server's** HTTP transport, access controls, and startup tool filtering. They are HTTP/remote-access specific and documented in full in **[MCP.md](MCP.md)** (security model, flags, env vars, and ready-to-paste config). Summary of the keys:
+
+| Section | Keys | Purpose |
+|---------|------|---------|
+| `[mcp]` | `transport`, `host`, `port`, `auth_key` (DPAPI-encrypted), `ssl_certfile`, `ssl_keyfile`, `allow_insecure_remote`, `stateless_http` | `mcp serve` transport/bind/TLS/auth defaults; `allow_insecure_remote` opts into a bare non-loopback bind; `stateless_http` runs streamable-http statelessly |
+| `[security]` | `ip_allowlist`, `cors_origins` | HTTP-only access controls (both default `[]` = no restriction beyond the auth key/loopback guard) |
+| `[tools]` | `include`, `exclude` | Startup tool filtering (`include` = explicit whitelist via `--tools`; `exclude` removes via `--exclude-tools`; both default `[]` = all tools) |
+
+> These keys are arrays/booleans that `config set` (scalar-only) can't write — set them via the flags, `AGENT_WINDOWS_*` env vars, or by editing `config.toml` into TOML arrays. See MCP.md for the flag→env→config precedence and worked examples.
 
 ## Environment Variables
 
@@ -225,4 +246,14 @@ output_encoding = ""                  # "" = UTF-8 (auto); else e.g. "gbk"
 
 [daemon]
 idle_timeout_minutes = 30
+
+[ipc]
+read_timeout_seconds = 150
+
+[telemetry]
+enabled = false                        # local-only; logs to logs/telemetry.log
+
+# [mcp] / [security] / [tools] — HTTP transport, access controls, tool filtering.
+# See MCP.md for these sections (auth_key, ssl_*, allow_insecure_remote,
+# stateless_http, ip_allowlist, cors_origins, tools.include/exclude).
 ```

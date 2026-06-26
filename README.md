@@ -108,9 +108,9 @@ Python daemon (persistent, COM STA worker)
 ### Observation
 | Command | Description |
 |---------|-------------|
-| `observe [--snapshot] [--screenshot] [--ground DESC]` | Combined observation |
-| `snapshot` | UIA accessibility tree |
-| `screenshot [-o PATH] [-s @eN] [--bbox X1,Y1,X2,Y2] [--annotate] [--grid-w N] [--grid-h N]` | Screen capture; `--annotate` overlays numbered `@eN` boxes (full-screen) + optional `%` reference grid |
+| `observe [--snapshot] [--screenshot] [--ground DESC] [-d N]` | Combined observation (`-d`/`--display` selects a monitor, repeatable) |
+| `snapshot [-d N]` | UIA accessibility tree (`-d`/`--display` selects a monitor, repeatable) |
+| `screenshot [-o PATH] [--monitor N] [-s @eN] [--bbox X1,Y1,X2,Y2] [--annotate] [--grid-w N] [--grid-h N]` | Screen capture; `--monitor -1`=all; `--annotate` overlays numbered `@eN` boxes (full-screen) + optional `%` reference grid |
 | `ground DESCRIPTION [--single-pass]` | Visual coordinate grounding (`--single-pass`: 1 API call, ~2x faster, lower precision) |
 | `detect DESCRIPTION [-i IMAGE] [--max-targets N]` | Multi-target bounding box detection |
 | `ask-vision PROMPT [-i IMAGE] [-m MODEL]` | Free-form visual Q&A |
@@ -136,14 +136,18 @@ Python daemon (persistent, COM STA worker)
 ### System
 | Command | Description |
 |---------|-------------|
-| `app launch NAME [--args ...]` | Launch application |
+| `app launch NAME [ARGS...]` | Launch app by name (Start-Menu friendly name, incl. UWP/Store apps like `calculator`), exe name, or path; trailing tokens are args |
 | `app switch NAME` | Switch to window |
-| `app resize NAME --width W --height H` | Resize window |
+| `app resize NAME --width W --height H [--x X --y Y]` | Resize/reposition window (`--x`/`--y` default `-1` = leave) |
 | `app list` | List visible windows |
 | `shell COMMAND [--timeout SECS]` | Run PowerShell command (UTF-8 output; `--timeout` overrides default 30s) |
-| `fs read/write/list/copy/move/delete/search/info PATH ...` | File operations |
+| `fs read PATH [--offset N] [--limit N] [--encoding ENC]` | Read file (`--encoding` overrides UTF-8 for legacy codepage files) |
+| `fs write PATH CONTENT [--append]` | Write file |
+| `fs list PATH [--pattern GLOB] [--recursive] [--show-hidden]` | List directory |
+| `fs copy/move SRC DST [--overwrite]` · `fs delete PATH [--recursive]` · `fs search PATH PATTERN [--no-recursive]` · `fs info PATH` | Copy/move/delete/search/info |
 | `clipboard get/set [--keyboard]` | Clipboard access (`--keyboard` simulates Ctrl+C/V) |
-| `process list/kill` | Process management |
+| `process list [--sort-by memory\|cpu\|name] [--limit N] [--name SUBSTR]` | List running processes |
+| `process kill PID\|NAME [--force]` | Kill process (`--force` = immediate; default graceful) |
 | `notify TITLE MESSAGE [--app-id ID]` | Windows toast notification (defaults to PowerShell's AUMID) |
 | `registry get/set/delete/list PATH [NAME] [VALUE] [--type T]` | Windows Registry operations (typed values: String/DWord/QWord/MultiString/Binary) |
 | `cleanup` | Clean up old/oversized screenshots |
@@ -247,6 +251,11 @@ timeout = 10           # global traversal budget, seconds (0 disables)
 
 [clipboard]
 method = "system"      # "system" (PowerShell API) or "keyboard" (simulate Ctrl+C/V)
+
+[shell]
+timeout = 30             # execution timeout, seconds (overridable per-call via --timeout)
+max_output_bytes = 0     # cap stdout+stderr size; 0 = no cap
+output_encoding = ""     # "" = UTF-8 (auto); else e.g. "gbk" for legacy-codepage exes
 ```
 
 ### Environment variables

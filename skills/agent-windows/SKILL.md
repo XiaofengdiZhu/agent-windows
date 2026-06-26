@@ -216,6 +216,15 @@ Key notation for `shortcut`: `ctrl`, `alt`, `shift`, `win` as modifiers, joined 
 
 `type` options: `--at X,Y` or `--at-selector @eN` (click first; `--at-selector` overrides `--at`), `--enter`, `--clear` (select-all + delete first), `--caret start|idle|end` (move caret before typing — `start` presses Home, `end` presses End, `idle` leaves it; applied before `--clear`).
 
+### Expand / Collapse
+
+Drive an element's `ExpandCollapsePattern` — combo boxes, tree items, menus, collapsible groups. Call `snapshot` first to find a node whose State shows `expand_collapse_state:collapsed` (or `expanded`), then target its `@eN` ref. Both are idempotent: expanding an already-expanded/leaf node is a no-op; same for collapsing.
+
+```bash
+agent-windows expand @e3       # Open a combo box / tree node
+agent-windows collapse @e3     # Close it again
+```
+
 ### Batch Interaction
 
 Click multiple targets or fill multiple fields in one call (caps at 50 targets; each text field capped at 10000 chars). Pass coordinates (`[[x,y],...]` / `[[x,y,text],...]`) or element refs with `--selectors` (`["@e1",...]` / `[["@e1","text"],...]`).
@@ -278,7 +287,13 @@ agent-windows shell "Get-Process" --timeout 60   # override default 30s (shell.t
 # Filesystem
 agent-windows fs list C:\Users
 agent-windows fs read C:\Users\test\file.txt
+agent-windows fs read legacy.txt --encoding gbk        # legacy codepage (default UTF-8)
 agent-windows fs write C:\Users\test\out.txt "Hello"
+agent-windows fs copy C:\a.txt C:\bak\a.txt            # --overwrite to replace
+agent-windows fs move C:\old.txt C:\new.txt
+agent-windows fs delete C:\temp\junk --recursive       # non-empty dirs need --recursive
+agent-windows fs search C:\Projects "*.py"             # glob, recursive by default
+agent-windows fs info C:\Users\test\file.txt           # size/timestamps/attrs
 
 # Clipboard
 agent-windows clipboard get                  # Read clipboard
@@ -288,8 +303,14 @@ agent-windows clipboard set "text" --keyboard # Simulate Ctrl+V after
 
 # Process
 agent-windows process list
+agent-windows process list --sort-by cpu --limit 20    # memory|cpu|name; --name filters
 agent-windows process kill 1234              # By PID
 agent-windows process kill notepad           # By name
+agent-windows process kill notepad --force   # 强杀 immediately (default: graceful)
+
+# Screenshot cleanup — delete old/oversized screenshots now (otherwise runs
+# automatically every screenshot.cleanup_interval_minutes)
+agent-windows cleanup
 ```
 
 ## Waiting and Verification
@@ -397,9 +418,11 @@ A command failed? Don't guess — diagnose in order:
 
 1. **Read the error code** first. Common ones:
    - `-1001 ELEMENT_NOT_FOUND` → `@eN` ref is stale; re-`observe` and use a fresh ref.
-   - `-1003 WAIT_TIMEOUT` → element/text never appeared; check the name's exact case (matching is case-sensitive), or raise the timeout.
+   - `-1002 COORDINATE_OUT_OF_RANGE` → click/scroll coordinates outside the screen; re-`observe` for fresh bounds.
+   - `-1003 WAIT_TIMEOUT` → element/text never appeared (check the name's exact case — matching is case-sensitive), or a `shell` command exceeded `shell.timeout`; raise the timeout.
    - `-1005 VISION_API_ERROR` → vision model not configured/rate-limited; run `config doctor`.
-   - `-1004 PERMISSION_DENIED` → UAC blocked the action.
+   - `-1004 PERMISSION_DENIED` → UAC blocked the action, or a `shell` command matched `shell.blacklist`.
+   - Standard JSON-RPC codes (`-32600`…`-32603`) and the full table are in `references/troubleshooting.md`.
 
 2. **Re-observe** (`agent-windows observe`) to see the current screen state — it usually reveals what changed.
 
