@@ -1252,6 +1252,50 @@ def test_apply_tool_filter_ignores_unknown_names():
     reset_server()
 
 
+def test_registered_tool_names_returns_post_filter_survivors():
+    """registered_tool_names() reads the memoized singleton and returns exactly
+    the tools left after apply_tool_filter — the allowed set that batch_fn
+    enforces against. Locks the helper's registry traversal on a real FastMCP."""
+    from agent_windows.mcp.server import (
+        build_server, reset_server, apply_tool_filter, registered_tool_names,
+    )
+    reset_server()
+    mcp = build_server()
+    # No filter yet → all tools present, including the sensitive ones batch must guard.
+    assert "shell" in registered_tool_names(mcp)
+    assert "fs_delete" in registered_tool_names(mcp)
+    apply_tool_filter(mcp, explicit_tools=None, exclude_tools=["shell", "fs_delete"])
+    after = registered_tool_names(mcp)
+    assert "shell" not in after
+    assert "fs_delete" not in after
+    # The default-arg form (no mcp) reads the same singleton.
+    assert registered_tool_names() == after
+    reset_server()
+
+
+def test_registered_tool_names_none_when_no_server():
+    """With no memoized server, the helper returns an empty set (→ batch allows
+    all), not an error. This is the no-filter default path."""
+    from agent_windows.mcp.server import reset_server, registered_tool_names
+    reset_server()
+    assert registered_tool_names() == set()
+
+
+def test_mcp_server_built_reflects_singleton_state():
+    """mcp_server_built() is the enforcement gate for batch: True iff a server
+    was built (a filter may be active), False in unit-test/library use. Tracks
+    the singleton lifecycle so batch fails closed only when a real server exists."""
+    from agent_windows.mcp.server import (
+        reset_server, build_server, mcp_server_built,
+    )
+    reset_server()
+    assert mcp_server_built() is False       # no server yet → batch allows all
+    build_server()
+    assert mcp_server_built() is True        # server built → batch enforces
+    reset_server()
+    assert mcp_server_built() is False
+
+
 def test_mcp_serve_forwards_exclude_tools_flag():
     from typer.testing import CliRunner
     from agent_windows.cli.commands import mcp_cmd

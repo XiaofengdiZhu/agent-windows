@@ -386,6 +386,47 @@ def apply_tool_filter(
                  explicit_tools, exclude_tools)
 
 
+def mcp_server_built() -> bool:
+    """True if the memoized MCP singleton exists (a server is/has run).
+
+    Distinguishes "no filter configured" from "filter configured but matched
+    nothing" for the batch tool's enforcement gate: when a real server is built,
+    enforcement is active even if the registry is empty (an over-restrictive
+    ``--tools typo`` should fail CLOSED, not disable enforcement). When no
+    server is built (unit tests, library use), batch allows all. (review #7)
+    """
+    return _mcp is not None
+
+
+def registered_tool_names(mcp: "FastMCP | None" = None) -> set[str]:
+    """Return the set of tool names currently in *mcp*'s registry.
+
+    Defaults to the memoized singleton (``_mcp``). After :func:`apply_tool_filter`
+    has run, this is exactly the **allowed** set — the tools that survived the
+    ``tools``/``exclude_tools`` filter. Used by the ``batch`` tool to enforce the
+    same filter on its sub-commands (review #7): a method excluded at the MCP
+    discovery layer must not be reachable via ``batch`` either. Handles both
+    FastMCP registry shapes, mirroring :func:`apply_tool_filter`.
+    """
+    if mcp is None:
+        mcp = _mcp
+    if mcp is None:
+        return set()
+    tool_mgr = getattr(mcp, "_tool_manager", None)
+    tools_dict = getattr(tool_mgr, "_tools", None)
+    if tools_dict is not None:
+        return set(tools_dict.keys())
+    provider = getattr(mcp, "_local_provider", None)
+    components = getattr(provider, "_components", {})
+    names: set[str] = set()
+    for k in components:
+        if isinstance(k, str) and k.startswith("tool:"):
+            comp = components[k]
+            name = getattr(comp, "name", None) or k.split(":", 1)[1].split("@", 1)[0]
+            names.add(name)
+    return names
+
+
 def build_server() -> FastMCP:
     """Create (once) and return the FastMCP instance with all tools registered."""
     global _mcp

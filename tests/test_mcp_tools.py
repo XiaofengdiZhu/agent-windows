@@ -379,6 +379,87 @@ def test_batch_fn_forwards_shape():
     m.assert_called_once_with("batch", commands=cmds, delay=0.1, stop_on_error=False)
 
 
+# ── batch tool-filter enforcement (review #7) ──────────────────────────
+
+
+def test_batch_fn_allows_all_when_no_server():
+    """No MCP server built (unit tests, library use) → enforcement is a no-op,
+    every method forwards. This is the default path when no mcp serve is running."""
+    cmds = [{"method": "shell"}, {"method": "fs_delete"}]
+    with patch("agent_windows.mcp.server.mcp_server_built", return_value=False), \
+         patch.object(bat, "_call", return_value={"output": "ok"}) as m:
+        bat.batch_fn(commands=cmds)
+    m.assert_called_once_with("batch", commands=cmds, stop_on_error=True, delay=0.0)
+
+
+def _server_with(allowed):
+    """Patch a built MCP server whose post-filter registry is `allowed`."""
+    from contextlib import ExitStack
+    stack = ExitStack()
+    stack.enter_context(patch("agent_windows.mcp.server.mcp_server_built", return_value=True))
+    stack.enter_context(patch("agent_windows.mcp.server.registered_tool_names", return_value=set(allowed)))
+    return stack
+
+
+def test_batch_fn_blocks_excluded_method():
+    """With an MCP filter that excludes 'shell' (it's not in allowed_tools), a
+    batch sub-command calling method 'shell' is blocked before forwarding — the
+    filter can't be bypassed via batch."""
+    cmds = [{"method": "ping"}, {"method": "shell", "params": {}}]
+    with _server_with({"ping", "app_list", "screenshot"}), \
+         patch.object(bat, "_call", return_value={"output": "ok"}) as m:
+        with pytest.raises(ValueError, match="blocked by the MCP tool filter"):
+            bat.batch_fn(commands=cmds)
+    m.assert_not_called()  # nothing forwarded when a command is blocked
+
+
+def test_batch_fn_blocks_only_the_excluded_command():
+    """The error names the offending method(s), so the caller knows which to drop."""
+    cmds = [{"method": "ping"}, {"method": "fs_delete"}, {"method": "shell"}]
+    with _server_with({"ping"}), \
+         patch.object(bat, "_call", return_value={"output": "ok"}):
+        with pytest.raises(ValueError) as ei:
+            bat.batch_fn(commands=cmds)
+    msg = str(ei.value)
+    assert "fs_delete" in msg
+    assert "shell" in msg
+    assert "ping" not in msg  # the allowed method isn't named as blocked
+
+
+def test_batch_fn_maps_renamed_method_for_filter():
+    """Daemon method names that differ from MCP tool names are mapped before the
+    filter check: excluding MCP tool 'ask_vision' blocks daemon method
+    'ask-vision'. Without the map, the hyphen/underscore mismatch would let it
+    through."""
+    cmds = [{"method": "ask-vision", "params": {}}]
+    with _server_with({"ping"}), \
+         patch.object(bat, "_call", return_value={"output": "ok"}) as m:
+        with pytest.raises(ValueError, match="ask-vision"):
+            bat.batch_fn(commands=cmds)
+    m.assert_not_called()
+
+
+def test_batch_fn_renamed_method_allowed_when_not_excluded():
+    """Conversely, when ask_vision IS allowed, the renamed method forwards fine."""
+    cmds = [{"method": "ask-vision"}]
+    with _server_with({"ping", "ask_vision"}), \
+         patch.object(bat, "_call", return_value={"output": "ok"}) as m:
+        bat.batch_fn(commands=cmds)
+    m.assert_called_once_with("batch", commands=cmds, stop_on_error=True, delay=0.0)
+
+
+def test_batch_fn_empty_registry_fails_closed():
+    """An over-restrictive filter (--tools typo) empties the registry. Enforcement
+    must fail CLOSED: block everything, NOT silently allow all. The gate is on
+    whether a server is built, not on whether the allowed set is non-empty."""
+    cmds = [{"method": "ping"}]
+    with _server_with(set()), \
+         patch.object(bat, "_call", return_value={"output": "ok"}) as m:
+        with pytest.raises(ValueError, match="ping"):
+            bat.batch_fn(commands=cmds)
+    m.assert_not_called()
+
+
 def test_multi_select_fn_requires_locs_or_selectors():
     with pytest.raises(ValueError):
         bat.multi_select_fn()
