@@ -267,8 +267,9 @@ def serve(
         os.environ.get("AGENT_WINDOWS_TELEMETRY"),
         telemetry_cfg.get("enabled", False))
     configure(parsed_telemetry)
-    # TLS 文件存在性预检（TODO #21-2）：HTTP 缺文件时在 uvicorn 启动前 fail-fast。
-    # stdio 分支 ssl_* 已置 None → _check_tls_files 的 `if resolved` 守卫跳过（no-op）。
+    # TLS file pre-flight (TODO #21-2): fail fast before uvicorn starts if a
+    # configured cert/key is missing. stdio set ssl_* = None above, so
+    # _check_tls_files' `if resolved` guard makes it a no-op there.
     _check_tls_files(ssl_certfile, ssl_keyfile)
     run(transport=transport, host=host, port=port, debug=debug,
         auth_key=auth_key, ssl_certfile=ssl_certfile, ssl_keyfile=ssl_keyfile,
@@ -290,13 +291,13 @@ def _check_tls_files(ssl_certfile: str | None, ssl_keyfile: str | None) -> None:
     diagnose, instead of surfacing as an opaque uvicorn openssl traceback.
     """
     from agent_windows.utils.config import get_config_path
-    for resolved, label in ((ssl_certfile, "cert"), (ssl_keyfile, "key")):
+    for resolved, label in ((ssl_certfile, "ssl_certfile"), (ssl_keyfile, "ssl_keyfile")):
         if resolved and not Path(resolved).is_file():
             raise typer.BadParameter(
                 f"TLS {label} file not found: {resolved}\n"
                 f"  (configured in {get_config_path()}; set an absolute path "
                 f"or one relative to that file's directory)",
-                param_hint="--ssl-certfile" if label == "cert" else "--ssl-keyfile")
+                param_hint=f"[mcp] {label}")
 
 
 # ── `mcp auth` ──────────────────────────────────────────────────────────

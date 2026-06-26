@@ -812,9 +812,9 @@ agent-windows mcp install          # auto-start the HTTP server at login (Schedu
 agent-windows mcp uninstall        # stop + remove the login auto-start task
 ```
 
-`serve` starts the FastMCP server, which auto-starts the daemon on the first tool call — no separate `daemon start` needed. Defaults come from the `[mcp]` config section; explicit flags override. `auth_key` and TLS only apply to HTTP transports (sse / streamable-http), never stdio.
+`serve` starts the FastMCP server, which auto-starts the daemon on the first tool call — no separate `daemon start` needed. Defaults come from the `[mcp]` config section; explicit flags override. `auth_key` and TLS only apply to HTTP transports (sse / streamable-http), never stdio. Relative `ssl_certfile`/`ssl_keyfile` resolve against the config file's directory (see [TLS path resolution](configuration.md#tls-path-resolution)); a configured file that is missing fails fast before the server starts.
 
-`auth` generates a bearer token (DPAPI-encrypted at rest in `[mcp] auth_key`), optionally a TLS cert, saves them to config, and prints the ready-to-paste MCP client config snippet (stdio / sse / streamable-http). Regenerate with `--force`.
+`auth` generates a bearer token (DPAPI-encrypted at rest in `[mcp] auth_key`), optionally a TLS cert, saves them to config, and prints the ready-to-paste MCP client config snippet (stdio / sse / streamable-http). `--with-tls` writes the generated cert/key as **absolute** paths, so they're portable regardless of launch CWD. Regenerate with `--force`.
 
 | Subcommand | Parameters |
 |------------|------------|

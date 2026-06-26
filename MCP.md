@@ -163,6 +163,8 @@ The printed client snippet already includes the `Authorization: Bearer <key>` he
 
 > **Security:** `auth_key` is **DPAPI-encrypted at rest** (same protection as `vlm.api_key`) and masked in `config show`. TLS keys are written to `~/.agent-windows/` under an owner-only ACL. For stdio none of this applies — there's no network surface.
 
+> **TLS paths:** if you hand-edit `[mcp] ssl_certfile`/`ssl_keyfile` to a relative path, it resolves against the **config file's directory** (so a config under `--config <path>` finds its cert next to itself), not the process CWD. `mcp auth --with-tls` writes absolute paths, so this only matters for hand-edited relative paths. A configured file that's missing makes `mcp serve` fail fast with the resolved path before startup.
+
 ## HTTP security & scaling options
 
 A bare `mcp serve --transport streamable-http --host 0.0.0.0` with no `auth_key` is refused — it would expose the full desktop toolset to the LAN. Set an auth key (`mcp auth`) or pass `--allow-insecure-remote` to opt in. Additional HTTP-only controls (all settable via flag, `AGENT_WINDOWS_*` env var, or `[security]`/`[mcp]`/`[tools]` config; flag > env > config):

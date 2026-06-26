@@ -355,8 +355,11 @@ def build_mcp_config(config: dict) -> MCPConfig:
     mcp = config.get("mcp", {}) or {}
     sec = config.get("security", {}) or {}
     tools = config.get("tools", {}) or {}
-    # TLS cert/key 相对路径相对配置文件目录解析（TODO #21-2），而非进程 CWD。
-    # 绝对/~/空值原样处理。load_config() 返回的原始值不受影响（保 round-trip）。
+    # Resolve TLS cert/key relative paths against the active config file's
+    # directory, NOT the process CWD (TODO #21-2). Absolute/~/empty values
+    # pass through. Must be read here (process start, after any --config
+    # override is applied) so the resolution base follows the override.
+    # load_config()'s returned dict keeps the raw value — round-trip safe.
     config_dir = get_config_path().parent
     return MCPConfig(
         server=ServerConfig(

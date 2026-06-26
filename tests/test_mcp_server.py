@@ -1608,18 +1608,18 @@ def test_mcp_uninstall_deletes_task_and_script(monkeypatch, tmp_path):
 
 
 class TestCheckTlsFiles:
-    """_check_tls_files: HTTP 配置的 cert/key 缺失时 fail-fast。
-    stdio 场景传 None → no-op（不抛）。"""
+    """_check_tls_files: fail fast when a configured HTTP cert/key is missing.
+    stdio passes None → no-op (no raise)."""
 
     def test_both_present_no_raise(self, tmp_path):
         from agent_windows.cli.commands import mcp_cmd
         cert = tmp_path / "c.pem"; cert.write_text("c", encoding="utf-8")
         key = tmp_path / "k.pem"; key.write_text("k", encoding="utf-8")
-        # 不抛即通过
+        # No raise = pass
         mcp_cmd._check_tls_files(str(cert), str(key))
 
     def test_none_args_no_raise(self):
-        # stdio 场景：ssl_certfile/ssl_keyfile 为 None
+        # stdio case: ssl_certfile/ssl_keyfile are None
         from agent_windows.cli.commands import mcp_cmd
         mcp_cmd._check_tls_files(None, None)
 
@@ -1631,6 +1631,10 @@ class TestCheckTlsFiles:
         with pytest.raises(typer.BadParameter) as exc_info:
             mcp_cmd._check_tls_files(str(missing), str(key))
         assert str(missing) in str(exc_info.value)
+        # param_hint must point at the config key, NOT a phantom --ssl-certfile
+        # CLI flag (there is none) — guards the actionable-message guarantee.
+        assert "ssl_certfile" in str(exc_info.value)
+        assert "--ssl" not in str(exc_info.value)
 
     def test_missing_key_raises(self, tmp_path):
         import typer
@@ -1640,3 +1644,4 @@ class TestCheckTlsFiles:
         with pytest.raises(typer.BadParameter) as exc_info:
             mcp_cmd._check_tls_files(str(cert), str(missing))
         assert str(missing) in str(exc_info.value)
+        assert "ssl_keyfile" in str(exc_info.value)
