@@ -24,3 +24,16 @@ updates:
         patterns: ["*"]
     commit-message:
       prefix: "ci(deps)"
+
+  # Rust dependencies for the native launcher (src/launcher/Cargo.toml +
+  # Cargo.lock). The launcher is the user-facing entry binary, so its deps
+  # (serde / serde_json / windows-sys) deserve CVE/update PRs too.
+  - package-ecosystem: "cargo"
+    directory: "/src/launcher"
+    schedule:
+      interval: "weekly"
+    groups:
+      rust-deps:
+        patterns: ["*"]
+    commit-message:
+      prefix: "chore(deps)"
