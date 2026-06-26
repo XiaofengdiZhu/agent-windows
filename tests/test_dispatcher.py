@@ -15,7 +15,7 @@ class TestDispatch:
         ctx = MagicMock()
         ctx.obj = {"no_daemon": False, "debug": False, "format": "text"}
         result = dispatch("ping", {}, ctx=ctx)
-        mock_call.assert_called_once_with("ping", {}, debug=False)
+        mock_call.assert_called_once_with("ping", {})
         assert result == {"output": "ok"}
 
     @patch("agent_windows.daemon.router.HANDLERS", {"ping": lambda p: {"status": "ok"}})
@@ -74,7 +74,7 @@ class TestDispatch:
         ctx.obj = {"no_daemon": False, "debug": True, "format": "json"}
         params = {"x": 100, "y": 200}
         result = dispatch("click", params, ctx=ctx)
-        mock_call.assert_called_once_with("click", params, debug=True)
+        mock_call.assert_called_once_with("click", params)
         assert result == {"status": "ok"}
 
     @patch("agent_windows.cli.dispatcher.call_daemon")
@@ -85,7 +85,7 @@ class TestDispatch:
         ctx = MagicMock()
         ctx.obj = {"no_daemon": False, "debug": False, "format": "text"}
         dispatch("ping", None, ctx=ctx)
-        mock_call.assert_called_once_with("ping", None, debug=False)
+        mock_call.assert_called_once_with("ping", None)
 
     @patch("agent_windows.cli.dispatcher.call_daemon")
     def test_no_ctx_defaults_to_daemon_mode(self, mock_call):
@@ -93,7 +93,7 @@ class TestDispatch:
         from agent_windows.cli.dispatcher import dispatch
         mock_call.return_value = {"status": "ok"}
         result = dispatch("ping")
-        mock_call.assert_called_once_with("ping", None, debug=False)
+        mock_call.assert_called_once_with("ping", None)
         assert result == {"status": "ok"}
 
     @patch("agent_windows.cli.dispatcher.call_daemon")
@@ -104,7 +104,7 @@ class TestDispatch:
         ctx = MagicMock()
         ctx.obj = None
         result = dispatch("ping", ctx=ctx)
-        mock_call.assert_called_once_with("ping", None, debug=False)
+        mock_call.assert_called_once_with("ping", None)
 
 
 class TestPrintResult:

@@ -57,18 +57,16 @@ def dispatch(
     Args:
         method: Command method name (e.g. "screenshot", "click").
         params: Command parameters.
-        ctx: Typer context (for --no-daemon, --format, --debug flags).
+        ctx: Typer context (for --no-daemon, --format flags).
 
     Returns:
         The result dict from the daemon.
     """
     no_daemon = False
-    debug = False
     fmt = "text"
 
     if ctx and ctx.obj:
         no_daemon = ctx.obj.get("no_daemon", False)
-        debug = ctx.obj.get("debug", False)
         fmt = ctx.obj.get("format", "text")
 
     _ensure_telemetry_configured()
@@ -85,7 +83,7 @@ def dispatch(
     try:
         if no_daemon:
             return _dispatch_no_daemon(method, params)
-        return call_daemon(method, params, debug=debug)
+        return call_daemon(method, params)
     except BaseException as exc:
         success = False
         error_type = type(exc).__name__

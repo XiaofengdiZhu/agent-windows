@@ -29,6 +29,12 @@ def global_options(
     if config:
         from agent_windows.utils.config import set_config_override
         set_config_override(config)
+    # Debug mode (TODO #21-3): set the env var once at the entry point. The
+    # spawned daemon inherits it automatically (no --debug threading through
+    # the IPC layers), and any module reads it via is_debug().
+    if debug:
+        from agent_windows.utils.debug import enable_debug
+        enable_debug()
     ctx.ensure_object(dict)
     ctx.obj["no_daemon"] = no_daemon
     ctx.obj["format"] = format
