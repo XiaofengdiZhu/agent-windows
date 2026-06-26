@@ -139,3 +139,50 @@ class TestBuildMcpConfig:
         view = build_mcp_config({})
         assert isinstance(view.security.ip_allowlist, list)
         assert isinstance(view.tools.include, list)
+
+
+class TestBuildMcpConfigTlsResolution:
+    """build_mcp_config 把 ssl_certfile/ssl_keyfile 相对值相对配置文件目录解析。
+    绝对路径原样、空值保持空。模块全局 override 状态——每个测试复位。"""
+
+    def teardown_method(self, _method):
+        from agent_windows.utils import config as cfg
+        cfg.set_config_override(None)
+
+    def test_relative_tls_resolved_against_config_dir(self, tmp_path, monkeypatch):
+        from agent_windows.utils.config import build_mcp_config
+        from agent_windows.utils import config as cfg
+        # 配置文件在 tmp_path/cfg.toml → 父目录 tmp_path。相对 "certs/c.pem"
+        # 应解析为 tmp_path/certs/c.pem。
+        monkeypatch.setattr(cfg, "get_config_path", lambda: tmp_path / "cfg.toml")
+        view = build_mcp_config({"mcp": {"ssl_certfile": "certs/c.pem",
+                                         "ssl_keyfile": "certs/k.pem"}})
+        assert view.server.ssl_certfile == str((tmp_path / "certs" / "c.pem").resolve())
+        assert view.server.ssl_keyfile == str((tmp_path / "certs" / "k.pem").resolve())
+
+    def test_absolute_tls_not_mangled(self, tmp_path, monkeypatch):
+        from agent_windows.utils.config import build_mcp_config
+        from agent_windows.utils import config as cfg
+        monkeypatch.setattr(cfg, "get_config_path", lambda: tmp_path / "cfg.toml")
+        abs_cert = tmp_path / "abs-cert.pem"
+        abs_key = tmp_path / "abs-key.pem"
+        view = build_mcp_config({"mcp": {"ssl_certfile": str(abs_cert),
+                                         "ssl_keyfile": str(abs_key)}})
+        assert view.server.ssl_certfile == str(abs_cert.resolve())
+        assert view.server.ssl_keyfile == str(abs_key.resolve())
+
+    def test_default_empty_tls_stays_empty(self, monkeypatch, tmp_path):
+        from agent_windows.utils.config import build_mcp_config
+        from agent_windows.utils import config as cfg
+        monkeypatch.setattr(cfg, "get_config_path", lambda: tmp_path / "cfg.toml")
+        view = build_mcp_config({})
+        assert view.server.ssl_certfile == ""
+        assert view.server.ssl_keyfile == ""
+
+    def test_resolution_honors_config_override(self, tmp_path, monkeypatch):
+        from agent_windows.utils.config import build_mcp_config
+        from agent_windows.utils import config as cfg
+        # override 到 tmp_path/alt.toml → 解析基准应是 tmp_path
+        cfg.set_config_override(str(tmp_path / "alt.toml"))
+        view = build_mcp_config({"mcp": {"ssl_certfile": "c.pem"}})
+        assert view.server.ssl_certfile == str((tmp_path / "c.pem").resolve())

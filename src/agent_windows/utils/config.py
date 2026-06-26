@@ -355,14 +355,19 @@ def build_mcp_config(config: dict) -> MCPConfig:
     mcp = config.get("mcp", {}) or {}
     sec = config.get("security", {}) or {}
     tools = config.get("tools", {}) or {}
+    # TLS cert/key 相对路径相对配置文件目录解析（TODO #21-2），而非进程 CWD。
+    # 绝对/~/空值原样处理。load_config() 返回的原始值不受影响（保 round-trip）。
+    config_dir = get_config_path().parent
     return MCPConfig(
         server=ServerConfig(
             transport=mcp.get("transport", "stdio"),
             host=mcp.get("host", "127.0.0.1"),
             port=mcp.get("port", 8000),
             auth_key=mcp.get("auth_key", ""),
-            ssl_certfile=mcp.get("ssl_certfile", ""),
-            ssl_keyfile=mcp.get("ssl_keyfile", ""),
+            ssl_certfile=_resolve_config_relative(
+                mcp.get("ssl_certfile", ""), config_dir),
+            ssl_keyfile=_resolve_config_relative(
+                mcp.get("ssl_keyfile", ""), config_dir),
             allow_insecure_remote=mcp.get("allow_insecure_remote", False),
             stateless_http=mcp.get("stateless_http", False),
         ),
