@@ -250,6 +250,11 @@ def serve(
     if not parsed_stateless:
         parsed_stateless = view.server.stateless_http
 
+    # Debug mode (TODO #21-3): set the env var once at the entry point; run()
+    # and UIA modules read it via is_debug(). No boolean threading into run().
+    if debug:
+        from agent_windows.utils.debug import enable_debug
+        enable_debug()
     from agent_windows.mcp import run
     # DNS-rebinding protection: compute a Host-header allowlist from the bind
     # address (loopback → localhost/127.0.0.1/[::1]; named host → [host];
@@ -271,7 +276,7 @@ def serve(
     # configured cert/key is missing. stdio set ssl_* = None above, so
     # _check_tls_files' `if resolved` guard makes it a no-op there.
     _check_tls_files(ssl_certfile, ssl_keyfile)
-    run(transport=transport, host=host, port=port, debug=debug,
+    run(transport=transport, host=host, port=port,
         auth_key=auth_key, ssl_certfile=ssl_certfile, ssl_keyfile=ssl_keyfile,
         ip_allowlist=parsed_allowlist, cors_origins=parsed_cors,
         tools=parsed_tools, exclude_tools=parsed_exclude,

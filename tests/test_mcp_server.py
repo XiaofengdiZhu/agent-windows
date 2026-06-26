@@ -186,7 +186,7 @@ def test_mcp_serve_delegates_explicit_flags_overriding_config():
                                 "--host", "0.0.0.0", "--port", "9000", "--debug"])
     assert result.exit_code == 0, result.output
     mock_run.assert_called_once_with(transport="streamable-http", host="0.0.0.0",
-                                     port=9000, debug=True,
+                                     port=9000,
                                      auth_key="cfgkey", ssl_certfile=None, ssl_keyfile=None,
                                      ip_allowlist=None, cors_origins=None,
                                      tools=None, exclude_tools=None, stateless_http=False,
@@ -216,7 +216,7 @@ def test_mcp_serve_defaults_come_from_config(monkeypatch, tmp_path):
                                             "ssl_keyfile": "k.pem"}}):
         runner.invoke(mcp_cmd.app, ["serve"])
     mock_run.assert_called_once_with(transport="streamable-http", host="1.2.3.4",
-                                     port=7000, debug=False, auth_key="k",
+                                     port=7000, auth_key="k",
                                      ssl_certfile=str((tmp_path / "c.pem").resolve()),
                                      ssl_keyfile=str((tmp_path / "k.pem").resolve()),
                                      ip_allowlist=None, cors_origins=None,
@@ -237,7 +237,7 @@ def test_mcp_serve_stdio_strips_auth_and_ssl():
                                             "ssl_keyfile": "k.pem"}}):
         runner.invoke(mcp_cmd.app, ["serve", "--transport", "stdio"])
     mock_run.assert_called_once_with(transport="stdio", host="127.0.0.1",
-                                     port=8000, debug=False,
+                                     port=8000,
                                      auth_key=None, ssl_certfile=None, ssl_keyfile=None,
                                      ip_allowlist=None, cors_origins=None,
                                      tools=None, exclude_tools=None, stateless_http=False,

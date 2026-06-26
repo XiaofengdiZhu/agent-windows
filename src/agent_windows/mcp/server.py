@@ -406,7 +406,6 @@ def run(
     transport: str = "stdio",
     host: str = "127.0.0.1",
     port: int = 8000,
-    debug: bool = False,
     auth_key: str | None = None,
     ssl_certfile: str | None = None,
     ssl_keyfile: str | None = None,
@@ -463,10 +462,11 @@ def run(
             f"transport must be one of {VALID_TRANSPORTS}, got {transport!r}"
         )
 
-    if debug:
-        logging.basicConfig(level=logging.DEBUG)
-        for name in ("fastmcp", "uvicorn", "uvicorn.error", "uvicorn.access"):
-            logging.getLogger(name).setLevel(logging.DEBUG)
+    # Debug logging (TODO #21-3): reads the global flag the entry point set
+    # via enable_debug(); no-op unless --debug was given. Consolidates what was
+    # inline logging.basicConfig here + honors the --no-daemon path too.
+    from agent_windows.utils.debug import configure_logging
+    configure_logging()
 
     # FastMCP/uvicorn want the Windows selector loop on Windows.
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
