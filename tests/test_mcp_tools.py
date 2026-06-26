@@ -90,10 +90,35 @@ def test_screenshot_fn_forwards_params_and_returns_image_list():
     # None — _call itself does, and here _call is mocked). Assert the method +
     # the explicit args; monitor/bbox/selector are passed through verbatim.
     # scale/max_width/max_height default to None (TODO #15b); _call strips them.
+    # use_annotation/width_reference_line/height_reference_line (TODO #14) also
+    # default to None and are forwarded so _call can strip them.
     m.assert_called_once_with("screenshot", output="C:\\s.png", monitor=0,
                               bbox=None, selector=None,
-                              scale=None, max_width=None, max_height=None)
+                              scale=None, max_width=None, max_height=None,
+                              use_annotation=None,
+                              width_reference_line=None,
+                              height_reference_line=None)
     # FastMCP tools that return an image return a list [text, Image]
+    assert isinstance(out, list)
+    assert out[0].startswith("## Screenshot")
+
+
+def test_screenshot_fn_forwards_annotation_params():
+    """use_annotation + grid params are forwarded verbatim to _call. (TODO #14)
+    Daemon is mocked — this verifies the wiring, not the box drawing."""
+    result = {"output": "## Screenshot\nPath: C:\\s.png\nAnnotated: 3/3",
+              "path": "C:\\s.png", "width": 1, "height": 1, "coord_scale": 1.0}
+    with patch.object(obs, "_call", return_value=result) as m, \
+         patch("pathlib.Path.read_bytes", return_value=_PNG):
+        out = obs.screenshot_fn(use_annotation=True,
+                                width_reference_line=4,
+                                height_reference_line=3)
+    m.assert_called_once_with("screenshot", output=None, monitor=-1,
+                              bbox=None, selector=None,
+                              scale=None, max_width=None, max_height=None,
+                              use_annotation=True,
+                              width_reference_line=4,
+                              height_reference_line=3)
     assert isinstance(out, list)
     assert out[0].startswith("## Screenshot")
 

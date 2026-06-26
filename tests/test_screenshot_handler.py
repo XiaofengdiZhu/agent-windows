@@ -158,6 +158,32 @@ class TestScreenshotAnnotation:
                 HANDLERS["screenshot"]({"use_annotation": True,
                                         "width_reference_line": -1})
 
+    def test_string_true_enables_annotation(self, tmp_path):
+        """Some MCP clients serialize bools as the string "true"; it must enable
+        annotation just like a real bool True. (Mirrors _call._as_bool.)"""
+        from agent_windows.daemon.router import HANDLERS
+
+        with self._patch_capture(), \
+                patch("agent_windows.core.tree.get_tree_snapshot",
+                      return_value={"interactive_elements": []}), \
+                patch("agent_windows.utils.config.load_config",
+                      return_value={}), \
+                patch("agent_windows.core.screenshot.get_virtual_screen_rect",
+                      return_value=(0, 0, 100, 100)), \
+                self._patch_annotate(tmp_path)[0] as m_ann:
+            HANDLERS["screenshot"]({"use_annotation": "true"})
+        m_ann.assert_called_once()
+
+    def test_string_false_does_not_enable_annotation(self, tmp_path):
+        """A stringified "false" must NOT enable annotation — raw bool("false")
+        would be True, which is the bug this guards against."""
+        from agent_windows.daemon.router import HANDLERS
+
+        with self._patch_capture(), \
+                patch("agent_windows.core.screenshot.annotate_screenshot") as m_ann:
+            HANDLERS["screenshot"]({"use_annotation": "false"})
+        m_ann.assert_not_called()
+
     def test_bbox_overridden_with_warning(self, tmp_path):
         """Annotation needs the full screen; a --bbox/--selector is dropped with a
         warning rather than misaligning the boxes on a cropped capture."""

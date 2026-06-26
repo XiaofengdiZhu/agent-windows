@@ -59,6 +59,9 @@ def screenshot_fn(
     scale: float | None = None,
     max_width: int | None = None,
     max_height: int | None = None,
+    use_annotation: bool | str | None = None,
+    width_reference_line: int | None = None,
+    height_reference_line: int | None = None,
 ) -> list:
     """Capture a screenshot. Returns the metadata text plus the image.
 
@@ -68,11 +71,23 @@ def screenshot_fn(
     ``scale``/``max_width``/``max_height`` (TODO #15b) override the config
     defaults for this capture only — pass ``scale=0.5`` for a quick low-res
     shot. Omit to use the configured values.
+
+    ``use_annotation`` (TODO #14) overlays a numbered ``@eN`` box per
+    interactive element (matching the snapshot's refs) on the capture, plus an
+    optional coordinate grid. Annotation boxes use virtual-desktop screen
+    coordinates, so it requires a FULL virtual-screen capture — any
+    bbox/selector/monitor is ignored (the daemon warns inline). Omit/False for
+    a clean capture. ``width_reference_line``/``height_reference_line`` draw
+    that many vertical/horizontal grid lines (0 = none); only honored when
+    annotating.
     """
     try:
         result = _call("screenshot", output=output, monitor=monitor,
                        bbox=bbox, selector=selector,
-                       scale=scale, max_width=max_width, max_height=max_height)
+                       scale=scale, max_width=max_width, max_height=max_height,
+                       use_annotation=use_annotation,
+                       width_reference_line=width_reference_line,
+                       height_reference_line=height_reference_line)
         return _image_from_result(result, "path")
     except (RuntimeError, OSError) as e:
         # RuntimeError carries the daemon's JSON-RPC error code; OSError covers
@@ -172,7 +187,10 @@ def register(mcp) -> None:
         "Keywords: screenshot, screen capture, see screen, image, take picture. "
         "Returns the image plus metadata (path, size, region, backend, "
         "coordinate_scale when downscaled). Use monitor=-1 for full virtual "
-        "desktop, or selector=@eN to crop to a UI element's bounding box."
+        "desktop, or selector=@eN to crop to a UI element's bounding box. "
+        "Set use_annotation=True to overlay a numbered @eN box on each "
+        "interactive element (requires full screen; bbox/selector/monitor "
+        "ignored) — useful for confirming a target before clicking."
     ), annotations=ToolAnnotations(title="Screenshot", readOnlyHint=True,
                                    idempotentHint=True, openWorldHint=False))
     def _screenshot(output: str | None = None, monitor: int = -1,
@@ -188,9 +206,23 @@ def register(mcp) -> None:
                     max_height: Annotated[int | None, Field(
                         description="Optional max height in px for this capture only; downscales (aspect-preserving) if the image is taller. Omit to use the config default.",
                         ge=0,
+                    )] = None,
+                    use_annotation: Annotated[bool | str | None, Field(
+                        description="Overlay a numbered @eN box on each interactive element (matching snapshot refs). Requires full screen — bbox/selector/monitor are ignored. Pair with width/height_reference_line for a coordinate grid.",
+                    )] = None,
+                    width_reference_line: Annotated[int | None, Field(
+                        description="With use_annotation: draw this many vertical reference lines (X% labels). 0 = none.",
+                        ge=0,
+                    )] = None,
+                    height_reference_line: Annotated[int | None, Field(
+                        description="With use_annotation: draw this many horizontal reference lines (Y% labels). 0 = none.",
+                        ge=0,
                     )] = None) -> list:
         return screenshot_fn(output=output, monitor=monitor, bbox=bbox, selector=selector,
-                             scale=scale, max_width=max_width, max_height=max_height)
+                             scale=scale, max_width=max_width, max_height=max_height,
+                             use_annotation=use_annotation,
+                             width_reference_line=width_reference_line,
+                             height_reference_line=height_reference_line)
 
     @mcp.tool(name="snapshot", description=(
         "Return a semantic snapshot of the UIA accessibility tree: focused "

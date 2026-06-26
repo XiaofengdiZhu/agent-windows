@@ -55,10 +55,18 @@ def _screenshot(params: dict) -> dict[str, Any]:
     # backend chain falls through to mss/pillow, which DO use virtual-screen
     # coords. (Single-monitor setups still capture correctly.) Annotation is
     # checked BEFORE the normal capture so only one capture happens.
+    #
+    # use_annotation may arrive as a string ("true"/"false") — some MCP clients
+    # serialize bool params as strings. Raw bool("false") is True, so coerce via
+    # the same truthiness rule the MCP layer uses (_call._as_bool) rather than
+    # bool(), else a stringified "false" would wrongly enable annotation.
     annotate_warn = ""
     annotation_fullscreen = False
     vscreen: tuple | None = None
-    do_annotate = bool(params.get("use_annotation"))
+    raw_annotate = params.get("use_annotation")
+    do_annotate = raw_annotate is True or (
+        isinstance(raw_annotate, str) and raw_annotate.lower() == "true"
+    )
     if do_annotate:
         if bbox or selector or monitor >= 0:
             annotate_warn = " [annotation requires full screen; bbox/selector/monitor ignored]"
@@ -162,7 +170,7 @@ def _screenshot(params: dict) -> dict[str, Any]:
         f"Path: {path}",
         f"Size: {image.width}x{image.height}{selector_warn}{annotate_warn}",
     ]
-    if params.get("use_annotation"):
+    if do_annotate:
         # Count boxes actually drawable (elements with a bbox); off-image ones
         # are skipped by annotate_screenshot, but the @eN numbering is unchanged.
         drawn = sum(1 for e in elements if getattr(e, "bbox", None))
