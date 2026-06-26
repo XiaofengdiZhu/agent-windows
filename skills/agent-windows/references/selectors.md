@@ -39,14 +39,14 @@ Desktop
     └─ ListItem "selectors.md" (361,450,1711,498) [interactive]
 
 ## Interactive Elements
-| Ref | Type | Name | Position | State |
-|-----|------|------|----------|-------|
-| @e1 | Button | 最小化 | (2460,114,2550,208) |  |
-| @e2 | Button | 最大化 | (2550,114,2642,208) |  |
-| @e3 | Button | 关闭 | (2642,114,2734,208) |  |
-| @e4 | Document | ZCode | (336,112,2736,1712) |  |
-| @e5 | Button | 共享 | (2503,848,2647,906) |  |
-| @e6 | Button | 属性 | (2503,1228,2647,1286) |  |
+| Ref | Type | Action | Name | Position | State |
+|-----|------|--------|------|----------|-------|
+| @e1 | Button | click | 最小化 | (2460,114,2550,208) |  |
+| @e2 | Button | click | 最大化 | (2550,114,2642,208) |  |
+| @e3 | Button | click | 关闭 | (2642,114,2734,208) |  |
+| @e4 | Document | scroll | ZCode | (336,112,2736,1712) |  |
+| @e5 | Button | click | 共享 | (2503,848,2647,906) |  |
+| @e6 | Button | click | 属性 | (2503,1228,2647,1286) |  |
 ```
 
 ### Section Breakdown
@@ -64,9 +64,10 @@ Desktop
 **Interactive Elements Table**: The primary targeting reference. Each row has:
 - `@eN` ref for addressing
 - Control type
+- Action — the verb(s) the element supports (`click`/`fill`/`toggle`/`select`/`slide`/`scroll`/`expand`; multiple joined with `/`). Tells you what to *do* before you act.
 - Element name (truncated to 40 chars)
 - Position as `(left, top, right, bottom)` — **these are pixel coordinates**
-- State flags (focused, disabled)
+- State flags (focused, disabled) plus richer attributes (toggle_state, value, scrollable…)
 
 ## From @eN to Coordinates
 
@@ -92,7 +93,7 @@ To act on element `@e3` at a specific point:
 **Example** (using the real snapshot above):
 
 ```
-| @e5 | Button | 共享 | (2503,848,2647,906) |  |
+| @e5 | Button | click | 共享 | (2503,848,2647,906) |  |
 ```
 
 Center: `cx = (2503+2647)//2 = 2575`, `cy = (848+906)//2 = 877`.

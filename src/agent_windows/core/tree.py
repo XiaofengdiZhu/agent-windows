@@ -1043,6 +1043,63 @@ _VALUE_TYPES = {"EditControl", "TextBoxControl", "DocumentControl"}
 # Controls exposing a numeric range (sliders, spinners).
 _RANGE_TYPES = {"SliderControl", "SpinnerControl"}
 
+# Control type → the primary action verb the agent should use on it. Extends the
+# reference's _ACTION_MAP (tree/views.py) — the reference only covers
+# edit/checkbox/combobox/slider/radio/document; this adds TextBoxControl (fill),
+# ListItemControl/TreeItemControl/TabItemControl (select),
+# SpinnerControl/ScrollBarControl (slide) and keys everything to this project's
+# XxxControl names (the lowercased
+# "check box" form in the reference doesn't match what UIA returns here). Verbs
+# line up with the MCP tools the agent actually has: click→click, fill→type,
+# toggle→click a checkbox, select→click a radio/list item,
+# slide→drag the thumb on a range control (Slider/Spinner/ScrollBar all expose
+# RangeValuePattern), scroll→scroll, expand→expand/collapse. Anything not listed
+# (Button, MenuItem, Hyperlink, …) defaults to click. (TODO #5)
+_ACTION_MAP: dict[str, str] = {
+    "EditControl": "fill",
+    "TextBoxControl": "fill",
+    "CheckBoxControl": "toggle",
+    "ComboBoxControl": "select",
+    "RadioButtonControl": "select",
+    "ListItemControl": "select",
+    "TreeItemControl": "select",
+    "TabItemControl": "select",
+    "SliderControl": "slide",
+    "SpinnerControl": "slide",
+    "ScrollBarControl": "slide",
+    "DocumentControl": "scroll",
+}
+
+
+def _action_for(control_type: str, metadata: dict[str, Any] | None = None) -> str:
+    """Return the action verb(s) an element supports, for the Action column.
+
+    Starts from the control-type map, then overlays property-driven actions read
+    from ``metadata`` (computed in _collect_rich_metadata) — these are what let a
+    *promoted* scrollable/expandable container (Pane/Group, not in the
+    control-type map) still get a meaningful verb. Multiple verbs join with ``/``
+    (e.g. a ComboBox exposing expand state is ``select/expand``; a container that
+    both scrolls and expands is ``scroll/expand``). ``click`` is the fallback only
+    when no type verb AND no scroll/expand metadata apply — so a promoted
+    scrollable pane reports ``scroll`` (its real action), not the misleading
+    ``click/scroll``. Pure function — no COM, safe to unit-test directly. (TODO #5)
+    """
+    verbs: list[str] = []
+    base = _ACTION_MAP.get(control_type)
+    if base:
+        verbs.append(base)
+    # Property-driven actions apply regardless of control type — a scrollable
+    # Pane or an expandable Group gets scroll/expand even though "PaneControl"
+    # isn't in _ACTION_MAP.
+    if metadata:
+        if "scrollable" in metadata and "scroll" not in verbs:
+            verbs.append("scroll")
+        if "expand_collapse_state" in metadata and "expand" not in verbs:
+            verbs.append("expand")
+    if not verbs:
+        verbs.append("click")
+    return "/".join(verbs)
+
 
 def _collect_rich_metadata(node, control_type: str) -> dict[str, Any]:
     """Collect richer element attributes into the metadata dict. (TODO #15)
@@ -1295,12 +1352,17 @@ def render_snapshot(data: dict[str, Any]) -> str:
     elements = data.get("interactive_elements", [])
     if elements:
         parts.append("## Interactive Elements")
-        parts.append("| Ref | Type | Name | Window | Position | State |")
-        parts.append("|-----|------|------|---------|----------|-------|")
+        parts.append("| Ref | Type | Action | Name | Window | Position | State |")
+        parts.append("|-----|------|--------|------|---------|----------|-------|")
         for i, el in enumerate(elements, 1):
             orig_idx = el.metadata.get("_orig_idx") if el.metadata else None
             ref = f"@e{orig_idx}" if orig_idx else f"@e{i}"
             type_name = el.control_type.replace("Control", "")
+            # Action verb(s) this element supports (TODO #5): tells the agent
+            # whether @eN is click/fill/toggle/select/slide/scroll/expand — derived
+            # from control_type + metadata. Kept separate from State so "what to
+            # do" isn't diluted by "current state" (toggle_state, value, …).
+            action = _action_for(el.control_type, el.metadata)
             name = el.name[:40] if el.name else ""
             # Truncate the owning window title like the Windows table does, so a
             # long title doesn't blow out the row width. Empty when the element
@@ -1330,7 +1392,7 @@ def render_snapshot(data: dict[str, Any]) -> str:
                         raw = raw[:27] + "..."
                     states.append(f"{key}:{raw.replace('|', '\\|')}")
             state_str = ", ".join(states)
-            parts.append(f"| {ref} | {type_name} | {name} | {window_name} | {pos} | {state_str} |")
+            parts.append(f"| {ref} | {type_name} | {action} | {name} | {window_name} | {pos} | {state_str} |")
         parts.append("")
 
     return "\n".join(parts)

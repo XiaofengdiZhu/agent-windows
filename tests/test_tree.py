@@ -1421,3 +1421,138 @@ class TestRichMetadata:
         assert el.metadata["is_selected"] is True
 
 
+# ── element action hints (TODO #5) ──────────────────────────────────
+
+
+class TestActionFor:
+    """_action_for maps control_type (+ metadata) to the action verb(s) an
+    element supports. Pure function — no COM, no traversal — so each branch is
+    tested directly. Mirrors the reference _ACTION_MAP but keyed to this
+    project's XxxControl names."""
+
+    def test_fill_for_text_inputs(self):
+        from agent_windows.core.tree import _action_for
+        assert _action_for("EditControl") == "fill"
+        assert _action_for("TextBoxControl") == "fill"
+
+    def test_toggle_for_checkbox(self):
+        from agent_windows.core.tree import _action_for
+        assert _action_for("CheckBoxControl") == "toggle"
+
+    def test_select_for_choice_items(self):
+        from agent_windows.core.tree import _action_for
+        for ct in ("ComboBoxControl", "RadioButtonControl",
+                   "ListItemControl", "TreeItemControl", "TabItemControl"):
+            assert _action_for(ct) == "select", ct
+
+    def test_slide_for_range_controls(self):
+        """Slider/Spinner/ScrollBar all expose RangeValuePattern, so they share
+        the slide verb (drag the thumb) rather than falling to click."""
+        from agent_windows.core.tree import _action_for
+        assert _action_for("SliderControl") == "slide"
+        assert _action_for("SpinnerControl") == "slide"
+        assert _action_for("ScrollBarControl") == "slide"
+
+    def test_scroll_for_document(self):
+        from agent_windows.core.tree import _action_for
+        assert _action_for("DocumentControl") == "scroll"
+
+    def test_click_fallback_for_unmapped_types(self):
+        """Anything not in the map (Button, MenuItem, Hyperlink, Pane, …)
+        defaults to click — the universal action."""
+        from agent_windows.core.tree import _action_for
+        for ct in ("ButtonControl", "MenuItemControl", "HyperlinkControl",
+                   "PaneControl", "", "SomeUnknownControl"):
+            assert _action_for(ct) == "click", ct
+
+    def test_scrollable_metadata_overlays_scroll(self):
+        """A promoted scrollable Pane isn't in _ACTION_MAP, so its ONLY action
+        is the property-driven scroll — no misleading 'click' prefix, since you
+        scroll a pane, you don't click it."""
+        from agent_windows.core.tree import _action_for
+        assert _action_for("PaneControl", {"scrollable": "v"}) == "scroll"
+
+    def test_expandable_metadata_overlays_expand(self):
+        """A promoted expandable Group gets expand via metadata, not control
+        type — its only action is expand."""
+        from agent_windows.core.tree import _action_for
+        assert _action_for("GroupControl",
+                           {"expand_collapse_state": "collapsed"}) == "expand"
+
+    def test_scrollable_document_gets_single_scroll(self):
+        """DocumentControl already maps to scroll; a scrollable metadata key
+        must NOT duplicate it into scroll/scroll."""
+        from agent_windows.core.tree import _action_for
+        assert _action_for("DocumentControl", {"scrollable": "v"}) == "scroll"
+
+    def test_combo_with_expand_state_is_select_expand(self):
+        """A ComboBox is select by type; when it also exposes
+        expand_collapse_state (most do), expand is appended → select/expand."""
+        from agent_windows.core.tree import _action_for
+        assert _action_for("ComboBoxControl",
+                           {"expand_collapse_state": "collapsed"}) == "select/expand"
+
+    def test_scrollable_and_expandable_yields_two_verbs(self):
+        """A container that both scrolls and expands (e.g. a scrollable
+        expandable Group) gets scroll/expand — both real actions, no phantom
+        click (there's nothing to click)."""
+        from agent_windows.core.tree import _action_for
+        assert _action_for("GroupControl",
+                           {"scrollable": "v",
+                            "expand_collapse_state": "expanded"}) == "scroll/expand"
+
+    def test_metadata_without_relevant_keys_uses_type_only(self):
+        """toggle_state/value/is_selected don't change the verb — only
+        scrollable/expand_collapse_state do. A CheckBox with toggle_state stays
+        just 'toggle' (no phantom expand/scroll)."""
+        from agent_windows.core.tree import _action_for
+        assert _action_for("CheckBoxControl",
+                           {"toggle_state": "on"}) == "toggle"
+
+
+class TestActionColumnRender:
+    """render_snapshot emits an Action column between Type and Name with the
+    verb(s) from _action_for."""
+
+    def _render(self, elements):
+        from agent_windows.core.tree import render_snapshot
+        return render_snapshot({
+            "cursor": (0, 0), "resolution": (100, 100), "displays": 1,
+            "interactive_elements": elements,
+        })
+
+    def test_action_column_header_present(self):
+        rendered = self._render([ElementInfo(
+            name="OK", control_type="ButtonControl",
+            bbox=BoundingBox(0, 0, 10, 10), is_interactive=True)])
+        assert "| Ref | Type | Action | Name |" in rendered
+
+    def test_button_row_shows_click(self):
+        rendered = self._render([ElementInfo(
+            name="OK", control_type="ButtonControl",
+            bbox=BoundingBox(0, 0, 10, 10), is_interactive=True)])
+        row = [ln for ln in rendered.splitlines() if "@e1" in ln][0]
+        assert "| click |" in row
+
+    def test_combo_with_expand_shows_select_expand(self):
+        rendered = self._render([ElementInfo(
+            name="Font", control_type="ComboBoxControl",
+            bbox=BoundingBox(0, 0, 10, 10), is_interactive=True,
+            metadata={"expand_collapse_state": "collapsed"})])
+        row = [ln for ln in rendered.splitlines() if "@e1" in ln][0]
+        assert "| select/expand |" in row
+
+    def test_promoted_scrollable_pane_shows_scroll(self):
+        """A scrollable Pane promoted to interactive gets just 'scroll' — proving
+        the metadata overlay reaches the rendered column, not just the helper."""
+        rendered = self._render([ElementInfo(
+            name="Content", control_type="PaneControl",
+            bbox=BoundingBox(0, 0, 10, 10), is_interactive=True,
+            metadata={"scrollable": "v", "scroll_pct": "v:42%"})])
+        row = [ln for ln in rendered.splitlines() if "@e1" in ln][0]
+        assert "| scroll |" in row
+        # The State column is untouched — scroll_pct still surfaces there too.
+        assert "scroll_pct:v:42%" in row
+
+
+

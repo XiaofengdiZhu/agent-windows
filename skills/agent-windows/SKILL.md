@@ -139,12 +139,25 @@ agent-windows config doctor                            # verify
 
 ```
 ## Interactive Elements
-| Ref | Type    | Name     | Position           | State   |
-|-----|---------|----------|--------------------|---------|
-| @e1 | Button  | OK       | (400,300,500,340)  |         |
-| @e2 | Edit    | Search   | (100,100,300,130)  | focused |
-| @e3 | Button  | Cancel   | (520,300,620,340)  |         |
+| Ref | Type    | Action       | Name     | Position           | State   |
+|-----|---------|--------------|----------|--------------------|---------|
+| @e1 | Button  | click        | OK       | (400,300,500,340)  |         |
+| @e2 | Edit    | fill         | Search   | (100,100,300,130)  | focused |
+| @e3 | Button  | click        | Cancel   | (520,300,620,340)  |         |
+| @e4 | CheckBox| toggle       | Remember | (400,360,500,390)  | toggle_state:on |
+| @e5 | ComboBox| select/expand| Font     | (100,200,300,230)  | expand_collapse_state:collapsed |
 ```
+
+The **Action** column tells you the verb(s) the element supports, so you know immediately what to do with `@eN` without trial-and-error:
+- `click` — buttons, menu items, hyperlinks, and anything with no other action (→ `click`)
+- `fill` — text fields, search boxes (→ `type`)
+- `toggle` — checkboxes (→ `click` flips on/off)
+- `select` — radio buttons, list/tree items, tab items, combo boxes (→ `click`)
+- `slide` — sliders, spinners, scroll bars — drag the thumb (→ `drag`)
+- `scroll` — scrollable documents/containers (→ `scroll`)
+- `expand` — expandable combo boxes, collapsible groups, tree items (→ `expand`/`collapse`)
+
+Multiple verbs join with `/` when an element supports more than one (e.g. `select/expand` for a combo box, `scroll/expand` for a scrollable collapsible group).
 
 The State column also surfaces richer attributes when the element exposes them: `toggle_state:on|off|indeterminate`, `value:...`, `expand_collapse_state:expanded|collapsed|partially expanded` (combo boxes, tree items, menus, collapsible groups), `scrollable:v|h|vh` + `scroll_pct:v:42%` (scrollable containers), `min`/`max` (sliders), `is_selected:true|false` (list/radio/tab items), `is_password:true`, `shortcut:Ctrl+S`, `help_text:...`. Use these to disambiguate similar-looking elements and read current state (e.g. a checkbox's on/off) without an extra click. Scrollable and expandable containers are promoted to interactive (they get an `@eN` ref) so they can be targeted by `expand`/`collapse`/`scroll`.
 
