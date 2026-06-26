@@ -17,6 +17,7 @@ from typing import Any
 from _ctypes import COMError
 
 from agent_windows.utils.win32 import get_process_name
+from agent_windows.utils.debug import is_debug
 from agent_windows.uia.enums import PropertyId, TreeScope
 from agent_windows.uia.exceptions import from_com_error, UIARetryableError
 
@@ -325,9 +326,19 @@ def traverse_tree(
     virtual_screen = get_virtual_screen_rect()
     dpi_scale = get_dpi_scale()
 
-    # Enumerate windows
+    # Enumerate windows. Timed under debug (TODO #3): window enumeration is a
+    # series of Win32 calls (IsWindowVisible/GetWindowText/GetWindowRect/…) whose
+    # cost scales with open window count, and is a common contributor to snapshot
+    # latency. The perf_counter calls only run when is_debug(), so the production
+    # hot path pays nothing.
+    _profile = is_debug()
+    _t_enumerate = time.perf_counter() if _profile else 0.0
     all_windows = enumerate_windows()
     active_window = next((w for w in all_windows if w.is_active), None)
+    # enumerate_ms measures ONLY the Win32 enumeration + the trivial active-window
+    # scan, so its label stays truthful. The COM-init / CacheRequest build below
+    # is UIA-traversal setup and correctly falls under traverse_ms instead.
+    _t_traverse = time.perf_counter() if _profile else 0.0
 
     # Interactive elements collected during traversal
     interactive_elements: list[ElementInfo] = []
@@ -379,6 +390,24 @@ def traverse_tree(
     # blocking dialog first. Done on the list itself (not just at render time) so
     # @eN refs in render_snapshot match resolve_element's indices (PERF3-06).
     _promote_modal_elements(interactive_elements)
+
+    # Snapshot profiling (TODO #3): emit per-stage timings only when debug is on.
+    # Matches the reference's logger.info approach (WINDOWS_MCP_PROFILE_SNAPSHOT)
+    # — timings go to the log stream, never into the response body, so no client
+    # sees a schema change. enumerate_ms = Win32 window enumeration only;
+    # traverse_ms = COM client init + CacheRequest build + the UIA tree walk (the
+    # dominant cost, bounded by tree.max_depth/timeout/max_elements). render
+    # happens in the caller, not here.
+    if _profile:
+        _t_now = time.perf_counter()
+        enumerate_ms = (_t_traverse - _t_enumerate) * 1000.0
+        traverse_ms = (_t_now - _t_traverse) * 1000.0
+        logger.info(
+            "snapshot profile: enumerate_ms=%.1f traverse_ms=%.1f windows=%d "
+            "elements=%d max_depth=%d",
+            enumerate_ms, traverse_ms, len(all_windows),
+            len(interactive_elements), max_depth,
+        )
 
     return {
         "cursor": cursor,

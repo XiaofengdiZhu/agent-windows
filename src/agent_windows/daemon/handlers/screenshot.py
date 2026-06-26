@@ -1,9 +1,11 @@
 """Screenshot command handlers: capture, highlight, diff, cleanup."""
 
 import logging
+import time
 from typing import Any
 
 from agent_windows.daemon.router import handler, require
+from agent_windows.utils.debug import is_debug
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +65,12 @@ def _screenshot(params: dict) -> dict[str, Any]:
     annotate_warn = ""
     annotation_fullscreen = False
     vscreen: tuple | None = None
+    # Screenshot profiling (TODO #3): gate on is_debug() so the hot path pays
+    # nothing in production. capture covers the screen-grab (the dominant cost —
+    # dxcam/mss/pillow vary widely); resize covers scale_screenshot. Emitted via
+    # logger.info, never in the response body (mirrors the reference's approach).
+    _profile = is_debug()
+    _t_capture = time.perf_counter() if _profile else 0.0
     raw_annotate = params.get("use_annotation")
     do_annotate = raw_annotate is True or (
         isinstance(raw_annotate, str) and raw_annotate.lower() == "true"
@@ -115,6 +123,7 @@ def _screenshot(params: dict) -> dict[str, Any]:
     # Scale if configured. Per-call params (TODO #15b) override the config
     # values when present, so an agent can request a quick low-res capture
     # vs. the configured default in a single request. None → config wins.
+    _t_resize = time.perf_counter() if _profile else 0.0
     try:
         from agent_windows.utils.config import load_config
         cfg = load_config().get("screenshot", {})
@@ -185,6 +194,19 @@ def _screenshot(params: dict) -> dict[str, Any]:
         lines.append(f"Region: {region[0]}, {region[1]}, {region[2]}, {region[3]}")
     if backend:
         lines.append(f"Backend: {backend}")
+
+    # Screenshot profiling (TODO #3): capture dominates (backend-dependent);
+    # resize is the scale_screenshot cost. Logged only under is_debug().
+    if _profile:
+        _t_now = time.perf_counter()
+        capture_ms = (_t_resize - _t_capture) * 1000.0
+        resize_ms = (_t_now - _t_resize) * 1000.0
+        logger.info(
+            "screenshot profile: capture_ms=%.1f resize_ms=%.1f backend=%s "
+            "annotated=%s %dx%d",
+            capture_ms, resize_ms, backend, do_annotate,
+            image.width, image.height,
+        )
 
     return {
         "output": "\n".join(lines),

@@ -76,6 +76,29 @@ third-party loggers (`fastmcp`, `uvicorn.*`) to `DEBUG` when `is_debug()`; the
 daemon uses its own `_setup_logging` (file + stderr handlers) but reads
 `is_debug()` for the level decision.
 
+Under debug mode, `snapshot` and `screenshot` emit **per-stage timing** lines to
+the daemon log (`~/.agent-windows/logs/daemon.log`) for diagnosing slow captures —
+never into the tool response, so clients are unaffected:
+
+```
+snapshot profile: enumerate_ms=2.3 traverse_ms=180.4 windows=12 elements=47 max_depth=15
+screenshot profile: capture_ms=15.2 resize_ms=3.1 backend=dxcam annotated=False 1920x1080
+```
+
+`enumerate_ms` is the Win32 window enumeration; `traverse_ms` is the UIA COM
+walk plus its setup (COM client init + cache build — the dominant cost, bounded
+by `tree.max_depth`/`timeout`/`max_elements`); `max_depth` is the configured
+depth cap (not the depth actually reached); `capture_ms` is the screen grab
+(backend-dependent); `resize_ms` is the downscale. Compare stages across calls
+to locate the bottleneck.
+
+> **Annotated screenshots**: when `use_annotation` is on, `capture_ms` also
+> includes the UIA tree snapshot (`get_tree_snapshot`) and the annotation
+> drawing — that path additionally emits its own `snapshot profile:` line, so
+> the same tree walk is timed twice (once inside `capture_ms`, once standalone).
+> Read the standalone `snapshot profile:` line for the true tree cost on an
+> annotated capture.
+
 ### Example
 
 ```bash

@@ -1114,6 +1114,47 @@ class TestTraverseTreeMetadata:
             assert key in data, f"{key} dropped from traverse_tree return"
 
 
+class TestTraverseTreeProfiling:
+    """traverse_tree emits per-stage timings (enumerate_ms / traverse_ms) to the
+    log ONLY when is_debug() is on, and never otherwise (TODO #3). The hot path
+    must pay nothing in production — verified by asserting no perf_counter work
+    leaks when debug is off. Uses the same patched-surface approach as
+    TestTraverseTreeMetadata (timeout=0.0 skips the real UIA walk)."""
+
+    def _traverse_debug(self, debug_on, caplog):
+        import logging
+        from agent_windows.core import tree as tree_mod
+        with patch.object(tree_mod, "enumerate_windows", return_value=[]), \
+             patch.object(tree_mod, "is_debug", return_value=debug_on), \
+             patch("agent_windows.uia.core._AutomationClient"), \
+             patch("agent_windows.core.screenshot.get_virtual_screen_rect",
+                   return_value=(0, 0, 1920, 1080)), \
+             patch("agent_windows.core.screenshot.get_dpi_scale",
+                   return_value=1.0):
+            with caplog.at_level(logging.INFO, logger=tree_mod.logger.name):
+                return traverse_tree(
+                    max_depth=1, include_invisible=False, include_offscreen=False,
+                    max_elements=0, timeout=0.0,
+                )
+
+    def test_profile_line_emitted_when_debug_on(self, caplog):
+        self._traverse_debug(True, caplog)
+        profile_lines = [r for r in caplog.records
+                         if "snapshot profile:" in r.getMessage()]
+        assert len(profile_lines) == 1
+        msg = profile_lines[0].getMessage()
+        assert "enumerate_ms=" in msg
+        assert "traverse_ms=" in msg
+        assert "windows=0" in msg  # enumerate_windows patched to []
+        assert "max_depth=1" in msg  # configured cap, not reached depth
+
+    def test_no_profile_line_when_debug_off(self, caplog):
+        self._traverse_debug(False, caplog)
+        profile_lines = [r for r in caplog.records
+                         if "snapshot profile:" in r.getMessage()]
+        assert profile_lines == []  # production hot path: zero profiling output
+
+
 # ── Rich element metadata (TODO #15) ────────────────────────────────
 
 

@@ -326,3 +326,44 @@ class TestPerCallScaleOverride:
         assert m_scale.call_args.kwargs["scale"] == 0.75
         assert m_scale.call_args.kwargs["max_width"] == 1280
         assert m_scale.call_args.kwargs["max_height"] == 720
+
+
+class TestScreenshotProfiling:
+    """The screenshot handler emits per-stage timings (capture_ms / resize_ms) to
+    the log ONLY under is_debug(), and never otherwise (TODO #3). The production
+    hot path must pay nothing. capture_screenshot + scale_screenshot are patched
+    so no real screen access happens."""
+
+    def _run(self, debug_on, caplog):
+        import logging
+        from agent_windows.daemon.router import HANDLERS
+        from agent_windows.daemon.handlers import screenshot as sc_handler
+        with patch.object(sc_handler, "is_debug", return_value=debug_on), \
+                patch("agent_windows.utils.config.load_config",
+                      return_value={}), \
+                patch("agent_windows.core.screenshot.capture_screenshot",
+                      return_value=Image.new("RGB", (100, 100))), \
+                patch("agent_windows.core.screenshot.scale_screenshot",
+                      side_effect=lambda img, **kw: img), \
+                patch("agent_windows.core.screenshot.get_capture_backend",
+                      return_value="test"):
+            with caplog.at_level(logging.INFO,
+                                 logger=sc_handler.logger.name):
+                HANDLERS["screenshot"]({})
+
+    def test_profile_line_emitted_when_debug_on(self, caplog):
+        self._run(True, caplog)
+        profile_lines = [r for r in caplog.records
+                         if "screenshot profile:" in r.getMessage()]
+        assert len(profile_lines) == 1
+        msg = profile_lines[0].getMessage()
+        assert "capture_ms=" in msg
+        assert "resize_ms=" in msg
+        assert "backend=test" in msg
+        assert "annotated=False" in msg
+
+    def test_no_profile_line_when_debug_off(self, caplog):
+        self._run(False, caplog)
+        profile_lines = [r for r in caplog.records
+                         if "screenshot profile:" in r.getMessage()]
+        assert profile_lines == []  # production: zero profiling output
