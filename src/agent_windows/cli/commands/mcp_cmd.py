@@ -458,6 +458,36 @@ def _resolve_program() -> list[str]:
     return [sys.executable, "-m", "agent_windows"]
 
 
+def _resolve_exe_path() -> tuple[str, list[str]]:
+    """Best-effort absolute ``(command, prefix_args)`` for an MSIX stdio snippet.
+
+    MSIX-sandboxed Claude Desktop does not inherit the system PATH, so the
+    snippet's ``command`` must be an absolute path rather than the bare
+    ``"agent-windows"`` that works elsewhere. Prefers a venv-style
+    ``agent-windows(.exe)`` next to ``sys.executable`` (the uv-tool / pipx
+    layout); falls back to the interpreter with ``-m agent_windows``. The
+    caller appends ``["mcp", "serve"]`` to ``prefix_args``. (TODO #21-4)
+    """
+    exe_dir = Path(sys.executable).parent
+    for candidate in ("agent-windows.exe", "agent-windows"):
+        p = exe_dir / candidate
+        if p.exists():
+            return str(p), []
+    return sys.executable, ["-m", "agent_windows"]
+
+
+def _json_str(s: str) -> str:
+    """Return ``s`` as a JSON string literal (double-quoted, escaped)."""
+    import json as _json
+    return _json.dumps(s)
+
+
+def _json_strs(items: list[str]) -> list[str]:
+    """Return each item as a JSON string literal (for joining into an args array)."""
+    import json as _json
+    return [_json.dumps(i) for i in items]
+
+
 def _build_start_script(program_args: list[str]) -> str:
     from agent_windows.utils.config import get_log_dir
     log_out = get_log_dir() / "mcp-server.log"
