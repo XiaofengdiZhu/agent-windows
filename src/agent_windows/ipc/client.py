@@ -169,10 +169,20 @@ def ensure_daemon_running(debug: bool = False) -> None:
 
 
 def _start_daemon_process(debug: bool = False) -> subprocess.Popen:
-    """Start the daemon as a subprocess."""
+    """Start the daemon as a subprocess.
+
+    If a ``--config`` override is active in *this* process, append
+    ``--config <path>`` so the spawned daemon reads the same file (TODO #21-1).
+    Without this, the daemon would read the default config while the
+    CLI/MCP process reads the override — silent divergence.
+    """
     cmd = [sys.executable, "-m", "agent_windows", "--daemon"]
     if debug:
         cmd.append("--debug")
+    from agent_windows.utils.config import get_config_override
+    override = get_config_override()
+    if override is not None:
+        cmd += ["--config", str(override)]
 
     # Detach from parent: daemon runs independently
     proc = subprocess.Popen(

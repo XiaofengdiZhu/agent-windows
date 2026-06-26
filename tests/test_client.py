@@ -268,3 +268,30 @@ class TestStartDaemonProcess:
         assert kw["stdout"] is subprocess.DEVNULL
         assert kw["stderr"] is subprocess.DEVNULL
         assert kw["stdin"] is subprocess.DEVNULL
+
+    def test_config_override_appended_when_set(self, tmp_path, monkeypatch):
+        """When a config override is active in this process, the spawned
+        daemon command includes --config <path> so it reads the same file."""
+        from agent_windows.utils import config as cfg
+        alt = tmp_path / "alt.toml"
+        monkeypatch.setattr(cfg, "_config_override", alt)
+        fake_proc = MagicMock(pid=1)
+        try:
+            with patch("agent_windows.ipc.client.subprocess.Popen",
+                       return_value=fake_proc) as m_popen:
+                _start_daemon_process()
+            cmd = m_popen.call_args.args[0]
+            assert "--config" in cmd
+            assert cmd[cmd.index("--config") + 1] == str(alt)
+        finally:
+            monkeypatch.setattr(cfg, "_config_override", None)
+
+    def test_no_config_flag_when_override_unset(self, monkeypatch):
+        """Default (no override): command has no --config flag."""
+        from agent_windows.utils import config as cfg
+        monkeypatch.setattr(cfg, "_config_override", None)
+        fake_proc = MagicMock(pid=1)
+        with patch("agent_windows.ipc.client.subprocess.Popen",
+                   return_value=fake_proc) as m_popen:
+            _start_daemon_process()
+        assert "--config" not in m_popen.call_args.args[0]
