@@ -825,3 +825,46 @@ class TestConfigOverride:
         # Set override -> cache cleared.
         cfg.set_config_override(str(tmp_path / "alt.toml"))
         assert cfg._config_cache is None
+
+
+class TestResolveConfigRelative:
+    """_resolve_config_relative: 相对路径相对 *base*（配置文件目录）解析，
+    绝对/~/空原样处理。纯函数，不查文件存在性。"""
+
+    def test_empty_passes_through(self):
+        from agent_windows.utils.config import _resolve_config_relative
+        from pathlib import Path
+        assert _resolve_config_relative("", Path("/anywhere")) == ""
+
+    def test_absolute_resolved_in_place(self, tmp_path):
+        from agent_windows.utils.config import _resolve_config_relative
+        from pathlib import Path
+        abs_p = tmp_path / "cert.pem"
+        # 传入绝对路径字符串 → resolve 后仍是它自己（幂等）
+        assert _resolve_config_relative(str(abs_p), tmp_path / "other") == str(abs_p.resolve())
+
+    def test_relative_resolved_against_base(self, tmp_path):
+        from agent_windows.utils.config import _resolve_config_relative
+        from pathlib import Path
+        base = tmp_path / "cfgdir"
+        # 相对值 "certs/c.pem" → base/certs/c.pem
+        result = _resolve_config_relative("certs/c.pem", base)
+        assert result == str((base / "certs" / "c.pem").resolve())
+
+    def test_dotdot_relative_against_base(self, tmp_path):
+        from agent_windows.utils.config import _resolve_config_relative
+        from pathlib import Path
+        base = tmp_path / "cfgdir"
+        # ../c.pem 相对 base → base 的上一级 / c.pem
+        result = _resolve_config_relative("../c.pem", base)
+        assert result == str((base / "../c.pem").resolve())
+
+    def test_tilde_expanded(self, monkeypatch, tmp_path):
+        from agent_windows.utils.config import _resolve_config_relative
+        from pathlib import Path
+        # expanduser 后 ~ 指向 tmp_path → 路径变绝对 → 走绝对分支
+        monkeypatch.setattr(
+            "os.path.expanduser",
+            lambda p: str(tmp_path / "tls" / "c.pem") if p == "~/tls/c.pem" else p)
+        result = _resolve_config_relative("~/tls/c.pem", tmp_path / "other")
+        assert result == str((tmp_path / "tls" / "c.pem").resolve())

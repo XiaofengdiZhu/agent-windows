@@ -326,6 +326,25 @@ def _coerce_list(value: Any) -> list:
     return list(value)
 
 
+def _resolve_config_relative(raw: str, base: Path) -> str:
+    """Resolve a possibly-relative config path string against *base*.
+
+    Absolute paths and ``~``-prefixed paths are resolved in place. A relative
+    path is interpreted relative to *base* (the config file's directory), NOT
+    the process CWD. Empty string (the default) passes through unchanged so the
+    caller's truthiness checks (``ssl_certfile or None``) still work.
+
+    Pure path math — does NOT check file existence; that's a runtime concern
+    handled by the serve-time pre-flight (``_check_tls_files`` in mcp_cmd).
+    """
+    if not raw:
+        return ""
+    expanded = Path(os.path.expanduser(raw))
+    if expanded.is_absolute():
+        return str(expanded.resolve())
+    return str((base / expanded).resolve())
+
+
 def build_mcp_config(config: dict) -> MCPConfig:
     """Build a typed :class:`MCPConfig` view from a validated config dict.
 
