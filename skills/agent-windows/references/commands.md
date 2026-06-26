@@ -82,7 +82,7 @@ agent-windows screenshot --annotate --grid-w 3 --grid-h 3   # + 3×3 reference g
 
 **Output**: `{output, path, width, height, coord_scale, backend, region}`
 
-> **MCP tool only** — the `screenshot` MCP tool additionally takes `scale` (float, default `screenshot.scale` = `1.0`), `max_width` (int, default `screenshot.max_width` = `1920`), and `max_height` (int, default `screenshot.max_height` = `1080`) to downscale the capture for cheaper vision-model input. These are not CLI flags; set them via the `[screenshot]` config or override per-call over MCP.
+> **MCP tool only** — the `screenshot` MCP tool additionally takes `scale` (float, default `screenshot.scale` = `1.0`), `max_width` (int, default `screenshot.max_width` = `1920`), and `max_height` (int, default `screenshot.max_height` = `1080`) to downscale the capture for cheaper vision-model input. It also takes `display` (int or list[int]) to crop to the union of the selected display(s) — same semantics as the snapshot/observe `display` filter (e.g. `display=[0, 1]` for the union of displays 0 and 1); a bad index raises an error. `display` resolves to a bbox and overrides `bbox` when both are given. None of these are CLI flags; set the scale/dimensions via the `[screenshot]` config or override per-call over MCP.
 
 ### ground
 

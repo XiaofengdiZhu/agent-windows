@@ -56,6 +56,7 @@ def screenshot_fn(
     monitor: int = -1,
     bbox: list[int] | None = None,
     selector: str | None = None,
+    display: int | list[int] | None = None,
     scale: float | None = None,
     max_width: int | None = None,
     max_height: int | None = None,
@@ -72,15 +73,40 @@ def screenshot_fn(
     defaults for this capture only — pass ``scale=0.5`` for a quick low-res
     shot. Omit to use the configured values.
 
+    ``display`` (TODO #4) crops to the union of the given display index(es)
+    (e.g. ``0``, ``[0, 1]``), mirroring the snapshot/observe tool. It resolves
+    to a bbox and overrides ``bbox`` when both are given (a bad index raises
+    → INVALID_PARAMS). The conversion happens here so the daemon's screenshot
+    interface is unchanged.
+
     ``use_annotation`` (TODO #14) overlays a numbered ``@eN`` box per
     interactive element (matching the snapshot's refs) on the capture, plus an
     optional coordinate grid. Annotation boxes use virtual-desktop screen
     coordinates, so it requires a FULL virtual-screen capture — any
-    bbox/selector/monitor is ignored (the daemon warns inline). Omit/False for
+    bbox/selector/monitor/display is ignored (the daemon warns inline). Omit/False for
     a clean capture. ``width_reference_line``/``height_reference_line`` draw
     that many vertical/horizontal grid lines (0 = none); only honored when
     annotating.
     """
+    # display → bbox conversion (mirrors observe.py). Done before _call so the
+    # daemon's screenshot handler sees only a bbox — its interface stays put.
+    # display wins over an explicit bbox to match observe's "display scopes the
+    # capture" semantics. A bad index raises ValueError here, IN the MCP layer
+    # (not the daemon) — surfaced as a tool error. Deliberately NOT caught into
+    # a retryable string: a bad index is a caller programming error, not a
+    # transient failure, so "please try again" framing would mislead. (This
+    # differs from snapshot_fn/observe_fn, which forward display to the daemon
+    # and let it raise INVALID_PARAMS — but those tools have no in-MCP
+    # conversion step.)
+    if display is not None:
+        from agent_windows.core.display import (
+            parse_display_selection, get_display_union_bbox,
+        )
+        indices = parse_display_selection(display)
+        if indices is not None:
+            u = get_display_union_bbox(indices)
+            bbox = [u.left, u.top, u.right, u.bottom]
+
     try:
         result = _call("screenshot", output=output, monitor=monitor,
                        bbox=bbox, selector=selector,
@@ -188,6 +214,8 @@ def register(mcp) -> None:
         "Returns the image plus metadata (path, size, region, backend, "
         "coordinate_scale when downscaled). Use monitor=-1 for full virtual "
         "desktop, or selector=@eN to crop to a UI element's bounding box. "
+        "display=[0] (or [0,1] for a multi-display union) crops to the selected "
+        "display(s) — same semantics as snapshot/observe. "
         "Set use_annotation=True to overlay a numbered @eN box on each "
         "interactive element (requires full screen; bbox/selector/monitor "
         "ignored) — useful for confirming a target before clicking."
@@ -195,6 +223,7 @@ def register(mcp) -> None:
                                    idempotentHint=True, openWorldHint=False))
     def _screenshot(output: str | None = None, monitor: int = -1,
                     bbox: list[int] | None = None, selector: str | None = None,
+                    display: int | list[int] | None = None,
                     scale: Annotated[float | None, Field(
                         description="Optional downscale factor for this capture only (e.g. 0.5 for half-resolution). Omit to use the config default (1.0).",
                         ge=0.0, le=1.0,
@@ -219,6 +248,7 @@ def register(mcp) -> None:
                         ge=0,
                     )] = None) -> list:
         return screenshot_fn(output=output, monitor=monitor, bbox=bbox, selector=selector,
+                             display=display,
                              scale=scale, max_width=max_width, max_height=max_height,
                              use_annotation=use_annotation,
                              width_reference_line=width_reference_line,

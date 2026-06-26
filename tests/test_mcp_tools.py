@@ -92,6 +92,7 @@ def test_screenshot_fn_forwards_params_and_returns_image_list():
     # scale/max_width/max_height default to None (TODO #15b); _call strips them.
     # use_annotation/width_reference_line/height_reference_line (TODO #14) also
     # default to None and are forwarded so _call can strip them.
+    # display (TODO #4) defaults to None → no bbox conversion.
     m.assert_called_once_with("screenshot", output="C:\\s.png", monitor=0,
                               bbox=None, selector=None,
                               scale=None, max_width=None, max_height=None,
@@ -101,6 +102,43 @@ def test_screenshot_fn_forwards_params_and_returns_image_list():
     # FastMCP tools that return an image return a list [text, Image]
     assert isinstance(out, list)
     assert out[0].startswith("## Screenshot")
+
+
+def test_screenshot_fn_display_converts_to_bbox():
+    """display resolves to a bbox before _call (the daemon screenshot handler
+    has no display param). Mirrors observe.py's conversion. (TODO #4)"""
+    from agent_windows.core.tree import BoundingBox
+    result = {"output": "## Screenshot", "path": "C:\\s.png",
+              "width": 1, "height": 1, "coord_scale": 1.0}
+    with patch.object(obs, "_call", return_value=result) as m, \
+         patch("pathlib.Path.read_bytes", return_value=_PNG), \
+         patch("agent_windows.core.display.get_display_union_bbox",
+               return_value=BoundingBox(0, 0, 1920, 1080)):
+        obs.screenshot_fn(display=[0])
+    # display=[0] → union bbox → bbox list; never forwarded as `display`.
+    sent = m.call_args.kwargs
+    assert sent["bbox"] == [0, 0, 1920, 1080]
+    assert "display" not in sent
+
+    # display wins over an explicit bbox (matches observe semantics).
+    with patch.object(obs, "_call", return_value=result) as m, \
+         patch("pathlib.Path.read_bytes", return_value=_PNG), \
+         patch("agent_windows.core.display.get_display_union_bbox",
+               return_value=BoundingBox(100, 200, 1000, 2000)):
+        obs.screenshot_fn(display=[1], bbox=[0, 0, 10, 10])
+    assert m.call_args.kwargs["bbox"] == [100, 200, 1000, 2000]
+
+
+def test_screenshot_fn_bad_display_raises_valueerror():
+    """A bad display index raises ValueError in the MCP layer (NOT caught into
+    a retryable string) — a bad index is a caller bug, not a transient failure,
+    so "please try again" framing would mislead. (TODO #4) Pins this deliberate
+    decision so a future refactor moving conversion into try/except is caught."""
+    # get_display_union_bbox raises ValueError on an out-of-range index.
+    with patch("agent_windows.core.display.get_display_union_bbox",
+               side_effect=ValueError("monitor index out of range")):
+        with pytest.raises(ValueError, match="out of range"):
+            obs.screenshot_fn(display=[99])
 
 
 def test_screenshot_fn_forwards_annotation_params():
