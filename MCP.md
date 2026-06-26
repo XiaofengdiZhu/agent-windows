@@ -20,7 +20,7 @@ The stdio snippet is the common case — a command + `mcp serve`. Client-specifi
 
 ### Claude Desktop
 
-`claude_desktop_config.json`:
+Run `agent-windows mcp auth` — it auto-detects your Claude Desktop install (MSIX Store version or standard) and prints the exact path to your `claude_desktop_config.json`, plus a ready-to-paste snippet. The standard `claude_desktop_config.json`:
 
 ```json
 {
@@ -32,13 +32,7 @@ The stdio snippet is the common case — a command + `mcp serve`. Client-specifi
 
 #### Claude Desktop — MSIX / Microsoft Store version
 
-The Store-packaged Claude Desktop virtualizes `%APPDATA%`, so its config is **not** at the usual `%APPDATA%\Claude\`. Find it at:
-
-```
-%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude_desktop_config.json
-```
-
-MSIX sandboxed apps also don't inherit the system `PATH`, so use the full path to `agent-windows.exe`:
+The Store-packaged Claude Desktop virtualizes `%APPDATA%`, so its config is **not** at the usual `%APPDATA%\Claude\`. `agent-windows mcp auth` detects this automatically and prints the real path (it probes `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\`). The printed stdio snippet already uses the absolute path to `agent-windows.exe`, because MSIX sandboxes don't inherit the system PATH:
 
 ```json
 {
