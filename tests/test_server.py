@@ -339,7 +339,7 @@ class TestMainPipeLoop:
              patch.object(srv.win32api, "CloseHandle"), \
              patch.object(srv, "read_pipe", side_effect=fake_read), \
              patch.object(srv, "disconnect_pipe"), \
-             patch.object(srv, "write_pipe", side_effect=lambda _p, msg: written.append(msg)), \
+             patch.object(srv, "write_pipe", side_effect=lambda _p, msg, **kw: written.append(msg)), \
              patch.object(srv, "write_version_file"), \
              patch.object(srv, "write_pid_file"), \
              patch.object(srv.pywintypes, "OVERLAPPED", return_value=MagicMock(hEvent="evt")):
@@ -570,10 +570,49 @@ class TestMainPipeLoop:
              patch.object(srv.win32api, "CloseHandle"), \
              patch.object(srv, "read_pipe", side_effect=fake_read), \
              patch.object(srv, "disconnect_pipe") as mock_disc, \
-             patch.object(srv, "write_pipe", side_effect=lambda _p, m: written.append(m)), \
+             patch.object(srv, "write_pipe", side_effect=lambda _p, m, **kw: written.append(m)), \
              patch.object(srv.pywintypes, "OVERLAPPED", return_value=MagicMock(hEvent="evt")):
             srv._main_pipe_loop(state)
         # a -1003 WAIT_TIMEOUT error was written
         assert any(json.loads(m).get("error", {}).get("code") == -1003 for m in written)
         # pipe was disconnected (cleanup), loop continued and exited cleanly
         assert mock_disc.called
+
+    def test_read_timeout_writes_error_and_disconnects(self):
+        """SEC3-06: a PipeReadTimeout from read_pipe (client connected but never
+        finished sending) → write a -32603 error response, then disconnect —
+        NOT swallow it as a generic loop error that drops the client silently.
+        The daemon must stay alive (loop continues to the next connection)."""
+        from agent_windows.daemon import server as srv
+        from agent_windows.ipc.pipe import PipeReadTimeout
+
+        state = self._make_state()
+        written = []
+        creates = {"n": 0}
+
+        def fake_create():
+            creates["n"] += 1
+            if creates["n"] >= 2:
+                state["shutdown_event"].set()
+            return "fake_pipe"
+
+        with patch.object(srv, "create_pipe_server", side_effect=fake_create), \
+             patch.object(srv.win32pipe, "ConnectNamedPipe"), \
+             patch.object(srv.win32event, "CreateEvent", return_value="evt"), \
+             patch.object(srv.win32event, "WaitForSingleObject", return_value=0), \
+             patch.object(srv.win32api, "CloseHandle"), \
+             patch.object(srv, "read_pipe",
+                          side_effect=PipeReadTimeout("Timed out 30000ms")), \
+             patch.object(srv, "disconnect_pipe") as mock_disc, \
+             patch.object(srv, "write_pipe",
+                          side_effect=lambda _p, m, **kw: written.append(m)), \
+             patch.object(srv.pywintypes, "OVERLAPPED",
+                          return_value=MagicMock(hEvent="evt")):
+            srv._main_pipe_loop(state)
+        # a -32603 internal-error response was written for the timeout
+        assert any(json.loads(m).get("error", {}).get("code") == -32603
+                   for m in written)
+        # the stuck client's pipe was disconnected
+        assert mock_disc.called
+        # the command was never submitted (read failed before parse/submit)
+        state["sta_thread"].submit.assert_not_called()

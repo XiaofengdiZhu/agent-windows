@@ -21,6 +21,22 @@ ERROR_NO_DATA = 232  # The pipe is being closed (peer going away)
 # Win32 error codes indicating the peer is gone → map to ConnectionError
 _PIPE_CLOSED_ERRORS = {ERROR_BROKEN_PIPE, ERROR_NO_DATA}
 
+# Server-side read deadline. The daemon serves one client at a time on a single
+# I/O thread, so a client that connects but never sends (or sends only a partial
+# request) would block the read forever — wedging the whole daemon. A bounded
+# overlapped read lets the server drop such a client instead. 30s is far above
+# the time any legitimate single JSON-RPC request takes to finish writing (a few
+# KB), so it only ever trips on a stuck/malicious client. (SEC3-06)
+SERVER_READ_TIMEOUT_S = 30.0
+# Server-side write deadline. The response is written to an overlapped handle
+# (FILE_FLAG_OVERLAPPED); a synchronous WriteFile would return ERROR_IO_PENDING
+# for any response larger than the kernel pipe buffer (BUFFER_SIZE = 64 KB) and
+# leave the transfer unfinished, so disconnect_pipe would truncate it. The
+# overlapped write completes as the client drains its end; bound it so a client
+# that stops reading can't wedge the write the way a stuck client wedged the
+# read. Generous vs. legitimate clients (they read promptly). (SEC3-06)
+SERVER_WRITE_TIMEOUT_S = 30.0
+
 
 class DaemonStartupError(Exception):
     """Fatal daemon startup failure (e.g. the named pipe cannot be secured).
@@ -29,6 +45,17 @@ class DaemonStartupError(Exception):
     handler so the daemon aborts instead of busy-spinning or serving insecure
     (M-02). Raise it for conditions where retrying cannot help and continuing
     would be unsafe.
+    """
+
+
+class PipeReadTimeout(Exception):
+    """Server-side: a connected client did not send a complete request within
+    the read deadline (``SERVER_READ_TIMEOUT_S``).
+
+    Distinct from ``ConnectionError`` (the client-side "no response" timeout) so
+    ``_main_pipe_loop`` can send a JSON-RPC error reply before disconnecting the
+    stuck client, rather than treating it like an ordinary pipe break. The daemon
+    stays alive and accepts the next connection. (SEC3-06)
     """
 
 
@@ -106,10 +133,18 @@ def create_pipe_server(pipe_name: str = PIPE_NAME, buffer_size: int = BUFFER_SIZ
     # the name is already taken; winerror 231 (ERROR_PIPE_BUSY) is the
     # historical fallback on some builds.
     FILE_FLAG_FIRST_PIPE_INSTANCE = 0x00080000
+    # 0x40000000 = FILE_FLAG_OVERLAPPED. The server handle must be opened for
+    # overlapped I/O so ``read_pipe`` can bound a client that connects but never
+    # finishes sending — otherwise a stuck client blocks the single I/O thread
+    # forever (SEC3-06). Synchronous WriteFile still completes fine on an
+    # overlapped handle for the small response payloads written here.
+    FILE_FLAG_OVERLAPPED = 0x40000000
     try:
         pipe = win32pipe.CreateNamedPipe(
             pipe_name,
-            win32pipe.PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
+            win32pipe.PIPE_ACCESS_DUPLEX
+            | FILE_FLAG_FIRST_PIPE_INSTANCE
+            | FILE_FLAG_OVERLAPPED,
             win32pipe.PIPE_TYPE_BYTE | win32pipe.PIPE_READMODE_BYTE | win32pipe.PIPE_WAIT,
             1,  # max instances (serial: one client at a time)
             buffer_size,
@@ -140,19 +175,52 @@ def wait_for_client(pipe) -> None:
     logger.debug("Client connected to pipe")
 
 
-def read_pipe(pipe, buffer_size: int = BUFFER_SIZE) -> str:
-    """Read a newline-delimited message from the pipe."""
-    import win32file
+def read_pipe(pipe, buffer_size: int = BUFFER_SIZE, timeout: float | None = None) -> str:
+    """Server-side: read a newline-delimited request from a connected client.
 
-    # Read in chunks until we find a newline (JSON-RPC is newline-delimited)
+    Uses overlapped I/O bounded by ``timeout`` so a client that connects but
+    never finishes sending cannot block the single I/O thread forever (the
+    daemon serves one client at a time — such a client would wedge the whole
+    daemon). On timeout raises :class:`PipeReadTimeout` (the caller sends an
+    error reply then disconnects); on a peer-gone pipe error raises
+    :class:`ConnectionError`, matching the client side. (SEC3-06)
+
+    Args:
+        pipe: An overlapped-mode server pipe handle (``create_pipe_server``
+            opens with ``FILE_FLAG_OVERLAPPED``).
+        buffer_size: Per-read chunk size.
+        timeout: Seconds to wait per read attempt. ``None`` →
+            ``SERVER_READ_TIMEOUT_S``.
+    """
+    if timeout is None:
+        timeout = SERVER_READ_TIMEOUT_S
+    timeout_ms = int(timeout * 1000)
+
+    # Read in chunks until we find a newline (JSON-RPC is newline-delimited).
+    # Each chunk is an overlapped read bounded by the remaining deadline, so a
+    # client that stalls — even mid-message, or drip-feeding one byte at a time
+    # — trips the timeout rather than blocking indefinitely.
     data = b""
-    while True:
-        _, chunk = win32file.ReadFile(pipe, buffer_size)
-        data += chunk
-        if len(data) > MAX_MESSAGE_SIZE:
-            raise RuntimeError("Message exceeds maximum size")
-        if b"\n" in data or not chunk:
-            break
+    deadline = time.monotonic() + timeout
+    try:
+        while True:
+            remaining = max(1, int((deadline - time.monotonic()) * 1000))
+            chunk = _overlapped_read_chunk(pipe, remaining, buffer_size=buffer_size)
+            data += chunk
+            if len(data) > MAX_MESSAGE_SIZE:
+                raise RuntimeError("Message exceeds maximum size")
+            if b"\n" in data or not chunk:
+                break
+    except ConnectionError as e:
+        # _overlapped_read_chunk raises ConnectionError ONLY on its
+        # WaitForSingleObject timeout (broken-pipe/peer-closed surface as raw
+        # pywintypes.error and propagate past this clause to the caller). So a
+        # ConnectionError here unambiguously means the read deadline elapsed —
+        # re-raise as the server-specific PipeReadTimeout so the main loop sends
+        # an error reply before disconnecting, instead of a silent broken-pipe
+        # drop. If that invariant ever changes, _overlapped_read_chunk should
+        # gain a dedicated timeout subclass instead of this catch.
+        raise PipeReadTimeout(str(e)) from e
 
     # Take everything up to the first newline
     message = data.split(b"\n")[0].decode("utf-8").strip()
@@ -160,12 +228,29 @@ def read_pipe(pipe, buffer_size: int = BUFFER_SIZE) -> str:
     return message
 
 
-def write_pipe(pipe, message: str) -> None:
-    """Write a message to the pipe (appends newline)."""
-    import win32file
+def write_pipe(pipe, message: str, timeout: float | None = None) -> None:
+    """Write a message to the pipe (appends newline).
 
+    ``timeout`` selects the I/O model. When ``None`` (the legacy/default
+    behavior) the write is a plain synchronous ``WriteFile`` — correct for
+    non-overlapped handles and small payloads that complete immediately. When
+    given (seconds), the write uses overlapped I/O bounded by ``timeout``,
+    which is REQUIRED for the daemon's overlapped server handle: a synchronous
+    ``WriteFile`` there returns ``ERROR_IO_PENDING`` for any response larger
+    than the kernel pipe buffer (64 KB) and leaves the transfer unfinished, so
+    a subsequent ``disconnect_pipe`` would truncate it. The overlapped path
+    also bounds a client that stops reading (otherwise it could wedge the
+    single I/O thread the way the read timeout bounds a stuck sender).
+    (SEC3-06)
+
+    Raises ``ConnectionError`` on overlapped-write timeout.
+    """
     data = (message + "\n").encode("utf-8")
-    win32file.WriteFile(pipe, data)
+    if timeout is None:
+        import win32file
+        win32file.WriteFile(pipe, data)
+    else:
+        _overlapped_write_all(pipe, data, int(timeout * 1000))
     logger.debug("Pipe write: %s", message[:200])
 
 
@@ -225,8 +310,8 @@ def _overlapped_write_all(pipe, data: bytes, timeout_ms: int) -> None:
         win32api.CloseHandle(event)
 
 
-def _overlapped_read_chunk(pipe, timeout_ms: int) -> bytes:
-    """Read one BUFFER_SIZE chunk via overlapped I/O with a timeout.
+def _overlapped_read_chunk(pipe, timeout_ms: int, buffer_size: int = BUFFER_SIZE) -> bytes:
+    """Read one ``buffer_size`` chunk via overlapped I/O with a timeout.
 
     Raises ConnectionError on timeout. Other pipe errors (e.g. broken pipe)
     propagate for the caller to map.
@@ -241,7 +326,7 @@ def _overlapped_read_chunk(pipe, timeout_ms: int) -> bytes:
     overlapped.hEvent = event
     try:
         try:
-            hr, buf = win32file.ReadFile(pipe, BUFFER_SIZE, overlapped)
+            hr, buf = win32file.ReadFile(pipe, buffer_size, overlapped)
         except pywintypes.error as e:
             if e.winerror != ERROR_IO_PENDING:
                 raise  # broken pipe etc. — propagate for mapping

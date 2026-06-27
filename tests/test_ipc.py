@@ -227,7 +227,165 @@ class TestSendToDaemonTimeout:
         assert time.monotonic() - start < 5.0
 
 
-class TestSendToDaemonRoundtrip:
+class TestServerReadTimeout:
+    """SEC3-06: server-side read_pipe must be bounded — a client that connects
+    but never sends (or sends a partial request) cannot block the single I/O
+    thread forever. read_pipe raises PipeReadTimeout within the deadline."""
+
+    def test_silent_client_triggers_read_timeout(self):
+        """A client that connects but never writes must make server read_pipe
+        raise PipeReadTimeout within the deadline, not block forever."""
+        import os
+        import win32file
+        import win32pipe
+        from agent_windows.ipc.pipe import (
+            read_pipe, PipeReadTimeout, BUFFER_SIZE,
+        )
+
+        # Reuse the production pipe-creation path so the test exercises the real
+        # overlapped flag (FILE_FLAG_OVERLAPPED) that makes the bounded read work.
+        pipe_name = rf"\\.\pipe\agent-windows-test-srv-to-{os.getpid()}"
+        sp = win32pipe.CreateNamedPipe(
+            pipe_name,
+            win32pipe.PIPE_ACCESS_DUPLEX | 0x40000000,  # FILE_FLAG_OVERLAPPED
+            win32pipe.PIPE_TYPE_BYTE | win32pipe.PIPE_READMODE_BYTE | win32pipe.PIPE_WAIT,
+            1, BUFFER_SIZE, BUFFER_SIZE, 0, None)
+
+        connected = threading.Event()
+
+        def client():
+            cp = win32file.CreateFile(
+                pipe_name, win32file.GENERIC_READ | win32file.GENERIC_WRITE,
+                0, None, win32file.OPEN_EXISTING, 0, None)
+            connected.set()
+            # Hold the connection open WITHOUT writing — the stuck-client case.
+            time.sleep(10)
+            win32file.CloseHandle(cp)
+
+        t = threading.Thread(target=client, daemon=True)
+        t.start()
+
+        # Wait for the client to connect (blocking ConnectNamedPipe).
+        win32pipe.ConnectNamedPipe(sp, None)
+        assert connected.wait(2.0)
+
+        start = time.monotonic()
+        with pytest.raises(PipeReadTimeout):
+            read_pipe(sp, timeout=0.5)  # short deadline for the test
+        elapsed = time.monotonic() - start
+        # Tripped within a small multiple of the 0.5s deadline — not a hang.
+        assert elapsed < 3.0
+
+        try:
+            win32pipe.DisconnectNamedPipe(sp)
+        except Exception:
+            pass
+        win32file.CloseHandle(sp)
+
+    def test_drip_feed_client_trips_total_deadline(self):
+        """SEC3-06: the timeout is a TOTAL deadline from the first read, not
+        per-chunk. A client that drip-feeds one byte at a time (slowly enough
+        that each individual overlapped chunk completes within the per-chunk
+        wait) must still trip PipeReadTimeout within ~timeout — otherwise the
+        DoS this change targets would survive via a slow trickle."""
+        import os
+        import win32file
+        import win32pipe
+        from agent_windows.ipc.pipe import read_pipe, PipeReadTimeout, BUFFER_SIZE
+
+        pipe_name = rf"\\.\pipe\agent-windows-test-srv-drip-{os.getpid()}"
+        sp = win32pipe.CreateNamedPipe(
+            pipe_name,
+            win32pipe.PIPE_ACCESS_DUPLEX | 0x40000000,  # FILE_FLAG_OVERLAPPED
+            win32pipe.PIPE_TYPE_BYTE | win32pipe.PIPE_READMODE_BYTE | win32pipe.PIPE_WAIT,
+            1, BUFFER_SIZE, BUFFER_SIZE, 0, None)
+
+        connected = threading.Event()
+
+        def client():
+            cp = win32file.CreateFile(
+                pipe_name, win32file.GENERIC_READ | win32file.GENERIC_WRITE,
+                0, None, win32file.OPEN_EXISTING, 0, None)
+            connected.set()
+            # Drip-feed one byte at a time, far slower than the total deadline
+            # but each write completes instantly (well within any per-chunk
+            # wait). Never send the terminating newline.
+            for _ in range(1000):
+                try:
+                    win32file.WriteFile(cp, b"x")
+                except Exception:
+                    break
+                time.sleep(0.05)  # 50ms between bytes — never trips a chunk wait
+            win32file.CloseHandle(cp)
+
+        threading.Thread(target=client, daemon=True).start()
+        win32pipe.ConnectNamedPipe(sp, None)
+        assert connected.wait(2.0)
+
+        start = time.monotonic()
+        with pytest.raises(PipeReadTimeout):
+            read_pipe(sp, timeout=0.5)  # total deadline, not per-chunk
+        elapsed = time.monotonic() - start
+        # Fires within a small multiple of the 0.5s total deadline — proving the
+        # drip-feed cannot extend it indefinitely.
+        assert elapsed < 2.0
+
+        try:
+            win32pipe.DisconnectNamedPipe(sp)
+        except Exception:
+            pass
+        win32file.CloseHandle(sp)
+
+    def test_normal_request_read_through_overlapped(self):
+        """A well-formed newline-delimited request must read back exactly
+        through the new overlapped read_pipe — covering the normal (non-timeout)
+        path that the silent-client test doesn't exercise. Uses a >64 KB body so
+        the multi-chunk read loop (and the b'\\n' / not-chunk breaks) is hit."""
+        import os
+        import win32file
+        import win32pipe
+        from agent_windows.ipc.pipe import read_pipe, BUFFER_SIZE
+
+        pipe_name = rf"\\.\pipe\agent-windows-test-srv-ok-{os.getpid()}"
+        sp = win32pipe.CreateNamedPipe(
+            pipe_name,
+            win32pipe.PIPE_ACCESS_DUPLEX | 0x40000000,  # FILE_FLAG_OVERLAPPED
+            win32pipe.PIPE_TYPE_BYTE | win32pipe.PIPE_READMODE_BYTE | win32pipe.PIPE_WAIT,
+            1, BUFFER_SIZE, BUFFER_SIZE, 0, None)
+
+        # > BUFFER_SIZE so the read spans multiple overlapped chunks.
+        big = "X" * (BUFFER_SIZE + 5000)
+        request = '{"jsonrpc":"2.0","id":1,"method":"ping","params":{"d":"' + big + '"}}\n'
+        request_bytes = request.encode("utf-8")
+        connected = threading.Event()
+
+        def client():
+            cp = win32file.CreateFile(
+                pipe_name, win32file.GENERIC_READ | win32file.GENERIC_WRITE,
+                0, None, win32file.OPEN_EXISTING, 0, None)
+            connected.set()
+            # The write is larger than the pipe buffer, so it completes only as
+            # the server-side read_pipe drains it — hence the server must read
+            # concurrently, not after this returns.
+            win32file.WriteFile(cp, request_bytes)
+            time.sleep(2)
+            win32file.CloseHandle(cp)
+
+        threading.Thread(target=client, daemon=True).start()
+        win32pipe.ConnectNamedPipe(sp, None)
+        assert connected.wait(2.0)
+
+        # Generous timeout: the data drains as we read; this just must not
+        # timeout or corrupt the multi-chunk reassembly.
+        result = read_pipe(sp, timeout=5.0)
+        assert result == request.strip()
+        assert big in result  # the large field survived intact across chunks
+
+        try:
+            win32pipe.DisconnectNamedPipe(sp)
+        except Exception:
+            pass
+        win32file.CloseHandle(sp)
     def test_large_response_returned_intact(self):
         """H-02 regression: a daemon that responds normally must return the
         full payload — exercises the overlapped read *completion* path (which

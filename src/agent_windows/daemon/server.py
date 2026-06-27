@@ -37,6 +37,8 @@ from agent_windows.ipc.pipe import (
     BUFFER_SIZE,
     create_pipe_server,
     DaemonStartupError,
+    PipeReadTimeout,
+    SERVER_WRITE_TIMEOUT_S,
     wait_for_client,
     read_pipe,
     write_pipe,
@@ -432,8 +434,28 @@ def _main_pipe_loop(state):
                     if overlapped_event is not None:
                         win32api.CloseHandle(overlapped_event)
 
-                # Client connected, read request
-                request_str = read_pipe(pipe)
+                # Client connected, read request. read_pipe is bounded by
+                # SERVER_READ_TIMEOUT_S so a client that connects but never
+                # finishes sending cannot wedge the single-client daemon; on
+                # timeout it raises PipeReadTimeout, handled below to send an
+                # error reply before disconnecting. (SEC3-06)
+                try:
+                    request_str = read_pipe(pipe)
+                except PipeReadTimeout as e:
+                    # Best-effort -32603 so the client learns why the connection
+                    # dropped (instead of blocking until its own read timeout).
+                    # The write may itself fail if the client already left —
+                    # swallow that; the disconnect is the real cleanup.
+                    logger.warning("Client read timed out, disconnecting: %s", e)
+                    try:
+                        error_resp = make_error(
+                            -32603, f"Request read timed out: {e}")
+                        write_pipe(pipe, error_resp.to_json(),
+                                   timeout=SERVER_WRITE_TIMEOUT_S)
+                    except Exception:
+                        logger.debug("Timeout error reply write failed", exc_info=True)
+                    disconnect_pipe(pipe)
+                    continue
                 if not request_str:
                     disconnect_pipe(pipe)
                     continue
@@ -451,12 +473,12 @@ def _main_pipe_loop(state):
                     request = JSONRPCRequest.from_json(request_str)
                 except json.JSONDecodeError as e:
                     error_resp = make_error(PARSE_ERROR, f"Parse error: {e}")
-                    write_pipe(pipe, error_resp.to_json())
+                    write_pipe(pipe, error_resp.to_json(), timeout=SERVER_WRITE_TIMEOUT_S)
                     disconnect_pipe(pipe)
                     continue
                 except ValueError as e:
                     error_resp = make_error(INVALID_REQUEST, f"Invalid request: {e}")
-                    write_pipe(pipe, error_resp.to_json())
+                    write_pipe(pipe, error_resp.to_json(), timeout=SERVER_WRITE_TIMEOUT_S)
                     disconnect_pipe(pipe)
                     continue
 
@@ -476,7 +498,8 @@ def _main_pipe_loop(state):
                     # reads the reply. The reply write/disconnect is best-effort.
                     request_shutdown()
                     try:
-                        write_pipe(pipe, resp.to_json())
+                        write_pipe(pipe, resp.to_json(),
+                                   timeout=SERVER_WRITE_TIMEOUT_S)
                         disconnect_pipe(pipe)
                     except Exception:
                         logger.debug(
@@ -488,7 +511,7 @@ def _main_pipe_loop(state):
                 # Submit to STA thread and wait for result
                 idle_monitor.touch()
                 response_str = sta_thread.submit(request, timeout=120.0)
-                write_pipe(pipe, response_str)
+                write_pipe(pipe, response_str, timeout=SERVER_WRITE_TIMEOUT_S)
                 idle_monitor.touch()
 
                 disconnect_pipe(pipe)
@@ -504,7 +527,8 @@ def _main_pipe_loop(state):
                 if pipe:
                     try:
                         error_resp = make_error(-1003, str(e))
-                        write_pipe(pipe, error_resp.to_json())
+                        write_pipe(pipe, error_resp.to_json(),
+                                   timeout=SERVER_WRITE_TIMEOUT_S)
                     except Exception:
                         pass
                     disconnect_pipe(pipe)
