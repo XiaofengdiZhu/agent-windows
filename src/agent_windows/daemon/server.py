@@ -48,6 +48,34 @@ from agent_windows.utils.config import get_pid_path as cfg_pid_path, get_version
 
 logger = logging.getLogger("agent_windows.daemon")
 
+# Wall-clock budget the main loop waits for the STA worker to finish one
+# command. Sized at 300s to match the longest SINGLE-command self-limit in the
+# codebase — handlers/tree.py MAX_WAIT_SECONDS (300), which wait/wait_for
+# reject beyond; shell is bounded by shell.timeout (default 30s) and tree
+# traversal by tree.timeout (default 10s). For those single commands the
+# worker always finishes first and submit never times out. (SEC3-08)
+#
+# This does NOT cover the COMPOUND handlers, which can run far past 300s by
+# design: ``batch`` chains up to MAX_BATCH_SIZE (50) sub-commands — each of
+# which may itself be a 300s wait/wait_for — plus an unbounded per-step
+# ``delay``; ``multi_edit`` types up to MAX_TYPE_TEXT_LEN (10000) chars into
+# up to MAX_MULTI_TARGETS (50) fields (each type_text ≈ len×0.02s). For such
+# calls the advisory timeout IS reachable; that's accepted because the only
+# alternative — a per-command abort flag — cannot actually cancel an in-flight
+# UIA/SendInput/subprocess call on the COM STA thread either, so it would not
+# help the wedge case the budget is meant to bound.
+#
+# The timeout is ADVISORY, not a hard cancellation: when it fires it only
+# reports WAIT_TIMEOUT to the client and disconnects — it does NOT interrupt
+# the in-flight command on the STA thread (COM STA cannot reliably cancel a
+# running UIA/SendInput call; Python threads can't preempt C-extension calls).
+# The orphaned command runs to completion; see submit() for what happens to
+# its late result. The genuinely dangerous case — a single UIA call blocked
+# past its internal SendMessageTimeout — is past ~30s and therefore past this
+# 300s budget too, and is not something a shorter timeout or an abort flag
+# could fix, so the trade-off is accepted.
+STA_SUBMIT_TIMEOUT_S = 300.0
+
 # ── COM STA Worker Thread ─────────────────────────────────────────
 
 
@@ -151,6 +179,31 @@ class COMWorkerThread(threading.Thread):
 
         Returns the JSON response string.
         Raises TimeoutError if the command doesn't complete in time.
+
+        The timeout is ADVISORY: on expiry this returns/raises to the caller
+        (the main loop surfaces WAIT_TIMEOUT and disconnects the client), but
+        the STA worker keeps running the orphaned command to completion — COM
+        STA cannot reliably cancel an in-flight UIA/SendInput call, so we don't
+        pretend to. The default caller (_main_pipe_loop) passes
+        STA_SUBMIT_TIMEOUT_S, sized for single-command self-limits (see there
+        for the compound-handler caveat).
+
+        On timeout the finally block pops this command's event + result slot,
+        but the orphaned ``_execute_command`` still runs on the worker and
+        writes its result to ``self.results[cmd_id]`` AFTER that pop. That late
+        write lingers until a later submit reuses the same id (which reaps it)
+        or, if a same-id request is submitted while the orphan is still
+        running, the orphan's completion sets the NEW request's event and
+        overwrites its result — delivering the orphan's response to the later
+        request. The single client (ipc/client.py) reuses a fixed id for every
+        request, so this stale-response path is reachable in principle, not
+        just theoretical. It is not closed here: a true fix needs per-command
+        event objects keyed by a queue-assigned handle rather than by request
+        id (a protocol change). Today the risk is mitigated in practice because
+        a timed-out request triggers disconnect (the client must reconnect), so
+        the immediate next request arrives after the orphaned command has had
+        time to settle; the window is the reconnect delay plus any commands the
+        client sends before the orphan finishes.
         """
         cmd_id = request.id
         event = threading.Event()
@@ -509,9 +562,11 @@ def _main_pipe_loop(state):
                         )
                     break
 
-                # Submit to STA thread and wait for result
+                # Submit to STA thread and wait for result. The timeout is
+                # advisory (see STA_SUBMIT_TIMEOUT_S): on expiry it reports
+                # WAIT_TIMEOUT and disconnects but does not cancel the worker.
                 idle_monitor.touch()
-                response_str = sta_thread.submit(request, timeout=120.0)
+                response_str = sta_thread.submit(request, timeout=STA_SUBMIT_TIMEOUT_S)
                 write_pipe(pipe, response_str, timeout=SERVER_WRITE_TIMEOUT_S)
                 idle_monitor.touch()
 

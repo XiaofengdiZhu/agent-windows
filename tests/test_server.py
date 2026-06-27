@@ -435,6 +435,12 @@ class TestMainPipeLoop:
             json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping"}), state=state)
         state["sta_thread"].submit.assert_called_once()
         assert json.loads(written[-1])["result"] == {"ok": 1}
+        # SEC3-08: submit is invoked with STA_SUBMIT_TIMEOUT_S — the budget is
+        # aligned to the longest handler self-limit (MAX_WAIT_SECONDS=300) so a
+        # legitimate long wait/wait_for never trips the advisory timeout while
+        # shorter handlers (shell, tree) finish well under it.
+        from agent_windows.daemon.server import STA_SUBMIT_TIMEOUT_S
+        assert state["sta_thread"].submit.call_args.kwargs["timeout"] == STA_SUBMIT_TIMEOUT_S
         # idle monitor touched before + after the command
         assert state["idle_monitor"].touch.call_count == 2
 
