@@ -616,3 +616,52 @@ class TestMainPipeLoop:
         assert mock_disc.called
         # the command was never submitted (read failed before parse/submit)
         state["sta_thread"].submit.assert_not_called()
+
+    def test_generic_loop_error_writes_response_before_disconnect(self):
+        """An unexpected (non-typed) Exception in the connection lifecycle —
+        e.g. sta_thread.submit raising something other than TimeoutError — must
+        write a -32603 error response (carrying the request id) before
+        disconnecting, so the client doesn't block until its own 150s read
+        timeout. Previously this branch logged + disconnected with no reply."""
+        from agent_windows.daemon import server as srv
+
+        state = self._make_state()
+        # A generic (non-Timeout) exception escapes submit → falls through the
+        # TimeoutError clause to the broad except Exception.
+        state["sta_thread"].submit.side_effect = RuntimeError(" STA worker blew up")
+
+        written = []
+        reads = {"n": 0}
+
+        def fake_read(_pipe):
+            reads["n"] += 1
+            return json.dumps({"jsonrpc": "2.0", "id": 42, "method": "ping"}) if reads["n"] == 1 else ""
+
+        creates = {"n": 0}
+
+        def fake_create():
+            creates["n"] += 1
+            if creates["n"] >= 2:
+                state["shutdown_event"].set()
+            return "fake_pipe"
+
+        with patch.object(srv, "create_pipe_server", side_effect=fake_create), \
+             patch.object(srv.win32pipe, "ConnectNamedPipe"), \
+             patch.object(srv.win32event, "CreateEvent", return_value="evt"), \
+             patch.object(srv.win32event, "WaitForSingleObject", return_value=0), \
+             patch.object(srv.win32api, "CloseHandle"), \
+             patch.object(srv, "read_pipe", side_effect=fake_read), \
+             patch.object(srv, "disconnect_pipe") as mock_disc, \
+             patch.object(srv, "write_pipe",
+                          side_effect=lambda _p, m, **kw: written.append(m)), \
+             patch.object(srv.pywintypes, "OVERLAPPED",
+                          return_value=MagicMock(hEvent="evt")):
+            srv._main_pipe_loop(state)
+        # a -32603 internal-error response was written...
+        errors = [json.loads(m) for m in written
+                  if json.loads(m).get("error", {}).get("code") == -32603]
+        assert errors, "generic loop error wrote no -32603 response"
+        # ...and it carried the request id so the client can correlate it
+        assert errors[0]["id"] == 42
+        # the pipe was disconnected (cleanup)
+        assert mock_disc.called

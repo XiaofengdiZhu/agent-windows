@@ -393,6 +393,7 @@ def _main_pipe_loop(state):
         while not shutdown_event.is_set():
             pipe = None
             overlapped_event = None
+            request = None
             try:
                 pipe = create_pipe_server()
 
@@ -533,8 +534,22 @@ def _main_pipe_loop(state):
                         pass
                     disconnect_pipe(pipe)
             except Exception as e:
-                logger.error("Error in main loop: %s", e)
+                # Unhandled error in the connection lifecycle (e.g. write_pipe
+                # failed, an unexpected submit exception). logger.exception gives
+                # the full traceback for an unanticipated failure (vs. the info/
+                # debug levels on the typed branches above).
+                logger.exception("Error in main loop: %s", e)
                 if pipe:
+                    # Best-effort -32603 so the client learns the connection is
+                    # dropping instead of blocking until its own read timeout.
+                    # The write may itself fail (client already left, pipe torn
+                    # down) — swallow that; the disconnect is the real cleanup.
+                    try:
+                        error_resp = make_error(-32603, str(e), request and request.id)
+                        write_pipe(pipe, error_resp.to_json(),
+                                   timeout=SERVER_WRITE_TIMEOUT_S)
+                    except Exception:
+                        logger.debug("Generic-error reply write failed", exc_info=True)
                     try:
                         disconnect_pipe(pipe)
                     except Exception:
