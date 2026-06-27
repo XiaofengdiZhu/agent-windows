@@ -130,6 +130,25 @@ class TestExpandElement:
             with pytest.raises(ValueError, match="Invalid selector"):
                 expand_element("not-a-selector")
 
+    def test_expand_dead_element_surfaces_typed_uia_error(self):
+        """TODO #6 decision 2: ControlFromPoint is the only unwrapped live-COM
+        call on this path. If the target's process died / disconnected during
+        the reverse-lookup, the bare COMError must surface as a typed
+        UIADeadElementError (→ ELEMENT_NOT_FOUND at the router) rather than
+        leaking as DAEMON_INTERNAL_ERROR. The wrapper lives in
+        _resolve_live_control, shared by expand/collapse, so expand covers it."""
+        from _ctypes import COMError
+        from agent_windows.uia.exceptions import UIADeadElementError
+        from agent_windows.uia.enums import UIAError
+
+        dead = COMError(
+            int(UIAError.UIA_E_ELEMENTNOTAVAILABLE), "element gone", (None,))
+        with _patch_locator(), \
+                patch("agent_windows.uia.controls.ControlFromPoint",
+                      side_effect=dead):
+            with pytest.raises(UIADeadElementError):
+                expand_element("@e1")
+
 
 # ── collapse_element ───────────────────────────────────────────────
 

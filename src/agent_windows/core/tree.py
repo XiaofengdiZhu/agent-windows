@@ -526,15 +526,33 @@ def _resolve_live_control(selector: str):
     Raises:
         ValueError: If the element moved/vanished (ControlFromPoint returned
             None) — surfaces as INVALID_PARAMS at the router with an actionable
-            "re-snapshot and retry" hint.
-        IndexError/ValueError: Propagated from ``resolve_element_center`` for
-            a bad selector format or out-of-range index.
+            "re-snapshot and retry" hint — or propagated from
+            ``resolve_element_center`` for a bad selector format.
+        UIADeadElementError: If the target's process died / disconnected during
+            the reverse-lookup — surfaces as ELEMENT_NOT_FOUND at the router
+            (TODO #6 decision 2). ``ControlFromPoint`` calls the raw
+            ``IUIAutomation.ElementFromPoint`` with no COM wrapping (unlike the
+            vendored GetPattern/Expand, which swallow internally), so a dead
+            target would otherwise leak a bare ``COMError`` as
+            DAEMON_INTERNAL_ERROR. NOTE: this covers the *lookup* only — a dead
+            element during the *subsequent* pattern call is swallowed by the
+            vendored layer (GetPattern returns None → "does not support";
+            Expand/Collapse swallow and report success), so the typed error is
+            only raised here, not from expand/collapse's pattern step.
+        IndexError: Propagated from ``resolve_element_center`` for an
+            out-of-range index.
         CoordinateRangeError: If the bbox center is off-screen.
     """
     from agent_windows.uia.controls import ControlFromPoint
 
     x, y = resolve_element_center(selector)
-    control = ControlFromPoint(x, y)
+    try:
+        control = ControlFromPoint(x, y)
+    except COMError as e:
+        # The only unwrapped live-COM call on this path. Map to a typed
+        # UIAException so the router can classify it (dead → ELEMENT_NOT_FOUND,
+        # retryable → the caller may retry) instead of leaking DAEMON_INTERNAL.
+        raise from_com_error(e) from e
     if control is None:
         raise ValueError(
             f"Element {selector} not reachable at ({x}, {y}) — it may have "
@@ -581,6 +599,8 @@ def expand_element(selector: str) -> dict[str, Any]:
     Raises:
         ValueError: Element not reachable (→ INVALID_PARAMS) or does not
             support expand/collapse (→ INVALID_PARAMS).
+        UIADeadElementError: Target vanished during the live-element lookup
+            (→ ELEMENT_NOT_FOUND at the router). See _resolve_live_control.
     """
     from agent_windows.uia.enums import PatternId
 
@@ -619,6 +639,8 @@ def collapse_element(selector: str) -> dict[str, Any]:
 
     Raises:
         ValueError: Element not reachable or does not support expand/collapse.
+        UIADeadElementError: Target vanished during the live-element lookup
+            (→ ELEMENT_NOT_FOUND at the router). See _resolve_live_control.
     """
     from agent_windows.uia.enums import PatternId
 
