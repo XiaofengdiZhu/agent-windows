@@ -84,12 +84,14 @@ def serve(
     tools: str = typer.Option(
         None, "--tools",
         help="Comma-separated explicit list of tools to ENABLE (e.g. "
-             "'screenshot,click,snapshot'). All others are removed. Overrides "
+             "'screenshot,click,snapshot'). All others are removed and cannot "
+             "be invoked (enforced, including via batch). Overrides "
              "--exclude-tools. Env: AGENT_WINDOWS_TOOLS"),
     exclude_tools: str = typer.Option(
         None, "--exclude-tools",
         help="Comma-separated list of tools to REMOVE from the active set "
-             "(e.g. 'shell,registry'). Env: AGENT_WINDOWS_EXCLUDE_TOOLS"),
+             "(e.g. 'shell,registry'). Removed tools are genuinely blocked "
+             "(enforced, including via batch). Env: AGENT_WINDOWS_EXCLUDE_TOOLS"),
     stateless_http: bool = typer.Option(
         False, "--stateless-http",
         help="Run streamable-http without Mcp-Session-Id / per-connection state "

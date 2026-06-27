@@ -168,8 +168,10 @@ A bare `mcp serve --transport streamable-http --host 0.0.0.0` with no `auth_key`
 | `--allow-insecure-remote` | Allow an unauthenticated non-loopback bind (prints a warning; not recommended). |
 | `--ip-allowlist 10.0.0.0/8,192.168.1.5` | Restrict HTTP clients to the given IPs/CIDRs (IPv4+IPv6); others get 403. `/health` is exempt. |
 | `--cors-origins https://my-client.example.com` | Allow cross-origin browser access. **Default: none** — no CORS headers are emitted, so Same-Origin Policy blocks cross-origin requests. |
-| `--tools screenshot,click,snapshot` | Enable only these tools (whitelist); removes all others. Overrides `--exclude-tools`. |
+| `--tools screenshot,click,snapshot` | Restrict to these tools (whitelist); removes all others. Overrides `--exclude-tools`. |
 | `--exclude-tools shell,registry` | Remove these tools from the active set. |
+
+> **These filters are enforced, not just hidden.** A filtered-out tool is genuinely blocked — the `batch` tool applies the same filter to its `commands[].method` sub-calls, so excluding `shell` also blocks `batch({"method":"shell"})` (the whole batch aborts with the offenders named). Enforcement runs in this MCP server process (both discovery trimming and the `batch` gate); the daemon itself does not yet know the list, so a process connecting *directly* to the named pipe (bypassing this server) is not restricted by it — see [SECURITY.md](SECURITY.md). Use the valid tool names from [manifest.json](https://github.com/XiaofengdiZhu/agent-windows/blob/main/manifest.json) (`tools[].name`) or the catalog below.
 | `--stateless-http` | Run streamable-http without `Mcp-Session-Id` / per-connection state — reconnecting clients survive a server restart, and the server scales behind a load balancer. Streamable-http only. |
 
 Config equivalents (in `~/.agent-windows/config.toml`):
@@ -198,6 +200,6 @@ exclude = ["shell", "registry"]        # blacklist
 
 ## Tools
 
-The server exposes ~48 tools mapping 1:1 to the CLI commands: `screenshot`, `snapshot`, `observe`, `ground`, `detect`, `ask_vision`, `highlight`, `diff`, `get_text`, `element_state`, `cleanup_screenshots`, `click`, `dblclick`, `hover`, `move`, `mouse_down`, `mouse_up`, `drag`, `scroll`, `type`, `shortcut`, `expand`, `collapse`, `app_launch`, `app_switch`, `app_resize`, `app_list`, `shell`, `fs_read/write/list/copy/move/delete/search/info`, `clipboard_get/set`, `process_list/kill`, `notify`, `registry`, `batch`, `multi_select`, `multi_edit`, `ping`, `wait`, `wait_for`. See the README [Commands](README.md#commands) table for what each does; the MCP tool names match the daemon method names.
+The server exposes ~48 tools mapping 1:1 to the CLI commands: `screenshot`, `snapshot`, `observe`, `ground`, `detect`, `ask_vision`, `highlight`, `diff`, `get_text`, `element_state`, `cleanup_screenshots`, `click`, `dblclick`, `hover`, `move`, `mouse_down`, `mouse_up`, `drag`, `scroll`, `type`, `shortcut`, `expand`, `collapse`, `app_launch`, `app_switch`, `app_resize`, `app_list`, `shell`, `fs_read/write/list/copy/move/delete/search/info`, `clipboard_get/set`, `process_list/kill`, `notify`, `registry`, `batch`, `multi_select`, `multi_edit`, `ping`, `wait`, `wait_for`. See the README [Commands](README.md#commands) table for what each does; the MCP tool names match the daemon method names. These exact names are the valid values for `--tools`/`--exclude-tools` (authoritative list in [manifest.json](https://github.com/XiaofengdiZhu/agent-windows/blob/main/manifest.json) `tools[].name`). `batch` is itself a tool, so it is removable the same way — but when present it enforces the active filter on its own sub-commands (see the note under [HTTP security & scaling options](#http-security--scaling-options)).
 
 Same usage tips apply: call `snapshot` first for pixel-exact coordinates, prefer it over `ground`/`detect` for named controls, and always `app switch` before input.
