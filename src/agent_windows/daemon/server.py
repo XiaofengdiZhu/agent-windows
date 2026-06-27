@@ -348,6 +348,21 @@ def _init_daemon_state():
     config = load_config()
     idle_timeout = config.get("daemon", {}).get("idle_timeout_minutes", 30)
 
+    # Defense-in-depth tool policy (review #7 follow-up): resolve [tools]
+    # include/exclude once at startup so the daemon itself rejects filtered
+    # methods at route_request — closing the gap where a client connecting
+    # directly to the named pipe (bypassing the MCP server's own filter) could
+    # reach any handler. Pass the raw config values; configure_tool_policy
+    # tolerates a bare string ("config set" writes scalars, so a TOML-array key
+    # set via the setter lands as e.g. "shell,registry" not a list) and an empty
+    # include+exclude = no policy = all tools reachable. Runs after all
+    # @handler registrations (this module imports router, whose bottom imports
+    # the handlers package, so HANDLERS is fully populated by the time we get
+    # here).
+    from agent_windows.daemon.router import configure_tool_policy
+    tools_cfg = config.get("tools", {}) or {}
+    configure_tool_policy(tools_cfg.get("include"), tools_cfg.get("exclude"))
+
     # Write version before PID: launchers (native + Python) treat a live PID
     # whose version file is absent as a stale/mismatched daemon and will kill
     # it. Writing version first closes that startup window.

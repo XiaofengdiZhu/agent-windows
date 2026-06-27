@@ -4,7 +4,9 @@ import logging
 
 import pytest
 from unittest.mock import MagicMock, patch
-from agent_windows.daemon.router import route_request, HANDLERS, require
+from agent_windows.daemon.router import (
+    route_request, HANDLERS, require, configure_tool_policy,
+)
 from agent_windows.ipc.protocol import JSONRPCRequest, PERMISSION_DENIED, INVALID_PARAMS
 
 
@@ -43,6 +45,18 @@ def caplog_at_level(logger_name: str, level: int):
             lg.setLevel(prev)
 
     return _ctx()
+
+
+@pytest.fixture(autouse=True)
+def _reset_tool_policy():
+    """Ensure the process-global tool policy never leaks between tests.
+
+    ``configure_tool_policy`` mutates module state in ``router``; without this
+    reset, a test that installs a policy would silently change every later
+    test's routing. Restore the default (None = no enforcement) after each test.
+    """
+    yield
+    configure_tool_policy(None, None)
 
 
 class TestRouteRequest:
@@ -272,3 +286,143 @@ class TestRequire:
         registered = set(HANDLERS.keys())
         missing = expected - registered
         assert not missing, f"Missing handlers: {missing}"
+
+
+class TestToolPolicy:
+    """Defense-in-depth tool policy (review #7 follow-up): the daemon itself
+    honors ``[tools] include/exclude`` so a client connecting directly to the
+    named pipe (bypassing the MCP server's own filter) is still bound by the
+    operator policy. ``route_request`` rejects a method outside the resolved
+    allowlist with PERMISSION_DENIED (-1004) before dispatch.
+    """
+
+    def test_no_policy_allows_all_by_default(self):
+        """No [tools] config → no enforcement → every registered method reachable."""
+        configure_tool_policy(None, None)
+        # ping is a safe, side-effect-free handler to assert reachability.
+        resp = route_request(JSONRPCRequest(id=1, method="ping"))
+        assert resp.error is None
+        assert resp.result["status"] == "ok"
+
+    def test_exclude_blocks_method(self):
+        """exclude=["shell"] → a shell request is PERMISSION_DENIED (-1004)."""
+        configure_tool_policy(None, ["shell"])
+        # Use a stub handler so the test never runs a real shell; the policy
+        # rejects before dispatch, so the stub body is never reached.
+        with patch.dict(HANDLERS, {"shell": MagicMock(return_value={"ok": True})}):
+            resp = route_request(JSONRPCRequest(id=1, method="shell", params={}))
+        assert resp.error is not None
+        assert resp.error["code"] == PERMISSION_DENIED
+        assert "shell" in resp.error["message"]
+
+    def test_exclude_leaves_others_reachable(self):
+        """exclude=["shell"] → ping still works."""
+        configure_tool_policy(None, ["shell"])
+        resp = route_request(JSONRPCRequest(id=1, method="ping"))
+        assert resp.error is None
+        assert resp.result["status"] == "ok"
+
+    def test_include_blocks_everything_not_listed(self):
+        """include=["screenshot"] → an unlisted method is PERMISSION_DENIED."""
+        configure_tool_policy(["screenshot"], None)
+        with patch.dict(HANDLERS, {"shell": MagicMock(return_value={"ok": True})}):
+            resp = route_request(JSONRPCRequest(id=1, method="shell", params={}))
+        assert resp.error is not None
+        assert resp.error["code"] == PERMISSION_DENIED
+
+    def test_include_overrides_exclude(self):
+        """include wins over exclude (matches MCP-layer apply_tool_filter).
+
+        include=["screenshot"], exclude=["shell"]: include wins, so a registered
+        method in NEITHER list (e.g. fs_read) is denied. (ping/shutdown are
+        control-plane-exempt, so they're always allowed regardless — they can't
+        be used to demonstrate include-overrides-exclude.)
+        """
+        configure_tool_policy(["screenshot"], ["shell"])
+        with patch.dict(HANDLERS, {"fs_read": MagicMock(return_value={"ok": True})}):
+            resp = route_request(JSONRPCRequest(id=1, method="fs_read", params={}))
+        assert resp.error is not None
+        assert resp.error["code"] == PERMISSION_DENIED
+
+    def test_control_plane_exempt_under_include(self):
+        """ping/shutdown are always reachable, even under a tight include — a
+        [tools] typo must not brick the daemon into an unkillable state."""
+        configure_tool_policy(["screenshot"], None)
+        ping = route_request(JSONRPCRequest(id=1, method="ping"))
+        assert ping.error is None
+        assert ping.result["status"] == "ok"
+        shutdown = route_request(JSONRPCRequest(id=1, method="shutdown"))
+        assert shutdown.error is None
+        assert shutdown.result["action"] == "shutting_down"
+
+    def test_control_plane_exempt_under_exclude(self):
+        """ping/shutdown are always reachable, even when 'excluded' — exclude
+        can't lock the operator out of health/shutdown."""
+        configure_tool_policy(None, ["ping", "shutdown"])
+        ping = route_request(JSONRPCRequest(id=1, method="ping"))
+        assert ping.error is None
+        shutdown = route_request(JSONRPCRequest(id=1, method="shutdown"))
+        assert shutdown.error is None
+
+    def test_unknown_include_names_silently_ignored(self):
+        """A typo in include shouldn't crash startup; unknown names are dropped
+        (matches apply_tool_filter). ping still works because it's exempt."""
+        configure_tool_policy(["nonexistent_tool"], None)
+        resp = route_request(JSONRPCRequest(id=1, method="ping"))
+        assert resp.error is None
+
+    def test_unknown_method_still_method_not_found(self):
+        """The policy gate runs AFTER the handler lookup, so a genuinely unknown
+        method still returns METHOD_NOT_FOUND (-32601), not PERMISSION_DENIED —
+        the policy only restricts registered methods."""
+        configure_tool_policy(None, ["shell"])
+        resp = route_request(JSONRPCRequest(id=1, method="totally_made_up"))
+        assert resp.error is not None
+        assert resp.error["code"] == -32601  # METHOD_NOT_FOUND
+
+    def test_scalar_string_config_value_normalized(self):
+        """config set writes scalars, so [tools] exclude lands as a comma-joined
+        string ("shell,registry") not a list. configure_tool_policy tolerates it."""
+        configure_tool_policy(None, "shell,registry")
+        with patch.dict(HANDLERS, {
+            "shell": MagicMock(),
+            "registry": MagicMock(return_value={"ok": True}),
+        }):
+            shell_resp = route_request(JSONRPCRequest(id=1, method="shell", params={}))
+            reg_resp = route_request(JSONRPCRequest(id=1, method="registry", params={}))
+        assert shell_resp.error["code"] == PERMISSION_DENIED
+        assert reg_resp.error["code"] == PERMISSION_DENIED
+
+    def test_batch_subcommand_inherits_policy(self):
+        """The whole point of daemon-side enforcement: a batch whose sub-command
+        names an excluded method has that sub-command rejected at the daemon
+        router (batch forwards each sub-call through route_request). The batch
+        itself runs, but the offending sub-command fails inside it."""
+        configure_tool_policy(None, ["shell"])
+        resp = route_request(JSONRPCRequest(id=1, method="batch", params={
+            "commands": [
+                {"method": "ping", "params": {}},
+                {"method": "shell", "params": {"command": "echo hi"}},
+            ],
+            "stop_on_error": True,
+        }))
+        # batch itself is allowed (it's a registered method, not excluded).
+        assert resp.error is None
+        out = (resp.result or {}).get("output", "")
+        # 2 sub-commands attempted; the shell one was denied at the router →
+        # exactly 1 failed inside the batch.
+        assert "Failed: 1" in out
+
+    def test_configure_is_idempotent_and_replaceable(self):
+        """Each call replaces the previous policy (no accumulation)."""
+        configure_tool_policy(None, ["shell"])
+        configure_tool_policy(None, ["fs_delete"])  # replaces, doesn't add
+        # shell is now allowed again (not in the new exclude set).
+        with patch.dict(HANDLERS, {
+            "shell": MagicMock(return_value={"ok": True}),
+            "fs_delete": MagicMock(),
+        }):
+            shell_resp = route_request(JSONRPCRequest(id=1, method="shell", params={}))
+            fs_resp = route_request(JSONRPCRequest(id=1, method="fs_delete", params={}))
+        assert shell_resp.error is None  # no longer excluded
+        assert fs_resp.error["code"] == PERMISSION_DENIED

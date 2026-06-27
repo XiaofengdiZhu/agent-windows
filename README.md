@@ -273,8 +273,8 @@ Every option below can be set as an env var instead of (or in addition to) the c
 | `AGENT_WINDOWS_ALLOW_INSECURE_REMOTE` | MCP / Security | Opt into an unauthenticated non-loopback HTTP bind (`mcp serve`). Not recommended. |
 | `AGENT_WINDOWS_IP_ALLOWLIST` | MCP / Security | Comma-separated IPs/CIDRs the HTTP server accepts; others get 403. |
 | `AGENT_WINDOWS_CORS_ORIGINS` | MCP / Security | Comma-separated allowed cross-origin URLs. Default empty (no CORS headers). |
-| `AGENT_WINDOWS_TOOLS` | MCP / Security | Comma-separated tool **whitelist** (overrides exclude). Filtered-out tools are genuinely blocked, not just hidden — `batch` sub-calls are filtered too. Valid names: see [MCP.md](MCP.md#tools). |
-| `AGENT_WINDOWS_EXCLUDE_TOOLS` | MCP / Security | Comma-separated tools to remove from the active set (e.g. `shell,registry`) — enforced at the MCP layer including `batch`. See [MCP.md](MCP.md#http-security--scaling-options) for the enforcement boundary. |
+| `AGENT_WINDOWS_TOOLS` | MCP / Security | Comma-separated tool **whitelist** (overrides exclude). Filtered-out tools are genuinely blocked, not just hidden — `batch` sub-calls are filtered too. Valid names: see [MCP.md](MCP.md#tools). (This filters the MCP server process; the daemon separately enforces the `[tools]` config section — see [MCP.md](MCP.md#http-security--scaling-options).) |
+| `AGENT_WINDOWS_EXCLUDE_TOOLS` | MCP / Security | Comma-separated tools to remove from the active set (e.g. `shell,registry`) — enforced at the MCP layer including `batch`. To also bind a direct named-pipe client, set `[tools] exclude` in config (the daemon honors it at startup). See [MCP.md](MCP.md#http-security--scaling-options) for the enforcement boundary. |
 | `AGENT_WINDOWS_STATELESS_HTTP` | MCP / Security | `1`/`true` → stateless streamable-http (no `Mcp-Session-Id`; survives restarts). |
 | `AGENT_WINDOWS_OAUTH_CLIENT_ID` | MCP / Security | OAuth client id (requires `--oauth-client-secret`). |
 | `AGENT_WINDOWS_OAUTH_CLIENT_SECRET` | MCP / Security | OAuth client secret. |

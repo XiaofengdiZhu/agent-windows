@@ -68,7 +68,7 @@ For remote/LAN clients an HTTP transport is used, and **a bare, unauthenticated 
 | `--cors-origins https://...` | **empty — no CORS headers emitted** | Cross-origin browser access is blocked by Same-Origin Policy unless explicitly allowed. |
 | DNS-rebinding protection (TrustedHost) | **on** (loopback/named-host binds) | Validates the `Host` header against the bind address so a rebinding attack can't reach a localhost-bound server. Opt out only via `--allow-insecure-remote`. |
 | `--ssl-certfile` / `--ssl-keyfile` | off | Enable HTTPS for HTTP transports. |
-| `--tools` / `--exclude-tools` | all tools | Whitelist or blacklist tools at startup — e.g. `--exclude-tools shell,registry` to remove the most destructive tools. **Enforced**, not just hidden: the `batch` tool applies the same filter to its sub-commands. Enforcement runs in the MCP server process; a process connecting *directly* to the named pipe bypasses it (the owner-only DACL is then the only gate). |
+| `--tools` / `--exclude-tools` | all tools | Whitelist or blacklist tools at startup — e.g. `--exclude-tools shell,registry` to remove the most destructive tools. **Enforced**, not just hidden: the `batch` tool applies the same filter to its sub-commands. Enforcement runs in the MCP server process; and the **daemon** additionally honors the `[tools] include/exclude` config section at startup (rejecting filtered methods with `PERMISSION_DENIED`), so a direct named-pipe connection is also bound when `[tools]` is set in config (the `--tools` flag is process-local to the MCP server and never written to config). |
 
 For full option reference see the [README MCP Server section](README.md#mcp-server).
 
@@ -107,7 +107,7 @@ agent-windows collects **optional, local-only** usage data — and it is **off b
 1. **Run with least privilege** — use a standard user account, not an administrator.
 2. **Connect only trusted MCP clients** — review the client's security practices.
 3. **Prefer stdio** — no network surface; use HTTP only when you need remote access, and always behind an auth key or OAuth.
-4. **Disable high-risk tools** for untrusted workflows: `--exclude-tools shell,registry`. This is enforced at the MCP layer (including via `batch`), so an excluded tool cannot be invoked through the MCP server. Note the boundary: enforcement lives in the MCP server process — a process connecting *directly* to the named pipe (bypassing the server) is not restricted by it.
+4. **Disable high-risk tools** for untrusted workflows: `--exclude-tools shell,registry` (for the MCP server) and `[tools] exclude = ["shell","registry"]` in `config.toml` (for the daemon). Both layers are enforced (including via `batch`), so an excluded tool cannot be invoked through the MCP server, and the daemon rejects it even for a direct named-pipe connection when `[tools]` is set.
 5. **Keep regular, verified backups**.
 6. **Monitor** the driving agent's actions in real time.
 

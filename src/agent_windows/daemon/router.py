@@ -38,6 +38,80 @@ logger = logging.getLogger(__name__)
 # Global handler registry
 HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {}
 
+# Process-global tool allowlist, resolved once at daemon startup from the
+# ``[tools] include``/``exclude`` config (see :func:`configure_tool_policy`).
+# ``None`` = no policy (the default — every registered handler is reachable,
+# preserving the original behavior). When set, :func:`route_request` rejects any
+# method NOT in this set with PERMISSION_DENIED *before* dispatch, so a client
+# connecting directly to the named pipe (bypassing the MCP server, whose own
+# tools/exclude_tools filter only trims discovery + the batch gate) is still
+# bound by the same operator policy. (defense-in-depth; review #7 follow-up)
+#
+# The control-plane methods ``ping`` and ``shutdown`` are always allowed even
+# under a restrictive policy: an over-restrictive ``[tools]`` typo must not turn
+# the daemon into an unkillable, unprobeable process. ``configure_tool_policy``
+# forces them into the allowed set.
+_TOOL_POLICY: set[str] | None = None
+
+# Methods exempt from the tool policy regardless of [tools] config. These are
+# daemon control-plane (health/shutdown), not automation tools.
+_POLICY_EXEMPT: frozenset[str] = frozenset({"ping", "shutdown"})
+
+
+def configure_tool_policy(
+    include: list[str] | str | None = None,
+    exclude: list[str] | str | None = None,
+) -> None:
+    """Resolve and install the process-global tool allowlist from ``[tools]``.
+
+    Called once from the daemon's ``_init_daemon_state`` after all handlers are
+    registered (so the policy can intersect the live ``HANDLERS`` registry).
+    Mirrors the MCP-layer semantics (``utils/config.py`` ToolsConfig +
+    ``mcp/server.py`` apply_tool_filter): ``include`` (a whitelist) wins over
+    ``exclude``; both default empty = no policy = all tools reachable.
+
+    - ``include`` non-empty → allowed = (include ∩ HANDLERS) ∪ exempt.
+    - else ``exclude`` non-empty → allowed = (HANDLERS − exclude) ∪ exempt.
+    - both empty → ``None`` (no enforcement; original behavior).
+
+    Accepts a bare string as well as a list: ``config set`` only writes
+    scalars, so a TOML-array key set via the setter lands as a comma-joined
+    string (e.g. ``"shell,registry"``) rather than a list. ``_normalize``
+    tolerates both (and None) — the same defensive handling the MCP serve path
+    uses in ``_as_list``. Unknown names are silently ignored, matching
+    apply_tool_filter — a typo shouldn't crash startup (the tool simply isn't
+    there to allow/deny). Idempotent: each call replaces the previous policy.
+    Tests call ``configure_tool_policy(None, None)`` to reset between cases.
+    """
+
+    def _normalize(v: list[str] | str | None) -> list[str]:
+        if v is None:
+            return []
+        if isinstance(v, str):
+            return [t.strip() for t in v.split(",") if t.strip()]
+        return [t for t in v if t]
+
+    global _TOOL_POLICY
+    include = _normalize(include)
+    exclude = _normalize(exclude)
+    if not include and not exclude:
+        _TOOL_POLICY = None
+        return
+    registered = set(HANDLERS)
+    if include:
+        allowed = {t for t in include if t in registered}
+        mode = "include"
+    else:
+        allowed = registered - set(exclude)
+        mode = "exclude"
+    # Control-plane methods are always reachable (don't brick the daemon).
+    allowed |= _POLICY_EXEMPT
+    _TOOL_POLICY = allowed
+    logger.info(
+        "Tool policy active (%s): %d of %d methods reachable",
+        mode, len(allowed), len(registered),
+    )
+
 
 class CoordinateRangeError(ValueError):
     """Raised when an input coordinate falls outside the virtual screen.
@@ -94,6 +168,21 @@ def route_request(request: JSONRPCRequest) -> JSONRPCResponse:
     handler_func = HANDLERS.get(request.method)
     if handler_func is None:
         return make_error(METHOD_NOT_FOUND, f"Unknown method: {request.method}", request.id)
+
+    # Defense-in-depth tool policy (review #7 follow-up): when [tools]
+    # include/exclude is configured, a method outside the resolved allowlist is
+    # rejected with PERMISSION_DENIED before dispatch. This closes the gap where
+    # a client connecting directly to the named pipe (bypassing the MCP server's
+    # own tools/exclude_tools filter) could reach any handler. ping/shutdown are
+    # always exempt (see configure_tool_policy). _TOOL_POLICY is None by default
+    # (no config) → no enforcement, original behavior.
+    if _TOOL_POLICY is not None and request.method not in _TOOL_POLICY:
+        logger.debug("Tool policy denied %r", request.method)
+        return make_error(
+            PERMISSION_DENIED,
+            f"Method '{request.method}' is excluded by the [tools] policy",
+            request.id,
+        )
 
     try:
         result = handler_func(request.params or {})

@@ -79,3 +79,37 @@ class TestDaemonConfigWiring:
             cfg.set_config_override(override)
         # No override set -> get_config_path is the default location.
         assert cfg.get_config_path() == cfg.get_data_dir() / "config.toml"
+
+    def test_daemon_reads_tools_config_into_policy(self, tmp_path, monkeypatch):
+        """_init_daemon_state reads [tools] from config and feeds it to
+        configure_tool_policy. Verify the wiring: a config with [tools] exclude
+        yields, via the same config.get the daemon uses, a value that
+        configure_tool_policy turns into an enforced policy. (review #7
+        follow-up — daemon-side defense-in-depth.)"""
+        from unittest.mock import MagicMock, patch
+        import agent_windows.daemon.router as router
+        from agent_windows.ipc.protocol import JSONRPCRequest, PERMISSION_DENIED
+        import agent_windows.daemon.handlers  # populate HANDLERS (no-op if done)
+
+        alt = tmp_path / "alt.toml"
+        alt.write_text('[tools]\nexclude = ["shell", "registry"]\n',
+                       encoding="utf-8")
+        monkeypatch.delenv("AGENT_WINDOWS_VLM_API_KEY", raising=False)
+        cfg._config_cache = None
+        cfg.set_config_override(str(alt))
+        try:
+            config = cfg.load_config()
+            # Mirror the exact two lines _init_daemon_state runs after the
+            # idle_timeout read.
+            tools_cfg = config.get("tools", {}) or {}
+            router.configure_tool_policy(tools_cfg.get("include"),
+                                         tools_cfg.get("exclude"))
+            assert router._TOOL_POLICY is not None  # policy is active
+            with patch.dict(router.HANDLERS,
+                            {"shell": MagicMock(return_value={"ok": True})}):
+                resp = router.route_request(
+                    JSONRPCRequest(id=1, method="shell", params={}))
+            assert resp.error["code"] == PERMISSION_DENIED
+        finally:
+            router.configure_tool_policy(None, None)  # reset (no autouse here)
+            cfg.set_config_override(None)

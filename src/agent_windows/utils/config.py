@@ -250,11 +250,32 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "cors_origins": [],
     },
     "tools": {
-        # Startup tool filtering (applies to all transports). `include` is the
-        # explicit whitelist enabled via --tools (overrides exclude); `exclude`
-        # removes tools via --exclude-tools. Both default empty = all tools. As
-        # with [security], set as TOML arrays (edit config.toml or use flags/env)
-        # since `config set` only writes scalars. (TODO #4)
+        # Startup tool filtering. `include` is the explicit whitelist enabled
+        # via --tools (overrides exclude); `exclude` removes tools via
+        # --exclude-tools. Both default empty = all tools. As with [security],
+        # set as TOML arrays (edit config.toml or use flags/env) since
+        # `config set` only writes scalars. (TODO #4)
+        #
+        # Two layers honor this: the MCP server (discovery trim + the batch
+        # sub-command gate, from --tools/--exclude-tools flags/env) AND the
+        # daemon itself — at startup it reads this [tools] section and rejects
+        # any filtered method at route_request (PERMISSION_DENIED) before
+        # dispatch, so a process connecting directly to the named pipe (bypassing
+        # the MCP server) is still bound by the policy. ping/shutdown are always
+        # exempt (an over-restrictive typo must not brick the daemon). Note the
+        # daemon reads ONLY this config section, not the MCP --tools flag (the
+        # flag never lands in config); for the daemon to enforce, write [tools]
+        # here. (review #7 follow-up)
+        #
+        # Namespace caveat: the daemon matches on *daemon method names*, which
+        # differ from MCP tool names for 3 tools — ask_vision/ask-vision,
+        # wait/wait_check, wait_for/wait_for_check. Excluding the MCP name
+        # "ask_vision" won't bind the daemon (use "ask-vision"); excluding "wait"
+        # excludes only the sleep tool, not "wait_check". The high-risk names
+        # (shell, registry, fs_delete, process_kill, …) are identical in both
+        # namespaces, so this only matters for those 3. Like [security], set as
+        # TOML arrays (edit config.toml) — `config set` writes scalars, so a
+        # comma-joined value lands as one element and matches nothing.
         "include": [],
         "exclude": [],
     },

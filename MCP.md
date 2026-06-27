@@ -171,7 +171,7 @@ A bare `mcp serve --transport streamable-http --host 0.0.0.0` with no `auth_key`
 | `--tools screenshot,click,snapshot` | Restrict to these tools (whitelist); removes all others. Overrides `--exclude-tools`. |
 | `--exclude-tools shell,registry` | Remove these tools from the active set. |
 
-> **These filters are enforced, not just hidden.** A filtered-out tool is genuinely blocked — the `batch` tool applies the same filter to its `commands[].method` sub-calls, so excluding `shell` also blocks `batch({"method":"shell"})` (the whole batch aborts with the offenders named). Enforcement runs in this MCP server process (both discovery trimming and the `batch` gate); the daemon itself does not yet know the list, so a process connecting *directly* to the named pipe (bypassing this server) is not restricted by it — see [SECURITY.md](SECURITY.md). Use the valid tool names from [manifest.json](https://github.com/XiaofengdiZhu/agent-windows/blob/main/manifest.json) (`tools[].name`) or the catalog below.
+> **These filters are enforced, not just hidden.** A filtered-out tool is genuinely blocked — the `batch` tool applies the same filter to its `commands[].method` sub-calls, so excluding `shell` also blocks `batch({"method":"shell"})` (the whole batch aborts with the offenders named). Enforcement runs in two layers: this MCP server process (discovery trim + the `batch` gate), **and** the daemon itself — at startup the daemon reads `[tools] include/exclude` from config and rejects any filtered method at the router (`PERMISSION_DENIED`), so even a process connecting *directly* to the named pipe (bypassing this server) is bound by the policy. Note the daemon honors the **config** `[tools]` section, not the `--tools`/`--exclude-tools` flags (those are process-local to this MCP server and never written to config); to lock the daemon, set `[tools]` in `config.toml`. `ping`/`shutdown` are always exempt. See [SECURITY.md](SECURITY.md). Use the valid tool names from [manifest.json](https://github.com/XiaofengdiZhu/agent-windows/blob/main/manifest.json) (`tools[].name`) or the catalog below.
 | `--stateless-http` | Run streamable-http without `Mcp-Session-Id` / per-connection state — reconnecting clients survive a server restart, and the server scales behind a load balancer. Streamable-http only. |
 
 Config equivalents (in `~/.agent-windows/config.toml`):
@@ -189,6 +189,8 @@ cors_origins = ["https://my-client.example.com"]   # empty = no CORS headers
 include = ["screenshot", "snapshot"]   # whitelist (overrides exclude)
 exclude = ["shell", "registry"]        # blacklist
 ```
+
+> The daemon honors this `[tools]` section using **daemon method names** (write it as a TOML array — `config set` only writes scalars, so a comma-joined value matches nothing). The names match the MCP tool names above except for `ask-vision`/`wait_check`/`wait_for_check` (the daemon uses the hyphenated/poll names); the high-risk names (`shell`, `registry`, `fs_delete`, `process_kill`, …) are identical.
 
 ## Transports
 
