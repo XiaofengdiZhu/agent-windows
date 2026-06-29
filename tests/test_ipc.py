@@ -237,6 +237,47 @@ class TestSendToDaemonTimeout:
         # Returned within a few seconds → proves no infinite block
         assert time.monotonic() - start < 5.0
 
+    def test_pipe_busy_is_retried_not_fatal(self, monkeypatch):
+        """winerror 231 (ERROR_PIPE_BUSY) — the daemon's single instance is
+        occupied/in the create→Connect window — is a transient connect state,
+        not a permanent failure. A first 231 followed by a successful connect
+        must return the daemon's response instead of raising ConnectionError.
+
+        Pins the connect-retry set so a future change can't silently drop 231
+        and reintroduce the "two concurrent CLI calls spuriously fail" bug.
+        """
+        import pywintypes
+        import win32file
+        import agent_windows.ipc.pipe as pipe_mod
+
+        calls = {"connect": 0}
+
+        def fake_createfile(*args, **kwargs):
+            calls["connect"] += 1
+            if calls["connect"] == 1:
+                # ERROR_PIPE_BUSY — pipe exists but instance is busy.
+                raise pywintypes.error(231, "CreateFile", "All pipe instances are busy.")
+            return "sentinel-pipe-handle"
+
+        monkeypatch.setattr(win32file, "CreateFile", fake_createfile)
+        # The success path writes then reads; stub both at module scope (they
+        # receive the sentinel handle), and stub CloseHandle in the finally.
+        monkeypatch.setattr(pipe_mod, "_overlapped_write_all", lambda *a, **k: None)
+
+        def fake_read_chunk(pipe, timeout_ms):
+            # One chunk carrying the response line, then an empty chunk to end.
+            if fake_read_chunk._sent:
+                return b""
+            fake_read_chunk._sent = True
+            return b'{"jsonrpc":"2.0","id":1,"result":{"status":"ok"}}\n'
+        fake_read_chunk._sent = False
+        monkeypatch.setattr(pipe_mod, "_overlapped_read_chunk", fake_read_chunk)
+        monkeypatch.setattr(win32file, "CloseHandle", lambda h: None)
+
+        resp = send_to_daemon("ping", pipe_name="\\\\.\\pipe\\unused", timeout=1.0)
+        assert calls["connect"] == 2  # first 231, second success — no fatal raise
+        assert json.loads(resp)["result"]["status"] == "ok"
+
 
 class TestServerReadTimeout:
     """SEC3-06: server-side read_pipe must be bounded — a client that connects

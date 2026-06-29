@@ -377,8 +377,16 @@ def send_to_daemon(
     # surfacing an error (or, upstream, spawning a rival daemon), retry the
     # connect a few times with a short backoff — the gap is sub-millisecond
     # under normal load. Bound it so a genuinely dead daemon still fails fast.
+    #
+    # winerror 231 (ERROR_PIPE_BUSY) is the other transient connect state:
+    # the daemon's single pipe instance is occupied by another client (or is
+    # in the create→Connect window). The Win32 contract for 231 is "the pipe
+    # exists but isn't available yet — retry." Treating it as terminal here
+    # made two concurrent CLI calls spuriously fail with "Cannot connect to
+    # daemon" even though the daemon was healthy. Retry it like winerror 2.
     CONNECT_RETRIES = 50
     CONNECT_BACKOFF_S = 0.01  # 10ms → up to ~0.5s total worst case
+    _TRANSIENT_CONNECT_WINERRORS = (2, 231)  # FILE_NOT_FOUND, PIPE_BUSY
 
     import pywintypes  # noqa: F811 — already imported at module scope, kept for clarity
 
@@ -398,11 +406,11 @@ def send_to_daemon(
                 )
                 break
             except pywintypes.error as e:
-                # winerror 2 = ERROR_FILE_NOT_FOUND: pipe doesn't exist right now.
-                # This is the expected transient state while a live daemon cycles
-                # its pipe instance. Retry. Other errors (access denied, etc.)
-                # propagate immediately.
-                if e.winerror != 2 or attempt == CONNECT_RETRIES - 1:
+                # winerror 2 (FILE_NOT_FOUND) and 231 (PIPE_BUSY) are the
+                # expected transient states while a live daemon cycles its
+                # single pipe instance or is serving another client. Retry.
+                # Other errors (access denied, etc.) propagate immediately.
+                if e.winerror not in _TRANSIENT_CONNECT_WINERRORS or attempt == CONNECT_RETRIES - 1:
                     raise
                 time.sleep(CONNECT_BACKOFF_S)
     except Exception as e:
