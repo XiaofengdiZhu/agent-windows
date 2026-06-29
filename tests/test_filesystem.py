@@ -521,6 +521,84 @@ class TestReadOffsetLimitLargeFile:
         monkeypatch.setattr(fs, "MAX_READ_LINES", 100_000)
         r = fs.read_file(str(f), offset=1, limit=1)
         assert len(r["content"]) <= 16
+        # A byte-trimmed window set truncated=True so callers know it was cut.
+        assert r["truncated"] is True
+
+    def test_streaming_offset_beyond_eof_unknown_total(self, tmp_path, monkeypatch):
+        # Regression: an offset past EOF must NOT fabricate a total. Earlier the
+        # heuristic "len(selected) < limit" reported a 5-line file as 98 lines.
+        from agent_windows.core import filesystem as fs
+        f = tmp_path / "tall.txt"
+        f.write_text("l1\nl2\nl3\nl4\nl5\n", encoding="utf-8")
+        monkeypatch.setattr(fs, "MAX_READ_BYTES", 10)  # < 15 B → streaming
+        r = fs.read_file(str(f), offset=99, limit=2)
+        assert r["content"] == ""
+        assert r["lines_total"] is None  # unknown, NOT a fabricated number
+        assert r["truncated"] is False
+
+    def test_streaming_window_reaches_eof_knows_total(self, tmp_path, monkeypatch):
+        # limit=None on a file where the window reaches EOF (no byte truncation)
+        # must report the exact total — it read to the end.
+        from agent_windows.core import filesystem as fs
+        f = tmp_path / "tall.txt"
+        # A huge first line forces streaming; offset=2 reads the 2 trailing
+        # short lines to EOF within the byte budget.
+        f.write_text("X" * 6000 + "\nl2\nl3\n", encoding="utf-8")
+        monkeypatch.setattr(fs, "MAX_READ_BYTES", 100)
+        r = fs.read_file(str(f), offset=2, limit=2)
+        assert r["content"] == "l2\nl3\n"
+        assert r["lines_total"] == 3
+        assert r["truncated"] is False
+
+    def test_streaming_does_not_read_whole_file(self, tmp_path, monkeypatch):
+        # The OOM fix's core claim: a large file is not fully consumed. Verify
+        # by instrumenting iteration so the test fails if the whole file is
+        # walked. A "genuinely not fully read" test — the PR's central guarantee.
+        import builtins
+        from agent_windows.core import filesystem as fs
+
+        f = tmp_path / "huge.txt"
+        # 10_000 short lines; budget large enough to NOT byte-truncate, so the
+        # only thing stopping the read is the line window.
+        f.write_text("\n".join(f"l{i}" for i in range(10_000)) + "\n", encoding="utf-8")
+        monkeypatch.setattr(fs, "MAX_READ_BYTES", 5 * 1024 * 1024)
+        monkeypatch.setattr(fs, "MAX_READ_LINES", 100_000)
+
+        # Wrap builtins.open so the file object counts each line yielded by
+        # iteration (islice drives __next__). The real file handle is kept; only
+        # __next__ is observed. readlines() (small-file branch) isn't taken here.
+        real_open = builtins.open
+        counter = {"lines_iterated": 0}
+
+        class CountingFile:
+            def __init__(self, fh):
+                self._fh = fh
+            def __iter__(self):
+                return self
+            def __next__(self):
+                line = self._fh.__next__()
+                counter["lines_iterated"] += 1
+                return line
+            # forward everything else used by read_file / context manager
+            def read(self, *a): return self._fh.read(*a)
+            def readlines(self, *a): return self._fh.readlines(*a)
+            def __enter__(self): return self
+            def __exit__(self, *a): self._fh.close()
+
+        def spy_open(path, *a, **k):
+            fh = real_open(path, *a, **k)
+            return CountingFile(fh) if str(path) == str(f) else fh
+        monkeypatch.setattr(builtins, "open", spy_open)
+
+        # Request only 5 lines from a 10_000-line file via streaming.
+        r = fs.read_file(str(f), offset=1, limit=5)
+        assert r["content"].count("\n") == 5
+        # Streaming must stop near the window (≤ window + 1 EOF-probe line),
+        # NOT walk all 10_000 lines. The +1 is the EOF probe after a full window.
+        assert counter["lines_iterated"] <= 6, (
+            f"streaming iterated {counter['lines_iterated']} lines; expected to "
+            f"stop near the window (≈5-6), not walk the whole 10_000-line file"
+        )
 
 
 class TestWriteAppend:

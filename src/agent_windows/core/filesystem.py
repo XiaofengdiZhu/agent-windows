@@ -286,6 +286,16 @@ def read_file(path: str, offset: int | None = None, limit: int | None = None,
     ``offset`` / ``limit`` (1-based line numbers) select a line range instead
     of the whole file — for large files that would otherwise hit the 5 MiB
     cap. When omitted, the whole file is read (capped at ``MAX_READ_BYTES``).
+    Both must be positive ints (a ``bool`` is rejected, since it is an int
+    subclass and ``True`` would silently mean 1); bad values raise
+    ``ValueError`` (→ INVALID_PARAMS).
+
+    In line-range mode a file larger than ``MAX_READ_BYTES`` is **streamed**:
+    only the requested window is read, byte-budgeted during accumulation, so a
+    multi-GB file (or one with multi-MB lines) can't exhaust daemon memory.
+    ``lines_total`` is exact when the window reaches EOF; ``None`` means the
+    total is unknown (the file is larger than what the window covered). The
+    ``truncated`` flag is set when the window itself was cut by the byte budget.
 
     ``encoding`` (TODO #20b) overrides the default UTF-8 decode for legacy
     codepage files (e.g. ``gbk``, ``latin-1``). Omit it for UTF-8. A bad
@@ -340,9 +350,9 @@ def read_file(path: str, offset: int | None = None, limit: int | None = None,
             # When the file fits the read budget, readlines() is safe (the whole
             # file is within MAX_READ_BYTES anyway) and gives us an exact total.
             # For files larger than the budget, stream only the requested window
-            # via islice so a multi-GB file can't force the whole thing into
-            # memory — at the cost of not knowing the exact total line count
-            # unless the window happens to reach EOF.
+            # line by line, accumulating into a byte budget and stopping early —
+            # so a multi-GB file (or a file with multi-MB lines) can't force the
+            # daemon to hold more than ~MAX_READ_BYTES in memory.
             if size <= MAX_READ_BYTES:
                 with p.open("r", encoding=enc, errors=errors) as f:
                     lines = f.readlines()
@@ -351,21 +361,49 @@ def read_file(path: str, offset: int | None = None, limit: int | None = None,
                 content = "".join(selected)
                 end_line = start + len(selected)
                 known_total = True
+                byte_truncated = False
             else:
+                # Stream the window, byte-budgeting *during* accumulation (not
+                # after a join) so the memory peak stays near MAX_READ_BYTES
+                # even for files with very long lines.
+                chunks: list[str] = []
+                nbytes = 0
+                nlines = 0
+                byte_truncated = False
+                reached_eof = False
                 with p.open("r", encoding=enc, errors=errors) as f:
-                    selected = list(itertools.islice(f, start, start + line_window))
-                content = "".join(selected)
-                end_line = start + len(selected)
-                # If the window ended short of its requested span, we reached
-                # EOF and know the total; otherwise the file is longer and we
-                # won't consume it just to count.
-                reached_eof = limit is not None and len(selected) < limit
-                known_total = reached_eof
-                total = end_line if reached_eof else None
-                # Byte-budget the streamed slice: a wide window on a file with
-                # very long lines could still exceed MAX_READ_BYTES.
-                if len(content) > MAX_READ_BYTES:
-                    content = content[:MAX_READ_BYTES]
+                    for line in itertools.islice(f, start, start + line_window):
+                        nbytes += len(line)
+                        if nbytes > MAX_READ_BYTES:
+                            # Take the (partial) buffer up to the budget and
+                            # stop — further lines would only overshoot more.
+                            if len(content := "".join(chunks)) <= MAX_READ_BYTES:
+                                content += line[: MAX_READ_BYTES - len(content)]
+                            byte_truncated = True
+                            nlines += 1  # this line counts (partially) toward end
+                            break
+                        chunks.append(line)
+                        nlines += 1
+                    else:
+                        # Loop completed without break: read the whole window.
+                        # If we got fewer lines than requested, we hit EOF. If we
+                        # got exactly the window, probe one more line to tell
+                        # "EOF" from "more lines remain" — bounded (≤ window+1).
+                        content = "".join(chunks)
+                        if nlines < line_window:
+                            reached_eof = True
+                        elif nlines == line_window and next(f, None) is None:
+                            reached_eof = True
+                end_line = start + nlines
+                # We know the exact total only if the window reached EOF before
+                # the byte budget bit. An empty window (start past EOF) leaves
+                # reached_eof False (nlines < window would be 0 < window, but
+                # 0 lines means we have no upper bound on where EOF is) — treat
+                # that as "unknown", not "0". A byte-truncated window didn't.
+                if nlines == 0:
+                    reached_eof = False
+                known_total = reached_eof and not byte_truncated
+                total = end_line if known_total else None
         except UnicodeDecodeError:
             return {
                 "output": f"## File Read\nPath: {p}\n[Binary file, cannot read by lines]",
@@ -373,24 +411,32 @@ def read_file(path: str, offset: int | None = None, limit: int | None = None,
                 "size": size,
                 "truncated": False,
             }
-        shown = f"{start + 1}-{min(end_line, total) if known_total else end_line}"
         if known_total:
-            note = f"\n\n[Showing lines {start + 1}-{min(end_line, total)} of {total}]"
+            shown_end = min(end_line, total)
+            shown = f"{start + 1}-{shown_end}"
+            note = f"\n\n[Showing lines {start + 1}-{shown_end} of {total}]"
             res: dict[str, Any] = {
                 "output": f"## File Read\nPath: {p}\nSize: {size} bytes\n---\n{content}{note}",
                 "content": content,
                 "size": size,
-                "truncated": False,
+                "truncated": byte_truncated,
                 "lines_total": total,
                 "lines_shown": shown,
             }
         else:
-            note = f"\n\n[Showing lines {start + 1}-{end_line} of ≥{end_line + 1}]"
+            # Window didn't reach EOF (or start was past EOF): total unknown.
+            # Avoid the nonsensical "start+1-end" range when no lines matched.
+            if end_line <= start:
+                shown = "0"
+                note = f"\n\n[No lines matched (offset {start + 1} is at or past EOF)]"
+            else:
+                shown = f"{start + 1}-{end_line}"
+                note = f"\n\n[Showing lines {start + 1}-{end_line} of ≥{end_line + 1}]"
             res = {
                 "output": f"## File Read\nPath: {p}\nSize: {size} bytes\n---\n{content}{note}",
                 "content": content,
                 "size": size,
-                "truncated": False,
+                "truncated": byte_truncated,
                 "lines_total": None,
                 "lines_shown": shown,
             }
