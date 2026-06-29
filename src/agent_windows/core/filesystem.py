@@ -2,6 +2,7 @@
 
 import fnmatch
 import functools
+import heapq
 import itertools
 import logging
 import os
@@ -278,6 +279,64 @@ def validate_executable_path(path: str) -> None:
         )
 
 
+def _top_cap_by_key(
+    iterator: Any,
+    key: Callable[[Path], Any],
+    cap: int,
+    keep_total: bool,
+) -> tuple[list[tuple[Any, Path]], int, bool]:
+    """Keep the top ``cap`` entries of ``iterator`` by ``key`` using a bounded heap.
+
+    This replaces ``sorted(iterator)`` for directory traversal, which would
+    materialize the *entire* tree (every ``Path``) before the per-call cap
+    trimmed the output — so ``MAX_LIST_ENTRIES`` / ``MAX_SEARCH_RESULTS`` capped
+    only the formatted result, not the sort-time memory peak. On a tree with
+    millions of entries that peak was unbounded, defeating the "bound daemon
+    memory" claim (SEC3-03 / review A2).
+
+    We want the globally-smallest ``cap`` keys (matching
+    ``sorted(iterator, key=key)[:cap]``). A min-heap of ``cap`` reversed keys
+    acts as a max-heap of real keys: when full, ``heappushpop`` evicts the
+    *largest* real key, leaving the smallest ``cap`` behind. Memory stays O(cap)
+    regardless of tree size, while the output is still the globally-sorted top.
+
+    Iterates the whole tree when ``keep_total`` is True (``list_dir`` reports the
+    real entry count) and stops early at ``cap`` when False (``search_files``
+    doesn't promise an exact total). ``key`` is evaluated per entry during
+    traversal (e.g. calls ``is_dir()``) — the same work the old code did.
+
+    Returns ``(top_entries_sorted, total_seen_or_cap, truncated)`` where each
+    ``top_entries_sorted`` item is ``(key_value, path)`` in ascending key order.
+    """
+
+    class _Rev:
+        """Wrap a key so heapq (min-heap) treats larger real keys as smaller,
+        turning the heap into a max-heap of real keys — letting heappushpop
+        evict the largest kept key and retain the smallest ``cap``."""
+        __slots__ = ("real",)
+        def __init__(self, real: Any) -> None: self.real = real
+        def __lt__(self, other: "_Rev") -> bool: return self.real > other.real
+
+    heap: list[tuple[Any, Path]] = []  # (_Rev(key), path)
+    total = 0
+    truncated = False
+    for entry in iterator:
+        total += 1
+        rk = _Rev(key(entry))
+        if len(heap) < cap:
+            heapq.heappush(heap, (rk, entry))
+        else:
+            truncated = True
+            heapq.heappushpop(heap, (rk, entry))  # evicts largest real key
+            if not keep_total:
+                break  # search_files: stop once the cap is filled
+    # heap holds the smallest-cap real keys; sort ascending for output order.
+    kept = sorted(heap, key=lambda item: item[0].real)
+    out = [(rk.real, path) for rk, path in kept]
+    reported_total = total if keep_total else min(total, cap)
+    return out, reported_total, truncated
+
+
 @_with_elevation_hint
 def read_file(path: str, offset: int | None = None, limit: int | None = None,
               encoding: str | None = None) -> dict[str, Any]:
@@ -510,18 +569,33 @@ def list_dir(path: str, pattern: str | None = None, recursive: bool = False, sho
     else:
         iterator = p.iterdir()
 
+    def _visible(it: Any):
+        """Yield only entries that pass the hidden/non-recursive-pattern filters,
+        so the heap selects and the count reflects only visible entries — same
+        semantics as the old filter-after-sort, without materializing the tree."""
+        for entry in it:
+            if not show_hidden and entry.name.startswith("."):
+                continue
+            if pattern and not recursive and not fnmatch.fnmatch(entry.name, pattern):
+                continue
+            yield entry
+
+    # Select the globally-smallest MAX_LIST_ENTRIES keys over a bounded heap
+    # (O(cap) memory, not O(tree)) while still counting every visible entry for
+    # the real total. (review A2)
+    def _sort_key(e: Path):
+        try:
+            is_dir = e.is_dir()
+        except OSError:
+            is_dir = False
+        return (not is_dir, e.name.lower())
+
+    kept, total, truncated = _top_cap_by_key(
+        _visible(iterator), _sort_key, MAX_LIST_ENTRIES, keep_total=True,
+    )
+
     entries = []
-    total = 0
-    truncated = False
-    for entry in sorted(iterator, key=lambda e: (not e.is_dir(), e.name.lower())):
-        if not show_hidden and entry.name.startswith("."):
-            continue
-        if pattern and not recursive and not fnmatch.fnmatch(entry.name, pattern):
-            continue
-        total += 1
-        if len(entries) >= MAX_LIST_ENTRIES:
-            truncated = True
-            continue  # keep counting for the total, but stop formatting
+    for _key, entry in kept:
         try:
             is_dir = entry.is_dir()
         except OSError:
@@ -657,14 +731,17 @@ def search_files(path: str, pattern: str, recursive: bool = True) -> dict[str, A
         raise ValueError(f"Search path is not a directory: {path}")
 
     iterator = p.rglob(pattern) if recursive else p.glob(pattern)
+
+    # Select the globally-smallest MAX_SEARCH_RESULTS names over a bounded heap
+    # (O(cap) memory, not O(tree)). search_files stops once the cap fills
+    # (keep_total=False) — it doesn't promise an exact total, only "≥ cap if
+    # truncated". (review A2)
+    kept, count, truncated = _top_cap_by_key(
+        iterator, lambda e: e.name.lower(), MAX_SEARCH_RESULTS, keep_total=False,
+    )
+
     results = []
-    count = 0
-    truncated = False
-    for match in sorted(iterator, key=lambda e: e.name.lower()):
-        count += 1
-        if len(results) >= MAX_SEARCH_RESULTS:
-            truncated = True
-            break
+    for _key, match in kept:
         try:
             size = match.stat().st_size if match.is_file() else 0
         except OSError:

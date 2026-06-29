@@ -159,6 +159,62 @@ class TestListDir:
         listed = [l for l in result["output"].splitlines() if l.startswith("  ")]
         assert len(listed) == cap
 
+    def test_list_dir_peak_memory_scales_with_cap_not_tree(self, tmp_path, monkeypatch):
+        """A2: the sort no longer materializes the whole tree. The real memory
+        bound is that peak scales with the CAP, not with the entry count N. We
+        prove it by contrasting two caps over the SAME large tree and checking
+        the peak delta is large — a sorted()-based impl (old code) would hold
+        ~all N Paths regardless of cap, so the two peaks would be nearly equal
+        and this delta assertion would fail."""
+        import tracemalloc
+        from agent_windows.core import filesystem as fs
+        from agent_windows.core.filesystem import list_dir
+
+        # A wide tree: many entries so an unbounded sort would peak high.
+        n = 6000
+        for i in range(n):
+            (tmp_path / f"f{i:05d}.txt").write_text("x", encoding="utf-8")
+
+        def peak_at(cap: int) -> int:
+            monkeypatch.setattr(fs, "MAX_LIST_ENTRIES", cap)
+            tracemalloc.start()
+            r = list_dir(str(tmp_path))
+            cur, peak = tracemalloc.get_traced_memory()
+            tracemalloc.stop()
+            assert r["count"] == n  # real total preserved at any cap
+            return peak
+
+        small_cap_peak = peak_at(20)
+        large_cap_peak = peak_at(5000)
+        # The heap holds O(cap) Paths. With small cap the peak is dominated by
+        # interpreter overhead; with large cap (5000) it carries ~5000 extra
+        # Path objects. The delta must be substantial (well over the per-call
+        # noise). If the impl regressed to sorted(), BOTH peaks would be ~equal
+        # (≈ N Paths) and the delta would be tiny → this assertion fails.
+        delta = large_cap_peak - small_cap_peak
+        assert delta > 100_000, (
+            f"peak did not scale with cap: small={small_cap_peak} "
+            f"large={large_cap_peak} delta={delta} — expected the large-cap "
+            f"peak to be substantially higher (heap bound depends on cap)"
+        )
+
+    def test_list_dir_truncated_output_is_sorted(self, tmp_path, monkeypatch):
+        """A2: when truncated, the returned entries are still the globally-sorted
+        top cap, not an arbitrary subset (the heap keeps the smallest keys)."""
+        from agent_windows.core import filesystem as fs
+        from agent_windows.core.filesystem import list_dir
+        # Names created out of order; cap below the count.
+        for n in ["k", "j", "i", "h", "g", "f", "e", "d", "c", "b", "a"]:
+            (tmp_path / f"{n}.txt").write_text("x", encoding="utf-8")
+        monkeypatch.setattr(fs, "MAX_LIST_ENTRIES", 4)
+        r = list_dir(str(tmp_path))
+        # Capture in OUTPUT order (no re-sort) — this is what tests the ordering.
+        listed = [l.strip().split()[0].rstrip("/")
+                  for l in r["output"].splitlines() if l.startswith("  ")]
+        # The 4 smallest names, in ascending order: a, b, c, d. If the heap
+        # returned them unordered or returned the wrong (largest) set, this fails.
+        assert listed == ["a.txt", "b.txt", "c.txt", "d.txt"]
+
 
 class TestPathBlacklist:
     """Tests for _validate_path blocking sensitive paths."""
@@ -878,6 +934,30 @@ class TestSearchFiles:
         r = search_files(str(tmp_path), "*.txt", recursive=False)
         assert r["truncated"] is True
         assert r["count"] >= cap
+
+    def test_search_heap_stops_at_cap(self, tmp_path, monkeypatch):
+        """A2: search_files stops walking once the cap fills (keep_total=False),
+        not after sorting the whole tree. The count is capped, not the real
+        total, and only cap matches are retained."""
+        from agent_windows.core import filesystem as fs
+        from agent_windows.core.filesystem import search_files
+        for i in range(300):
+            (tmp_path / f"f{i:03d}.txt").write_text("x", encoding="utf-8")
+        monkeypatch.setattr(fs, "MAX_SEARCH_RESULTS", 10)
+
+        retained = {"n": 0}
+        real_fn = fs._top_cap_by_key
+        def spy(iterator, key, cap, keep_total):
+            out, total, trunc = real_fn(iterator, key, cap, keep_total)
+            retained["n"] = len(out)
+            assert keep_total is False  # search uses early-stop semantics
+            return out, total, trunc
+        monkeypatch.setattr(fs, "_top_cap_by_key", spy)
+
+        r = search_files(str(tmp_path), "*.txt", recursive=False)
+        assert r["truncated"] is True
+        assert retained["n"] == 10   # only cap retained, not all 300
+        assert r["count"] == 10      # count capped (no exact total promised)
 
     def test_refuses_blacklisted_path(self):
         """M2: searching inside a blacklisted dir (.ssh) is refused."""
