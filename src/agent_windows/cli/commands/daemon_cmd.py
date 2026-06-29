@@ -1,4 +1,4 @@
-"""Daemon commands: start, stop, status."""
+"""Daemon commands: start, stop, status, ping."""
 
 import sys
 
@@ -6,8 +6,24 @@ import typer
 
 from agent_windows.utils.config import get_pid_path, get_version_path
 from agent_windows.daemon.lifecycle import read_pid_file, is_process_alive, read_version_file
+from agent_windows.cli.dispatcher import _cmd
 
 app = typer.Typer(help="Daemon management")
+
+
+def ping(ctx: typer.Context) -> None:
+    """Daemon health check — one IPC round-trip (C2).
+
+    Registered as a *top-level* command (``agent-windows ping``), not
+    ``daemon ping``: the README and the native launcher expose it at the top
+    level (launcher commands.rs maps ``"ping"`` straight to a daemon call),
+    so the Python fallback (``agent-windows-python`` / ``--no-daemon``) matches.
+    The daemon's ping handler returns ``{"status": "ok", "message": "pong"}``
+    with no ``output`` key, so ``print_result`` renders the fields directly
+    (and ``--format json`` dumps the whole dict). ``ping`` is policy-exempt in
+    the router, so it works even before any tool authorization is configured.
+    """
+    _cmd(ctx, "ping")
 
 
 @app.command("start")

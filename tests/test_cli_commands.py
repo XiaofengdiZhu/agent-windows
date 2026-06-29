@@ -947,6 +947,74 @@ class TestDaemonCommand:
         assert "Status: stopped" in result.output
 
 
+# ── ping command: top-level daemon health check (C2) ──────────────────
+
+
+class TestPingCommand:
+    """`agent-windows ping` is a top-level command (the README and the native
+    launcher expose it there). The Python fallback (agent-windows-python) was
+    missing it entirely → "No such command 'ping'", exit 2. The fix registers
+    it as top-level, dispatching to the daemon's policy-exempt ping handler."""
+
+    @patch("agent_windows.cli.commands.daemon_cmd._cmd")
+    def test_ping_dispatches_to_daemon_ping(self, mock_cmd):
+        """`ping` calls _cmd(ctx, "ping") with no params."""
+        result = runner.invoke(app, ["ping"])
+        assert result.exit_code == 0
+        method, params = _cmd_calls(mock_cmd)[0]
+        assert method == "ping"
+        assert params == {}
+
+    @patch("agent_windows.cli.dispatcher.call_daemon",
+           return_value={"status": "ok", "message": "pong"})
+    def test_ping_renders_status_and_message(self, mock_call):
+        """The daemon reply has no `output` key, so print_result renders the
+        status/message fields directly (the no-output fallback path)."""
+        result = runner.invoke(app, ["ping"])
+        assert result.exit_code == 0
+        assert "ok" in result.output
+        assert "pong" in result.output
+
+    @patch("agent_windows.cli.dispatcher.call_daemon",
+           return_value={"status": "ok", "message": "pong"})
+    def test_ping_format_json_dumps_full_dict(self, mock_call):
+        """--format json (a global flag, before the command) dumps the whole
+        reply dict, not just a rendered line."""
+        result = runner.invoke(app, ["--format", "json", "ping"])
+        assert result.exit_code == 0
+        parsed = json.loads(result.output)
+        assert parsed == {"status": "ok", "message": "pong"}
+
+    @patch("agent_windows.cli.dispatcher.call_daemon",
+           side_effect=ConnectionError("daemon unreachable"))
+    def test_ping_daemon_down_exits_nonzero(self, mock_call):
+        """A daemon-down connection error surfaces a clear message and a
+        non-zero exit (2 — infrastructure failure), so a script/agent health
+        check can distinguish 'daemon down' from success."""
+        result = runner.invoke(app, ["ping"])
+        assert result.exit_code == 2
+        assert "daemon unreachable" in result.output
+
+    @patch("agent_windows.ipc.client.call_daemon",
+           return_value={"status": "ok", "message": "pong"})
+    def test_ping_no_daemon_runs_in_process(self, mock_call):
+        """--no-daemon bypasses call_daemon and runs the ping handler in-process
+        via route_request — so call_daemon is NOT invoked, yet the reply still
+        renders. (The daemon handler is policy-exempt, so this works without
+        any tool authorization.)"""
+        result = runner.invoke(app, ["--no-daemon", "ping"])
+        assert result.exit_code == 0
+        assert "pong" in result.output
+        mock_call.assert_not_called()  # ran in-process, not via IPC
+
+    def test_ping_listed_in_top_level_help(self):
+        """`ping` must appear in the root command list (not buried under
+        `daemon ping`), matching the README and the launcher."""
+        result = runner.invoke(app, ["--help"])
+        assert result.exit_code == 0
+        assert "ping" in result.output
+
+
 # ── multi-select / multi-edit commands (TODO #12) ─────────────────────
 
 
