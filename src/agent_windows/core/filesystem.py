@@ -132,6 +132,36 @@ def _as_bool(value: Any) -> bool:
     return value is True or (isinstance(value, str) and value.lower() == "true")
 
 
+def _append_mode(append: Any) -> str:
+    """Resolve the open mode for :func:`write_file`, fail-safe on ``append``.
+
+    Unlike the other ``_as_bool``-gated knobs (overwrite/recursive), a wrong
+    default here is destructive in *both* directions: choosing ``"w"`` when the
+    caller meant append truncates the file; choosing ``"a"`` when they meant
+    write silently appends. So unlike :func:`_as_bool` — which silently maps any
+    unrecognized value to ``False`` — this raises on a truthy-but-unrecognized
+    ``append`` (e.g. ``1``, ``"yes"``, ``"1"``) rather than guess. Some
+    MCP/JSON-RPC clients serialize booleans as ``1``/``0``; under the old
+    ``_as_bool`` mapping ``write_file(p, s, append=1)`` opened ``"w"`` and
+    silently destroyed the existing contents. Refuse instead.
+
+    Recognized truthy: ``True``, ``"true"`` (any case). Recognized falsy:
+    ``False``, ``"false"`` (any case), ``None``/empty.
+    """
+    if _as_bool(append):
+        return "a"
+    # An empty string is an unambiguous falsy (write mode), same as None/False.
+    if isinstance(append, str):
+        if append.lower() in ("false", ""):
+            return "w"
+        raise ValueError(
+            f"append must be a boolean, 'true', or 'false', got {append!r}"
+        )
+    if append in (False, None, 0):
+        return "w"
+    raise ValueError(f"append must be a boolean, got {append!r}")
+
+
 def _validate_path(path: str) -> Path:
     """Validate that a file path is not in the blacklist."""
     # M-03: resolve() is the reparse-point defense. It follows directory
@@ -542,7 +572,7 @@ def write_file(path: str, content: str, append: bool = False) -> dict[str, Any]:
     """Write content to a file, or append when ``append=True`` (TODO #4)."""
     p = _validate_write_path(_resolve_user_path(path))
     p.parent.mkdir(parents=True, exist_ok=True)
-    mode = "a" if _as_bool(append) else "w"
+    mode = _append_mode(append)
     with p.open(mode, encoding="utf-8") as f:
         f.write(content)
     action = "Appended to" if mode == "a" else "Written to"

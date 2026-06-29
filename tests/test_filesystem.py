@@ -734,6 +734,33 @@ class TestWriteAppend:
         write_file(str(f), "b", append="true")
         assert f.read_text(encoding="utf-8") == "ab"
 
+    # ── F2 (round 2): append must be fail-safe on ambiguous truthiness.
+    # Some MCP/JSON-RPC clients serialize booleans as 1/0. Under the old
+    # ``mode = "a" if _as_bool(append) else "w"``, append=1 silently opened
+    # "w" and destroyed the file. Now ambiguous-but-truthy values are refused
+    # rather than guessed — both directions (truncate-vs-append) are destructive
+    # when wrong, unlike the overwrite/recursive knobs which fail safe by
+    # defaulting to off.
+
+    @pytest.mark.parametrize("bad", [1, "yes", "1", "Y"])
+    def test_append_ambiguous_truthiness_refused_not_truncated(self, tmp_path, bad):
+        """An append value we can't map to a definite bool must raise and leave
+        the file untouched — never silently truncate."""
+        from agent_windows.core.filesystem import write_file
+        f = tmp_path / "log.txt"
+        f.write_text("irreplaceable\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="append"):
+            write_file(str(f), "more", append=bad)
+        assert f.read_text(encoding="utf-8") == "irreplaceable\n"
+
+    @pytest.mark.parametrize("falsy", [False, "false", "FALSE", None, 0, ""])
+    def test_append_falsy_overwrites(self, tmp_path, falsy):
+        """Recognized falsy values (incl. string 'false' and int 0) write."""
+        from agent_windows.core.filesystem import write_file
+        f = tmp_path / "x.txt"
+        write_file(str(f), "new", append=falsy)
+        assert f.read_text(encoding="utf-8") == "new"
+
 
 class TestListEnhancements:
     def test_pattern_filter(self, tmp_path):
