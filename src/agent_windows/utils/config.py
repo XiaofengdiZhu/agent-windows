@@ -520,10 +520,21 @@ def _serialize(config: dict, path: Path) -> None:
     Atomic: writes to a sibling temp file then ``os.replace``s it into
     place, so a crash mid-write can't truncate the existing config (which
     also holds the DPAPI-encrypted api_key).
+
+    The temp file is owner-only ACL'd *before* the replace (D2). On NTFS,
+    ``os.replace`` (``MoveFileEx``) carries the source file's own security
+    descriptor over the target, so ``path`` atomically appears with an
+    owner-only DACL — there is no window where the new file sits at the
+    default (possibly group-readable) DACL between replace and a later
+    ``_secure_config_file``. This matters most for ``init_config``'s
+    first write of default config (which carries no DPAPI layer). ``save_config``
+    and ``init_config`` still call ``_secure_config_file(path)`` after as
+    belt-and-braces (the call is idempotent).
     """
     data = toml.dumps(_encrypt_for_write(config))
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(data, encoding="utf-8")
+    _secure_config_file(tmp)  # close the replace→secure TOCTOU window (D2)
     os.replace(tmp, path)
 
 
@@ -810,8 +821,19 @@ def _decrypt_secret(value: str) -> str:
         _, plaintext = win32crypt.CryptUnprotectData(blob, None, None, None, 0)
         return plaintext.decode("utf-8")
     except Exception:
+        # Fail closed (treat as unset), but call out the most common root cause
+        # so the failure is debuggable: DPAPI keys are per-Windows-account, so a
+        # blob copied across accounts/machines (backup restore, roaming profile,
+        # running the daemon under a different service account) can't be
+        # unprotected here. The fix is to re-set the key under this account
+        # (`config set vlm.api_key ...`). (D3)
         logger.warning(
-            "Failed to decrypt DPAPI-protected api_key; treating as unset",
+            "Failed to decrypt DPAPI-protected secret; treating as unset. The "
+            "blob is likely encrypted under a different Windows account (e.g. "
+            "config copied across machines/accounts, a backup restore, a roaming "
+            "profile, or the daemon running under another service account). "
+            "Re-set it under this account (e.g. `config set vlm.api_key ...` or "
+            "`config set mcp.auth_key ...`).",
             exc_info=True,
         )
         return ""

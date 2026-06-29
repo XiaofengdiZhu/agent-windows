@@ -183,6 +183,54 @@ class TestSecretProtection:
         cfg.save_config({"vlm": {"api_key": 123}})  # must not raise
         assert cfg_path.exists()
 
+    def test_serialize_secures_tmp_before_replace(self, tmp_path, monkeypatch):
+        """D2: _serialize must apply the owner-only ACL to the temp file BEFORE
+        os.replace promotes it to the final path. On NTFS os.replace carries the
+        source's own security descriptor to the target, so securing the tmp
+        beforehand means the final file never sits at the default (possibly
+        group-readable) DACL. The post-replace _secure_config_file in
+        save_config is belt-and-braces and would mask a regression here, so this
+        test spies directly on the tmp path passed to _secure_config_file."""
+        import agent_windows.utils.config as cfg
+
+        secured_paths: list[str] = []
+        real_secure = cfg._secure_config_file
+
+        def spy(path, *args, **kwargs):
+            secured_paths.append(str(path))
+            return real_secure(path, *args, **kwargs)
+
+        monkeypatch.setattr(cfg, "_secure_config_file", spy)
+
+        cfg_path = tmp_path / "config.toml"
+        cfg._serialize({"vlm": {"model": "x"}}, cfg_path)
+
+        # The tmp sibling (config.toml.tmp) must be secured BEFORE the replace
+        # consumed it. After os.replace it no longer exists at that name, so the
+        # presence of the .tmp name in the spy log is the proof of ordering.
+        tmp_name = str(cfg_path.with_suffix(cfg_path.suffix + ".tmp"))
+        assert tmp_name in secured_paths, (
+            "_secure_config_file was not called on the tmp file before replace — "
+            "the TOCTOU window is open"
+        )
+
+    def test_decrypt_failure_warning_names_root_cause(self, caplog):
+        """D3: a blob that can't be unprotected must warn with a message that
+        points at the most common root cause (cross-account DPAPI) and the
+        remediation (re-set under this account), not the generic 'treating as
+        unset'. Existing corrupt-blob test only asserts the return value; this
+        locks the diagnostic wording."""
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="agent_windows.utils.config"):
+            result = _decrypt_secret("dpapi:not-valid-base64!!!")
+        assert result == ""  # still fail closed
+        message = caplog.text
+        # Root cause hinted (DPAPI is per-account; copying across accounts fails)
+        assert "different Windows account" in message
+        # Remediation hinted (re-set under this account)
+        assert "config set" in message
+
 
 class TestSecureDirectory:
     """M-01: lock logs/ with an inheritable owner-only DACL. The audit log
