@@ -139,13 +139,36 @@ def read_version_file(version_path: Path) -> str | None:
 
 
 def cleanup_stale_daemon(pid_path: Path, version_path: Path | None = None) -> None:
-    """Clean up stale PID file and version file if daemon is dead."""
+    """Clean up stale PID file and version file if daemon is dead.
+
+    Only deletes when the recorded process is confirmed dead. :func:`is_our_daemon`
+    fails *closed* — it returns False not only for a dead/recycled PID but also
+    for a process that is alive yet whose creation time can't be queried
+    (protected process / PPL / transient ``GetProcessTimes`` failure) or whose
+    ``recorded_start`` is missing. Treating that False as "confirmed stale" and
+    unlinking the PID file of a *live* daemon is dangerous: it makes
+    :func:`agent_windows.ipc.client._daemon_process_alive` return False (no
+    file), so during the pipe-recreate window :func:`ensure_daemon_running`
+    spawns a rival — the loser fails FIRST_PIPE_INSTANCE and leaks as an orphan
+    ``python.exe``. So a second, read-only check gates the delete: a live PID
+    keeps its file even when daemon identity can't be confirmed. (F9)
+    """
     info = read_pid_file(pid_path)
     if info is None:
         return
 
     pid, recorded_start = info
     if not is_our_daemon(pid, recorded_start):
+        # is_our_daemon=False conflates "dead" with "alive but unconfirmable".
+        # is_process_alive is the read-only liveness primitive (no identity),
+        # so it stays True for the live-but-unqueryable case. Only delete when
+        # the process is genuinely gone.
+        if is_process_alive(pid):
+            logger.info(
+                "PID %d recorded as daemon but identity unconfirmable "
+                "(alive, creation time unqueryable or start time missing); "
+                "keeping PID file to avoid a rival-spawn leak", pid)
+            return
         logger.info("Stale daemon found (pid=%d, dead or recycled), cleaning up", pid)
         pid_path.unlink(missing_ok=True)
         if version_path:

@@ -11,6 +11,7 @@ from agent_windows.daemon.lifecycle import (
     write_version_file,
     read_version_file,
     check_version_mismatch,
+    cleanup_stale_daemon,
     is_our_daemon,
     is_process_alive,
     process_create_time_secs,
@@ -166,3 +167,93 @@ class TestProcessIdentity:
         # (is_our_daemon composes it); verify it still reports the current
         # process as alive so the layered design isn't accidentally broken.
         assert is_process_alive(os.getpid()) is True
+
+
+class TestCleanupStaleDaemon:
+    """cleanup_stale_daemon must distinguish 'confirmed dead' from 'can't tell'.
+
+    is_our_daemon fails CLOSED: when a process is alive but its creation time
+    can't be queried (protected process / PPL / transient GetProcessTimes
+    failure), or recorded_start is missing, it returns False because identity
+    can't be confirmed. That is the correct call for an identity check.
+
+    But cleanup_stale_daemon previously treated *every* is_our_daemon=False as
+    'confirmed stale' and unlinked the PID file. For a LIVE-but-unqueryable
+    process that is wrong: deleting the PID file makes _daemon_process_alive()
+    return False (no file), so during the pipe-recreate window
+    ensure_daemon_running spawns a rival daemon — the loser fails
+    FIRST_PIPE_INSTANCE and leaks as an orphan python.exe (the exact leak
+    client._daemon_process_alive's docstring warns about).
+
+    The fix layers a second, read-only check: only delete when the process is
+    confirmed dead (is_process_alive False). A live process — even one whose
+    daemon identity we can't confirm — keeps its PID file.
+    """
+
+    def _write_pid_file(self, pid_path, pid, start_time):
+        pid_path.write_text(f"{pid}\n{start_time}\n", encoding="utf-8")
+
+    def test_live_but_unconfirmable_process_keeps_pid_file(self, tmp_path):
+        """F9: is_our_daemon=False because identity is unconfirmable (alive but
+        creation time unqueryable), yet is_process_alive=True. The process is
+        LIVE — deleting its PID file would make _daemon_process_alive() return
+        False and let a rival spawn during the pipe-recreate window. Must keep
+        the file."""
+        import agent_windows.daemon.lifecycle as lc
+
+        pid_path = tmp_path / "daemon.pid"
+        version_path = tmp_path / "daemon.version"
+        self._write_pid_file(pid_path, 4242, time.time())
+        version_path.write_text("1.0.0", encoding="utf-8")
+
+        with patch.object(lc, "is_our_daemon", return_value=False), \
+             patch.object(lc, "is_process_alive", return_value=True):
+            cleanup_stale_daemon(pid_path, version_path)
+
+        assert pid_path.exists(), \
+            "PID file of a live-but-unconfirmable process was deleted (would enable rival-spawn leak)"
+        assert version_path.exists()
+
+    def test_confirmed_dead_process_is_cleaned_up(self, tmp_path):
+        """When the process is genuinely dead (is_process_alive False), the PID
+        file and version file must still be cleaned up — the live-but-unqueryable
+        guard must not regress the normal stale-cleanup path."""
+        import agent_windows.daemon.lifecycle as lc
+
+        pid_path = tmp_path / "daemon.pid"
+        version_path = tmp_path / "daemon.version"
+        self._write_pid_file(pid_path, 4242, time.time())
+        version_path.write_text("1.0.0", encoding="utf-8")
+
+        with patch.object(lc, "is_our_daemon", return_value=False), \
+             patch.object(lc, "is_process_alive", return_value=False):
+            cleanup_stale_daemon(pid_path, version_path)
+
+        assert not pid_path.exists(), "dead process PID file was not cleaned up"
+        assert not version_path.exists()
+
+    def test_our_daemon_running_keeps_pid_file(self, tmp_path):
+        """When is_our_daemon confirms the daemon is ours and running, neither
+        file is touched (the existing happy path — guards against the new
+        liveness check accidentally widening the delete condition)."""
+        import agent_windows.daemon.lifecycle as lc
+
+        pid_path = tmp_path / "daemon.pid"
+        version_path = tmp_path / "daemon.version"
+        self._write_pid_file(pid_path, 4242, time.time())
+        version_path.write_text("1.0.0", encoding="utf-8")
+
+        with patch.object(lc, "is_our_daemon", return_value=True), \
+             patch.object(lc, "is_process_alive", return_value=True) as alive:
+            cleanup_stale_daemon(pid_path, version_path)
+        # When identity is confirmed, the liveness second-check is not needed.
+        alive.assert_not_called()
+        assert pid_path.exists()
+        assert version_path.exists()
+
+    def test_missing_pid_file_is_noop(self, tmp_path):
+        """No PID file → nothing to clean (read_pid_file returns None early).
+        Sanity guard on the early return."""
+        pid_path = tmp_path / "nonexistent.pid"
+        cleanup_stale_daemon(pid_path, tmp_path / "daemon.version")
+        assert not pid_path.exists()
