@@ -554,6 +554,69 @@ class TestScrollAt:
         assert all(d == ic.WHEEL_DELTA for d in deltas)
         assert len(deltas) == 3
 
+    def test_runaway_amount_is_clamped(self):
+        """F11: a runaway ``amount`` (1e9) must not spin the single-threaded
+        daemon with millions of mouse_event + sleep iterations. ``amount`` is a
+        count of wheel notches, so clamping is safe (shrinking a count can't
+        misdirect input). Clamp to MAX_SCROLL_STEPS — verified by counting the
+        wheel events actually sent. (The handler layer passes amount through
+        uncapped today, so the primitive is the bound.)"""
+        with patch.object(ic.user32, "SetCursorPos"), \
+             patch.object(ic, "_send_mouse_event") as mock_evt, \
+             patch.object(ic.time, "sleep"):
+            ic.scroll_at(10, 10, amount=10**9, wait_time=0)
+        assert mock_evt.call_count == ic.MAX_SCROLL_STEPS
+        assert mock_evt.call_count < 10**9  # didn't actually loop a billion times
+
+    def test_non_integer_amount_coerced_and_clamped(self):
+        """A float/bool amount is coerced to int then clamped; a negative is
+        floored at 0 (no scroll, not a reverse-scroll)."""
+        with patch.object(ic.user32, "SetCursorPos"), \
+             patch.object(ic, "_send_mouse_event") as mock_evt, \
+             patch.object(ic.time, "sleep"):
+            ic.scroll_at(10, 10, amount=5.7, wait_time=0)   # → int(5.7)=5
+            assert mock_evt.call_count == 5
+            mock_evt.reset_mock()
+            ic.scroll_at(10, 10, amount=-3, wait_time=0)    # → clamped to 0
+            assert mock_evt.call_count == 0
+
+
+# ── move_to() step bound (F11) ───────────────────────────────────────
+
+
+class TestMoveToBounds:
+    """move_to derives its interpolation step from cursor distance. With the
+    handler path, validate_coordinates already bounds coordinates to the virtual
+    screen, so step stays tiny. But a directly-invoked move_to with a huge
+    coordinate (bypassing the handler) would produce a runaway step → millions
+    of set_cursor_pos + sleep iterations. The primitive must self-bound (F11)."""
+
+    def test_runaway_distance_step_is_clamped(self):
+        """An out-of-screen target whose distance would yield a huge step must
+        be clamped to MAX_MOVE_STEPS set_cursor_pos calls (animation is
+        imperceptible past this anyway)."""
+        # Cursor at origin; target far off-screen → distance huge → step huge.
+        with patch.object(ic, "get_cursor_pos", return_value=(0, 0)), \
+             patch.object(ic, "_get_virtual_screen", return_value=(0, 0, 1920, 1080)), \
+             patch.object(ic.user32, "SetCursorPos") as mock_set, \
+             patch.object(ic.time, "sleep"):
+            ic.move_to(10**9, 10**9)
+        # Interpolation calls + the final exact set_cursor_pos.
+        assert mock_set.call_count <= ic.MAX_MOVE_STEPS + 1
+
+    def test_normal_distance_step_unchanged(self):
+        """A normal in-screen move must not be affected by the cap: step stays
+        small (well under MAX_MOVE_STEPS) and the cursor lands on target."""
+        with patch.object(ic, "get_cursor_pos", return_value=(0, 0)), \
+             patch.object(ic, "_get_virtual_screen", return_value=(0, 0, 1920, 1080)), \
+             patch.object(ic.user32, "SetCursorPos") as mock_set, \
+             patch.object(ic.time, "sleep"):
+            ic.move_to(100, 100)
+        # distance ≈ 141, step = max(1, int(141/1920*10)) = 1 — tiny, uncapped.
+        assert mock_set.call_count < ic.MAX_MOVE_STEPS
+        # Final call lands exactly on target.
+        assert mock_set.call_args.args == (100, 100)
+
 
 # ── multi_select / multi_edit (TODO #12) ────────────────────────────
 

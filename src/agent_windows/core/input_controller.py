@@ -33,6 +33,13 @@ MOUSE_MIDDLEUP = 0x0040
 MOUSE_WHEEL = 0x0800
 MOUSE_ABSOLUTE = 0x8000
 
+# DoS bounds for animation/scroll loops. The handler layer validates inputs,
+# but these primitives must also self-bound: a runaway ``amount`` (scroll_at) or
+# ``step`` (move_to) ties up the single-threaded STA worker with millions of
+# set_cursor_pos/mouse_event + sleep iterations. (F11)
+MAX_SCROLL_STEPS = 1000  # wheel notches per scroll_at call; 1000×120 delta ≈ a few hundred pages
+MAX_MOVE_STEPS = 1000    # interpolated cursor positions per move_to; beyond this, motion is imperceptible
+
 # KeyboardEventFlag
 KEY_DOWN = 0x0000
 KEY_EXTENDED = 0x0001
@@ -224,6 +231,13 @@ def move_to(x: int, y: int, speed: float = 10.0) -> None:
 
     _, _, sw, sh = _get_virtual_screen()
     step = max(1, int(distance / max(sw, sh) * 10))
+    # Cap the interpolation count so a directly-invoked move_to with an
+    # out-of-screen coordinate (bypassing the handler's validate_coordinates)
+    # can't produce a runaway step → millions of set_cursor_pos + sleep
+    # iterations. When coordinates ARE validated (the handler path), distance
+    # is already screen-bounded so step is tiny — this only bites the bypass.
+    # (F11)
+    step = min(step, MAX_MOVE_STEPS)
     interval = min(1.0 / speed, 0.05) / max(step, 1)
 
     for i in range(1, step + 1):
@@ -291,6 +305,13 @@ def scroll_at(x: int, y: int, direction: str = "down", amount: int = 3,
     """Scroll at position (x, y)."""
     set_cursor_pos(x, y)
     delta = -WHEEL_DELTA if direction == "down" else WHEEL_DELTA
+
+    # Bound the loop: amount is a count of wheel notches, so clamping is safe
+    # (shrinking it can't misdirect input the way an unbounded position offset
+    # could). Coerce to int and clamp to [0, MAX_SCROLL_STEPS] so a runaway
+    # amount (1e9) can't spin the single-threaded daemon for days. The handler
+    # layer doesn't cap amount today, so this primitive is the floor. (F11)
+    amount = max(0, min(int(amount), MAX_SCROLL_STEPS))
 
     for _ in range(amount):
         _send_mouse_event(MOUSE_WHEEL, 0, 0, delta)
