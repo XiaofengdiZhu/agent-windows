@@ -29,10 +29,49 @@ _CRITICAL_NAMES = {
 }
 
 # taskkill is always run as an argv list; this marks the safety review for the
-# one place a user-controlled value reaches the process name position. (SEC3-06)
+# one place a user-controlled value reaches the process name position. (SEC-06)
 _TRUSTED_TASKKILL = True
 
 _SORT_KEYS = ("memory", "cpu", "name")
+
+
+def _image_name_for_pid(pid: int) -> str | None:
+    """Resolve the image name (e.g. ``"lsass.exe"``) for a live PID.
+
+    Uses :c:func:`QueryFullProcessImageNameW` (Windows Vista+, no module
+    snapshot needed) under ``PROCESS_QUERY_LIMITED_INFORMATION`` — the least
+    privilege that still works against protected processes a bare
+    ``OpenProcess`` would be denied. Returns the basename, lower-cased, with a
+    trailing ``.exe`` preserved (matching how :func:`kill_process` normalizes
+    the name path). Returns ``None`` when the PID is gone or can't be queried
+    (access denied / race). Callers must treat ``None`` as fail-closed, since a
+    PID whose image we can't confirm could be a recycled critical-process PID.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    kernel32 = ctypes.windll.kernel32
+    # QueryFullProcessImageNameW signature:
+    #   BOOL QueryFullProcessImageNameW(HANDLE, DWORD flags, LPWSTR buf, PDWORD)
+    kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
+    kernel32.QueryFullProcessImageNameW.argtypes = (
+        wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+        ctypes.POINTER(wintypes.DWORD),
+    )
+
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        return None
+    try:
+        buf = ctypes.create_unicode_buffer(1024)
+        size = wintypes.DWORD(len(buf))
+        # flags=0 → return the image path with a drive letter (not device path).
+        if not kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+            return None
+        return os.path.basename(buf.value).lower()
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 def _num(value: Any, default: float = 0.0) -> float:
@@ -171,6 +210,24 @@ def kill_process(pid_or_name: str | int, force: bool = False) -> dict[str, Any]:
             raise ValueError(f"Refusing to kill system-critical PID {pid}")
         if pid == os.getpid():
             raise ValueError("Refusing to kill the current process")
+        # The name-based critical guard below is meaningless for a bare PID —
+        # but list_processes hands the caller every PID+name, so a steered agent
+        # can read lsass's/csrss's PID and call kill_process(<pid>) to slip past
+        # the name check entirely (kill lsass → reboot; csrss → BSOD). Resolve
+        # the PID's image name and run the SAME critical-name check. If the name
+        # can't be resolved (gone/access-denied/race) fail closed: a recycled
+        # critical PID is exactly what we can't confirm safe. (SEC3-04)
+        image_name = _image_name_for_pid(pid)
+        if image_name is None:
+            raise ValueError(
+                f"Refusing to kill PID {pid}: image name could not be verified "
+                f"(process gone or access denied)"
+            )
+        check_name = image_name[:-4] if image_name.endswith(".exe") else image_name
+        if check_name in _CRITICAL_NAMES:
+            raise ValueError(
+                f"Refusing to kill system-critical process '{image_name}' (PID {pid})"
+            )
     else:
         name_str = str(pid_or_name)
         # Normalize before the critical-name check: taskkill is given the

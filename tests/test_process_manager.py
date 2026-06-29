@@ -284,7 +284,9 @@ class TestKillByPid:
     def test_terminates_pid_graceful(self, mock_run):
         """Graceful PID kill → taskkill /PID <pid>, no /F."""
         mock_run.return_value = _completed("SUCCESS: signal sent", 0)
-        result = pm.kill_process(1234)
+        with patch("agent_windows.core.process_manager._image_name_for_pid",
+                   return_value="notepad.exe"):
+            result = pm.kill_process(1234)
         argv = mock_run.call_args.args[0]
         assert argv == ["taskkill", "/PID", "1234"]
         assert "PID 1234" in result["output"]
@@ -294,25 +296,106 @@ class TestKillByPid:
     def test_force_pid_adds_F(self, mock_run):
         """force PID kill → taskkill /PID <pid> /F."""
         mock_run.return_value = _completed("SUCCESS: forcibly", 0)
-        result = pm.kill_process(1234, force=True)
+        with patch("agent_windows.core.process_manager._image_name_for_pid",
+                   return_value="notepad.exe"):
+            result = pm.kill_process(1234, force=True)
         argv = mock_run.call_args.args[0]
         assert argv == ["taskkill", "/PID", "1234", "/F"]
         assert "Status: force-killed" in result["output"]
 
     @patch("agent_windows.core.process_manager.subprocess.run")
     def test_unknown_pid_raises_not_silent(self, mock_run):
-        """taskkill 'not found' for a PID → raise (not silent success)."""
+        """taskkill 'not found' for a PID → raise (not silent success).
+
+        _image_name_for_pid is patched to a benign name so the PID passes the
+        critical-name gate and reaches taskkill, which reports 'not found'."""
         mock_run.return_value = _completed("", 128, stderr="not found")
-        with pytest.raises(ValueError, match="No such process with PID 9999"):
-            pm.kill_process("9999")
+        with patch("agent_windows.core.process_manager._image_name_for_pid",
+                   return_value="notepad.exe"):
+            with pytest.raises(ValueError, match="No such process with PID 9999"):
+                pm.kill_process("9999")
 
     @patch("agent_windows.core.process_manager.subprocess.run")
     def test_pid_accepts_string_int(self, mock_run):
         """A numeric string is parsed as a PID (CLI/MCP pass-through)."""
         mock_run.return_value = _completed("SUCCESS: ok", 0)
-        pm.kill_process("4321")
+        with patch("agent_windows.core.process_manager._image_name_for_pid",
+                   return_value="notepad.exe"):
+            pm.kill_process("4321")
         argv = mock_run.call_args.args[0]
         assert argv == ["taskkill", "/PID", "4321"]
+
+
+class TestKillByPidImageNameGate:
+    """SEC3-04 (round 2): the PID path must run the SAME critical-name check
+    as the name path. A steered agent reads lsass's PID from list_processes
+    and calls kill_process(<pid>) — the old code only checked _CRITICAL_PIDS
+    {0,4}+self for PIDs, so any other critical process (lsass → reboot,
+    csrss → BSOD) was reachable. Now the PID's image name is resolved and
+    checked; if it can't be resolved, kill fails closed."""
+
+    @pytest.mark.parametrize("image", ["lsass.exe", "csrss.exe", "wininit.exe"])
+    def test_pid_resolving_to_critical_name_is_refused(self, image):
+        """A PID whose image name is critical (resolved via win32) is refused
+        before taskkill — closing the read-the-PID-from-the-listing bypass."""
+        with patch("agent_windows.core.process_manager._image_name_for_pid",
+                   return_value=image):
+            with patch("agent_windows.core.process_manager.subprocess.run") as mock_run:
+                with pytest.raises(ValueError, match="system-critical"):
+                    pm.kill_process(9876)
+                mock_run.assert_not_called()
+
+    def test_pid_resolving_to_critical_name_reports_pid(self):
+        """The refusal message names the PID so the operator can trace it."""
+        with patch("agent_windows.core.process_manager._image_name_for_pid",
+                   return_value="lsass.exe"):
+            with pytest.raises(ValueError, match=r"PID 9876"):
+                pm.kill_process(9876)
+
+    def test_pid_with_unresolvable_image_name_fails_closed(self):
+        """If the image name can't be resolved (gone / access denied / race)
+        we must NOT proceed to taskkill — a recycled critical PID is exactly
+        the case we can't confirm safe. Fail closed."""
+        with patch("agent_windows.core.process_manager._image_name_for_pid",
+                   return_value=None):
+            with patch("agent_windows.core.process_manager.subprocess.run") as mock_run:
+                with pytest.raises(ValueError, match="could not be verified"):
+                    pm.kill_process(9876)
+                mock_run.assert_not_called()
+
+    def test_pid_resolving_to_benign_name_proceeds(self):
+        """A PID resolving to a normal app still reaches taskkill (not
+        over-blocked)."""
+        mock_run = _completed("SUCCESS: ok", 0)
+        with patch("agent_windows.core.process_manager._image_name_for_pid",
+                   return_value="notepad.exe"):
+            with patch("agent_windows.core.process_manager.subprocess.run",
+                       return_value=mock_run):
+                result = pm.kill_process(5555)
+        assert "Status: terminated" in result["output"]
+
+
+class TestImageNameForPid:
+    """The win32 resolver itself — real-process sanity (deterministic via
+    os.getpid()), so a future refactor that breaks QueryFullProcessImageNameW
+    wiring surfaces here rather than only via the monkeypatched gate tests."""
+
+    def test_returns_current_process_image_lowercased(self):
+        """Resolving our own PID returns our image name, lower-cased, with the
+        .exe suffix (Python runs as python.exe)."""
+        import sys
+        name = pm._image_name_for_pid(__import__("os").getpid())
+        # On Windows the interpreter is python.exe (or pythonw.exe); both end
+        # in .exe. The resolver lower-cases, so the suffix is '.exe'.
+        assert name is not None
+        assert name.endswith(".exe"), name
+        assert name == name.lower()
+
+    def test_gone_pid_returns_none(self):
+        """A PID that almost certainly doesn't exist resolves to None (fail
+        signal), not an exception."""
+        # PID 0xFFFF'FFFF wraps to uint32 -1; ~4e9 is well past any real PID.
+        assert pm._image_name_for_pid(4_000_000_000) is None
 
 
 # ── SEC3-04: critical process protection ──────────────────────────────
