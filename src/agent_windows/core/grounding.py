@@ -436,14 +436,54 @@ def detect_elements(
     }
 
 
+def _expand_duplicate_target_keys(pairs):
+    """``object_pairs_hook`` that recovers targets a small model wrongly packs
+    into ONE object via repeated ``label``/``bbox`` keys.
+
+    A well-formed response is ``[{"label":..,"bbox":..}, {"label":..,"bbox":..}]``.
+    Some models (observed with ``xopqwen36v35b``) emit instead a single object
+    with the keys repeated: ``[{"label":..,"bbox":..,"label":..,"bbox":..}]``.
+    Standard ``json.loads`` silently keeps only the LAST value of each duplicate
+    key, so N targets collapse to 1 — the others are lost. This hook runs BEFORE
+    that collapse: when it sees ≥2 ``label``/``bbox`` groups in one object, it
+    re-emits them wrapped in a ``{"_packed_targets": [...]}`` sentinel.
+
+    The sentinel is unwrapped by ``_validate_targets`` (which flattens nested
+    lists). An ``object_pairs_hook`` must return a single object (not a bare
+    list, which the parent array would treat as one nested element), hence the
+    wrapper. Objects with single (or no) label/bbox pass through unchanged.
+    """
+    labels = [v for k, v in pairs if k == "label"]
+    bboxes = [v for k, v in pairs if k == "bbox"]
+    # Only trigger the recovery when there's more than one target packed in.
+    if len(labels) > 1 or len(bboxes) > 1:
+        # Pair up by position; if counts mismatch, zip to the shorter (drop the
+        # unpaired extras — they're uninterpretable without the other field).
+        return {"_packed_targets": [
+            {"label": lbl, "bbox": bb} for lbl, bb in zip(labels, bboxes)
+        ]}
+    # Normal object: rebuild as a plain dict. If it had duplicate NON-target
+    # keys, last-wins (standard json behavior).
+    return {k: v for k, v in pairs}
+
+
+def _loads_detection(text: str) -> Any:
+    """``json.loads`` with the duplicate-key recovery hook applied."""
+    return json.loads(text, object_pairs_hook=_expand_duplicate_target_keys)
+
+
 def _parse_detection_json(response: str) -> list[dict]:
     """Parse detection JSON from model response with 4-level fallback.
 
     Levels:
-    1. Direct json.loads()
+    1. Direct parse
     2. Extract ```json ... ``` code block
     3. Balanced bracket matching for first [...]
     4. Return empty list
+
+    Every level parses with the duplicate-key recovery hook, so a model that
+    packs several targets into one object (repeated label/bbox keys) is
+    expanded back into one object per target instead of collapsing to one.
 
     Returns:
         List of dicts, each with "label" and "bbox" keys.
@@ -451,7 +491,7 @@ def _parse_detection_json(response: str) -> list[dict]:
     """
     # Level 1: Direct parse
     try:
-        result = json.loads(response)
+        result = _loads_detection(response)
         if isinstance(result, list):
             return _validate_targets(result)
     except (json.JSONDecodeError, ValueError):
@@ -461,7 +501,7 @@ def _parse_detection_json(response: str) -> list[dict]:
     code_block = re.search(r"```(?:json)?\s*\n?(.*?)\n?\s*```", response, re.DOTALL)
     if code_block:
         try:
-            result = json.loads(code_block.group(1).strip())
+            result = _loads_detection(code_block.group(1).strip())
             if isinstance(result, list):
                 return _validate_targets(result)
         except (json.JSONDecodeError, ValueError):
@@ -476,7 +516,7 @@ def _parse_detection_json(response: str) -> list[dict]:
             if end == -1:
                 break
             try:
-                result = json.loads(response[start : end + 1])
+                result = _loads_detection(response[start : end + 1])
                 if isinstance(result, list):
                     return _validate_targets(result)
             except (json.JSONDecodeError, ValueError):
@@ -493,22 +533,32 @@ def _validate_targets(raw_list: list) -> list[dict]:
 
     Skips entries without valid "label" and "bbox" keys.
     Converts bbox values to int.
+
+    Unwraps ``{"_packed_targets": [...]}`` sentinels produced by the
+    duplicate-key recovery hook (and flattens any nested list of targets), so a
+    model that packs several targets into one object still yields one entry per
+    target instead of collapsing to one.
     """
     valid = []
     for item in raw_list:
-        if not isinstance(item, dict):
-            continue
-        label = item.get("label")
-        bbox = item.get("bbox")
-        if not isinstance(label, str):
-            continue
-        if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
-            continue
-        try:
-            bbox_int = [int(v) for v in bbox]
-        except (ValueError, TypeError):
-            continue
-        valid.append({"label": label, "bbox": bbox_int})
+        if isinstance(item, dict):
+            # Unwrap the duplicate-key-recovery sentinel: it stands in for the
+            # several targets the model wrongly merged into one object.
+            packed = item.get("_packed_targets")
+            if isinstance(packed, list):
+                valid.extend(_validate_targets(packed))
+                continue
+            label = item.get("label")
+            bbox = item.get("bbox")
+            if not isinstance(label, str):
+                continue
+            if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+                continue
+            try:
+                bbox_int = [int(v) for v in bbox]
+            except (ValueError, TypeError):
+                continue
+            valid.append({"label": label, "bbox": bbox_int})
     return valid
 
 

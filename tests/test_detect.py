@@ -106,6 +106,44 @@ class TestParseDetectionJson:
         assert result[0]["label"] == "[OK]"
 
 
+class TestDuplicateKeyRecovery:
+    """Some small models pack several targets into ONE object via repeated
+    label/bbox keys instead of an array of objects:
+
+        [{"label":..,"bbox":..,"label":..,"bbox":..}]
+
+    Standard json.loads keeps only the LAST value of each duplicate key, so N
+    targets collapse to 1 and the rest are silently lost. The parser recovers
+    them by capturing the keys before the collapse. Regression: observed in the
+    wild with the xopqwen36v35b model (3 buttons → 1 detected)."""
+
+    def test_packed_targets_in_one_object_recovered(self):
+        response = ('[{"label": "btn", "bbox": [10, 20, 30, 40], '
+                    '"label": "btn", "bbox": [50, 60, 70, 80], '
+                    '"label": "btn", "bbox": [90, 100, 110, 120]}]')
+        result = _parse_detection_json(response)
+        assert len(result) == 3
+        assert result[0]["bbox"] == [10, 20, 30, 40]
+        assert result[1]["bbox"] == [50, 60, 70, 80]
+        assert result[2]["bbox"] == [90, 100, 110, 120]
+
+    def test_packed_targets_inside_code_block(self):
+        """The recovery must apply on every parse level, incl. the ```json
+        code-block extraction (Level 2) — that's the form models actually emit."""
+        response = ('```json\n[{"label": "x", "bbox": [1,2,3,4], '
+                    '"label": "x", "bbox": [5,6,7,8]}]\n```')
+        result = _parse_detection_json(response)
+        assert len(result) == 2
+
+    def test_single_target_unchanged(self):
+        """A normal single-target object (no duplicate keys) must pass through
+        untouched — the recovery only triggers on >1 label/bbox group."""
+        response = '[{"label": "solo", "bbox": [1, 2, 3, 4]}]'
+        result = _parse_detection_json(response)
+        assert len(result) == 1
+        assert result[0]["label"] == "solo"
+
+
 class TestValidateTargets:
     def test_valid_targets(self):
         raw = [
