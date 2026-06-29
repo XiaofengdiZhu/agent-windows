@@ -32,6 +32,12 @@ agent-windows ground "the search box in the top-right corner"
 3. **Fine pass**: Crops a region around the coarse result, sends the crop for refinement.
 4. Returns the refined `(x, y)` coordinate with a confidence score.
 
+**`--single-pass`**: skips the fine pass (step 3) — one API call, ~2× faster, lower precision (±~100 px instead of the refined result). Use it when speed matters more than precision, or to override a config `grounding.single_pass=true` for one call. With `--single-pass`, `method` is `"visual-coarse-only"`.
+
+```bash
+agent-windows ground "the print icon" --single-pass   # fast, coarse-only
+```
+
 **Output**: `{output, x, y, confidence, method, screenshot_path}`
 
 | Field | Type | Description |

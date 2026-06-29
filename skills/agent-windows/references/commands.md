@@ -822,10 +822,12 @@ agent-windows mcp uninstall        # stop + remove the login auto-start task
 
 | Subcommand | Parameters |
 |------------|------------|
-| `mcp serve` | `--transport` (stdio\|sse\|streamable-http), `--host`, `--port`, `--debug` |
+| `mcp serve` | `--transport` (stdio\|sse\|streamable-http), `--host`, `--port`, `--debug`, `--tools`, `--exclude-tools`, `--ip-allowlist`, `--cors-origins`, `--allow-insecure-remote`, `--stateless-http`, `--oauth-client-id`, `--oauth-client-secret`, `--telemetry` (see [MCP.md](../../../MCP.md) for the full option reference) |
 | `mcp auth` | `--transport`, `--host`, `--port`, `--with-tls`, `--force` |
 | `mcp install` | `--transport`, `--host`, `--port`, `--force` |
 | `mcp uninstall` | — |
+
+`--tools`/`--exclude-tools` are enforced: removed tools cannot be invoked, including via `batch`. Each flag also has an `AGENT_WINDOWS_*` env-var equivalent (see the Global Options table below).
 
 The server exposes ~48 tools mapping 1:1 to the daemon methods (screenshot, snapshot, observe, ground, detect, ask_vision, highlight, diff, get_text, element_state, cleanup_screenshots, click, dblclick, hover, move, mouse_down, mouse_up, drag, scroll, type, shortcut, expand, collapse, app_launch/switch/resize/list, shell, fs_read/write/list/copy/move/delete/search/info, clipboard_get/set, process_list/kill, notify, registry, batch, multi_select, multi_edit, ping, wait, wait_for). Same usage tips apply: call `snapshot` first for pixel-exact coordinates, prefer it over `ground`/`detect` for named controls, and always `app switch` before input.
 
