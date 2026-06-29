@@ -59,6 +59,19 @@ def unwrap_response(response: JSONRPCResponse) -> dict:
     ELEMENT_NOT_FOUND / COORDINATE_OUT_OF_RANGE / PERMISSION_DENIED).
     """
     if response.error is not None:
+        # F7: JSONRPCResponse stores ``error`` unvalidated (unlike the request's
+        # method/params/id), so a non-dict error — a string, number, array, or
+        # bool from a daemon bug, memory corruption, or a MITM on the pipe —
+        # reaches here. Without this guard ``.get("code")`` raises AttributeError,
+        # which escapes the DaemonError type boundary as an uncaught exception
+        # and bypasses the CLI error-code mapping. Keep it inside the boundary
+        # with DAEMON_INTERNAL_ERROR. The daemon's make_error always emits a
+        # dict, so this is purely defensive. (Mirrors the missing-code default.)
+        if not isinstance(response.error, dict):
+            raise DaemonError(
+                DAEMON_INTERNAL_ERROR,
+                f"malformed error object of type {type(response.error).__name__}",
+            )
         # Default to DAEMON_INTERNAL_ERROR if the code is missing: the daemon's
         # make_error always sets one, but a malformed error object shouldn't
         # produce DaemonError.code=None (which would break any caller that

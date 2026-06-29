@@ -62,6 +62,26 @@ class TestUnwrapResponse:
         assert exc_info.value.code == DAEMON_INTERNAL_ERROR
         assert "None" not in str(exc_info.value)
 
+    @pytest.mark.parametrize("bad_error", ["oops", 42, [1, 2], True])
+    def test_non_dict_error_raises_daemon_error_not_attribute_error(self, bad_error):
+        """F7: a malformed ``error`` that isn't a JSON object (a string, number,
+        array, or bool — from a daemon bug, memory corruption, or a MITM on the
+        pipe) must not escape :func:`unwrap_response` as an ``AttributeError``
+        from ``.get("code")``. Keep it inside the :class:`DaemonError` type
+        boundary with :data:`DAEMON_INTERNAL_ERROR`, so callers'
+        ``except DaemonError`` / ``except RuntimeError`` and the CLI error-code
+        mapping still apply. JSONRPCResponse stores ``error`` unvalidated, so a
+        non-dict reaches here as-is. The daemon's make_error always emits a
+        dict, so this is purely defensive."""
+        from agent_windows.ipc.protocol import DAEMON_INTERNAL_ERROR
+        # error is stored unvalidated by JSONRPCResponse.__init__, so a non-dict
+        # reaches unwrap_response unchanged.
+        resp = JSONRPCResponse(id=1, error=bad_error)
+        with pytest.raises(DaemonError) as exc_info:
+            unwrap_response(resp)
+        assert exc_info.value.code == DAEMON_INTERNAL_ERROR
+        assert isinstance(exc_info.value, RuntimeError)  # type boundary held
+
 
 class TestEnsureDaemonRunning:
     """M-31: ensure_daemon_running fails fast when the spawned daemon exits
