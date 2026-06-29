@@ -190,22 +190,36 @@ def _call_anthropic(image: Image.Image, prompt: str, config: dict[str, Any], api
 
 
 def _call_gemini(image: Image.Image, prompt: str, config: dict[str, Any], api_key: str, max_tokens: int = 100) -> str:
-    """Call Google Gemini vision API."""
-    import google.generativeai as genai
+    """Call Google Gemini vision API via the new google-genai SDK.
 
-    # The cache key must include model_name: a GenerativeModel is bound to one
-    # model at construction, so reusing a cached entry after vlm.model changed
-    # would silently keep calling the old model. (api.py review finding)
-    model_name = config.get("model", "gemini-1.5-flash")
-    cache_key = f"gemini:{api_key}:{model_name}"
+    Unlike the deprecated ``google.generativeai`` (which set credentials via a
+    process-global ``genai.configure(api_key=...)``), the new SDK's
+    ``genai.Client(api_key=...)`` binds credentials into the client OBJECT — so
+    caching the client isolates per-key state with no global mutation. This
+    matches the openai/anthropic callers and closes the multi-key/multi-thread
+    race where two concurrent ``configure()`` calls would overwrite each other's
+    global default credentials (D1). The client is model-agnostic, so the model
+    name is passed per-call (not baked into the cache key).
+    """
+    from google import genai
+    from google.genai import types
+
+    # Cache key is api_key only: the Client is not bound to a model (unlike the
+    # old GenerativeModel), so changing vlm.model reuses the same client and just
+    # passes the new name to generate_content. Mirrors openai/anthropic keying.
+    cache_key = f"gemini:{api_key}"
     with _client_lock:
         if cache_key not in _client_cache:
-            genai.configure(api_key=api_key)
-            _client_cache[cache_key] = genai.GenerativeModel(model_name)
-        model = _client_cache[cache_key]
-    response = model.generate_content([prompt, image],
-                                       generation_config=genai.GenerationConfig(
-                                           temperature=0,
-                                           max_output_tokens=max_tokens,
-                                       ))
+            _client_cache[cache_key] = genai.Client(api_key=api_key)
+        client = _client_cache[cache_key]
+
+    model_name = config.get("model", "gemini-2.0-flash")
+    response = client.models.generate_content(
+        model=model_name,
+        contents=[prompt, image],
+        config=types.GenerateContentConfig(
+            temperature=0,
+            max_output_tokens=max_tokens,
+        ),
+    )
     return response.text.strip()

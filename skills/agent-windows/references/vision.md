@@ -139,7 +139,7 @@ jpeg_quality = 85           # JPEG quality (1-95), ignored when PNG
 |--------|-------------------|-------|
 | `openai` | `https://api.openai.com/v1` | GPT-4o, GPT-4o-mini |
 | `anthropic` | `https://api.anthropic.com` | Claude models |
-| `gemini` | Google AI API | Gemini Pro Vision |
+| `gemini` | Google AI API | Gemini models (e.g. gemini-2.0-flash; uses the `google-genai` SDK) |
 
 ### Setting the API Key
 

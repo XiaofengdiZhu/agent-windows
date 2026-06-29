@@ -322,7 +322,7 @@ Some actions are buried in 2nd- or 3rd-level menus. Buttons may show only icons 
 - Windows 8.1 / 10 / 11
 - Python 3.13+
 - Dependencies: typer, comtypes, pywin32 (≥306; ≥308 recommended), Pillow, mss, openai, toml
-- Optional: fastmcp (≥3.0, for the MCP server — `uv tool install agent-windows` / `uv sync --extra mcp`), dxcam, anthropic, google-generativeai, numpy
+- Optional: fastmcp (≥3.0, for the MCP server — `uv tool install agent-windows` / `uv sync --extra mcp`), dxcam, anthropic, google-genai, numpy
 
 > **pywin32 note**: modern pywin32 wheels (≥308) self-configure their DLLs via a `.pth` bootstrap at install time, so `uv tool install` / `uvx` works out of the box. If you ever hit `pythoncom3xx.dll` / `pywintypes3xx.dll` not found on an older pywin32 or a manually-managed environment, run `python Scripts\pywin32_postinstall.py -install` from your install prefix.
 

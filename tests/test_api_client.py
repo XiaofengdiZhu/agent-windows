@@ -270,32 +270,72 @@ class TestClientCache:
             sys.modules.pop("anthropic", None)
 
     def test_gemini_client_cached_across_calls(self):
-        """The gemini backend caches the GenerativeModel keyed by api_key.
-        google.generativeai isn't installed, so inject a fake (sub)module."""
+        """The gemini backend caches the new-SDK Client keyed by api_key (NOT by
+        model — the Client is model-agnostic, so the model is passed per-call to
+        client.models.generate_content). google-genai isn't installed, so inject
+        a fake (sub)module. This mirrors the openai/anthropic isolation design:
+        the api_key is bound into the cached Client object, so there is no
+        process-global configure() state (D1)."""
         import sys
-        fake_model = MagicMock()
-        fake_model.generate_content.return_value = MagicMock(text="  g  ")
+        fake_client = MagicMock()
+        fake_client.models.generate_content.return_value = MagicMock(text="  g  ")
         fake_genai = MagicMock()
-        fake_genai.GenerativeModel.return_value = fake_model
-        fake_genai.GenerationConfig.return_value = MagicMock()
+        fake_genai.Client.return_value = fake_client
         # google is a namespace package; register both the parent and the leaf
-        # submodule so `import google.generativeai as genai` resolves. Point the
-        # parent's attribute at the same fake so import returns the right object.
+        # submodule so `from google import genai` resolves. Point the parent's
+        # attribute at the same fake so the import returns the right object.
         fake_google = MagicMock()
-        fake_google.generativeai = fake_genai
+        fake_google.genai = fake_genai
         sys.modules["google"] = fake_google
-        sys.modules["google.generativeai"] = fake_genai
+        sys.modules["google.genai"] = fake_genai
         try:
             with patch("agent_windows.utils.api.encode_image", return_value="b64"):
                 cfg = {"engine": "gemini", "api_key": "gk", "model": "gemini-x"}
                 r1 = call_vision_model(Image.new("RGB", (4, 4)), "p", cfg)
                 r2 = call_vision_model(Image.new("RGB", (4, 4)), "p", cfg)
-            # GenerativeModel built once (cached). The cache key includes the
-            # model name, so changing vlm.model re-keys (and rebuilds) instead
-            # of reusing a model bound to the old name.
-            assert fake_genai.GenerativeModel.call_count == 1
+            # Client built once (cached), keyed by api_key only — model is per-call.
+            assert fake_genai.Client.call_count == 1
             assert r1 == "g" and r2 == "g"
-            assert "gemini:gk:gemini-x" in api._client_cache
+            assert "gemini:gk" in api._client_cache
+            # The model is passed per-call, not baked into the cached object, so
+            # switching vlm.model does NOT rebuild the client.
+            assert fake_genai.Client.call_args.kwargs["api_key"] == "gk"
+            # Each generate_content call carries the model name.
+            calls = fake_client.models.generate_content.call_args_list
+            assert all(c.kwargs["model"] == "gemini-x" for c in calls)
         finally:
             sys.modules.pop("google", None)
-            sys.modules.pop("google.generativeai", None)
+            sys.modules.pop("google.genai", None)
+
+    def test_gemini_client_re_keys_on_different_api_key(self):
+        """D1: a different api_key builds a distinct cached Client — the key is
+        bound into the object, so two keys never share global state. (The old
+        genai.configure() global singleton would have let the second key's
+        configure overwrite the first's default credentials.)"""
+        import sys
+        fake_client_a = MagicMock()
+        fake_client_a.models.generate_content.return_value = MagicMock(text="a")
+        fake_client_b = MagicMock()
+        fake_client_b.models.generate_content.return_value = MagicMock(text="b")
+        fake_genai = MagicMock()
+        fake_genai.Client.side_effect = [fake_client_a, fake_client_b]
+        fake_google = MagicMock()
+        fake_google.genai = fake_genai
+        sys.modules["google"] = fake_google
+        sys.modules["google.genai"] = fake_genai
+        try:
+            with patch("agent_windows.utils.api.encode_image", return_value="b64"):
+                ra = call_vision_model(Image.new("RGB", (4, 4)), "p",
+                                       {"engine": "gemini", "api_key": "keyA", "model": "m"})
+                rb = call_vision_model(Image.new("RGB", (4, 4)), "p",
+                                       {"engine": "gemini", "api_key": "keyB", "model": "m"})
+            assert ra == "a" and rb == "b"
+            assert fake_genai.Client.call_count == 2  # two distinct clients
+            assert "gemini:keyA" in api._client_cache
+            assert "gemini:keyB" in api._client_cache
+            # Each key's call carried its own api_key into Client construction.
+            keys_used = [c.kwargs["api_key"] for c in fake_genai.Client.call_args_list]
+            assert keys_used == ["keyA", "keyB"]
+        finally:
+            sys.modules.pop("google", None)
+            sys.modules.pop("google.genai", None)
