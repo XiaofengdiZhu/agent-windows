@@ -447,6 +447,110 @@ class TestServerReadTimeout:
         assert result == response.strip()  # full payload, byte-for-byte
         assert big in result  # explicit: the large field survived intact
 
+    def test_read_pipe_rejects_oversize_before_accumulating(self):
+        """REVIEW B2: the size cap fires BEFORE appending the over-limit chunk,
+        not after. A client that streams far more than MAX_MESSAGE_SIZE must be
+        rejected as soon as the running total would cross the cap — the fix is
+        specifically that `data` never balloons past MAX while the read loop
+        keeps draining. Asserts the read raises and completes promptly (a
+        post-append check would still eventually raise, so the promptness +
+        no-hang is the real signal here)."""
+        import os
+        import win32file
+        import win32pipe
+        from agent_windows.ipc.pipe import (
+            read_pipe, MAX_MESSAGE_SIZE, BUFFER_SIZE,
+        )
+
+        pipe_name = rf"\\.\pipe\agent-windows-test-srv-oversize-{os.getpid()}"
+        sp = win32pipe.CreateNamedPipe(
+            pipe_name,
+            win32pipe.PIPE_ACCESS_DUPLEX | 0x40000000,  # FILE_FLAG_OVERLAPPED
+            win32pipe.PIPE_TYPE_BYTE | win32pipe.PIPE_READMODE_BYTE | win32pipe.PIPE_WAIT,
+            1, BUFFER_SIZE, BUFFER_SIZE, 0, None)
+
+        connected = threading.Event()
+
+        def client():
+            cp = win32file.CreateFile(
+                pipe_name, win32file.GENERIC_READ | win32file.GENERIC_WRITE,
+                0, None, win32file.OPEN_EXISTING, 0, None)
+            connected.set()
+            # Stream well past MAX, never sending the terminating newline. The
+            # read loop must reject once the cap is reached.
+            sent = 0
+            payload = b"x" * BUFFER_SIZE
+            try:
+                while sent < MAX_MESSAGE_SIZE + BUFFER_SIZE * 2:
+                    win32file.WriteFile(cp, payload)
+                    sent += BUFFER_SIZE
+            except Exception:
+                pass
+            time.sleep(1.0)
+            win32file.CloseHandle(cp)
+
+        threading.Thread(target=client, daemon=True).start()
+        win32pipe.ConnectNamedPipe(sp, None)
+        assert connected.wait(2.0)
+
+        start = time.monotonic()
+        with pytest.raises(RuntimeError, match="exceeds maximum size"):
+            read_pipe(sp, timeout=10.0)
+        elapsed = time.monotonic() - start
+        # Must reject promptly — not wait out the 10s deadline. The cap is hit
+        # once ~MAX bytes arrive, which at local-pipe speed is sub-second.
+        assert elapsed < 5.0, f"size cap took {elapsed:.1f}s — did it accumulate past MAX first?"
+
+        try:
+            win32pipe.DisconnectNamedPipe(sp)
+        except Exception:
+            pass
+        win32file.CloseHandle(sp)
+
+    def test_send_to_daemon_rejects_oversize_response(self):
+        """REVIEW B2 (client side): send_to_daemon applies the same pre-append
+        size cap to the daemon's response, so a runaway response can't balloon
+        resp_data past MAX before the cap fires."""
+        import os
+        import win32file
+        import win32pipe
+        from agent_windows.ipc.pipe import MAX_MESSAGE_SIZE, BUFFER_SIZE
+
+        pipe_name = rf"\\.\pipe\agent-windows-test-cli-oversize-{os.getpid()}"
+        ready = threading.Event()
+        # No terminating newline; far larger than MAX.
+        response_bytes = (b"X" * (MAX_MESSAGE_SIZE + BUFFER_SIZE * 2))
+
+        def server():
+            sp = win32pipe.CreateNamedPipe(
+                pipe_name,
+                win32pipe.PIPE_ACCESS_DUPLEX,
+                win32pipe.PIPE_TYPE_BYTE | win32pipe.PIPE_READMODE_BYTE | win32pipe.PIPE_WAIT,
+                1, 65536, 65536, 0, None)
+            ready.set()
+            try:
+                win32pipe.ConnectNamedPipe(sp, None)
+                win32file.ReadFile(sp, 4096)  # consume request
+                # Write more than MAX with no newline; keep the pipe open.
+                win32file.WriteFile(sp, response_bytes)
+                time.sleep(2.0)
+            finally:
+                try:
+                    win32file.CloseHandle(sp)
+                except Exception:
+                    pass
+
+        t = threading.Thread(target=server, daemon=True)
+        t.start()
+        assert ready.wait(2.0)
+
+        with pytest.raises(RuntimeError, match="exceeds maximum size"):
+            send_to_daemon(
+                '{"jsonrpc":"2.0","id":1,"method":"ping"}',
+                pipe_name=pipe_name,
+                timeout=10.0,
+            )
+
 
 class TestSendToDaemonConnectRetry:
     """Regression: send_to_daemon must retry CreateFile when the pipe is briefly

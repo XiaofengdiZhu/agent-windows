@@ -192,15 +192,20 @@ def read_pipe(pipe, buffer_size: int = BUFFER_SIZE, timeout: float | None = None
     # Each chunk is an overlapped read bounded by the remaining deadline, so a
     # client that stalls — even mid-message, or drip-feeding one byte at a time
     # — trips the timeout rather than blocking indefinitely.
+    #
+    # Size guard BEFORE appending: a malicious client can push bytes far faster
+    # than the timeout elapses (local named pipe is quick), so checking AFTER
+    # `data += chunk` would let `data` balloon to GBs before the cap fires.
+    # Reject as soon as the NEXT chunk would cross MAX_MESSAGE_SIZE.
     data = b""
     deadline = time.monotonic() + timeout
     try:
         while True:
             remaining = max(1, int((deadline - time.monotonic()) * 1000))
             chunk = _overlapped_read_chunk(pipe, remaining, buffer_size=buffer_size)
-            data += chunk
-            if len(data) > MAX_MESSAGE_SIZE:
+            if len(data) + len(chunk) > MAX_MESSAGE_SIZE:
                 raise RuntimeError("Message exceeds maximum size")
+            data += chunk
             if b"\n" in data or not chunk:
                 break
     except ConnectionError as e:
@@ -407,13 +412,15 @@ def send_to_daemon(
         _overlapped_write_all(pipe, (message + "\n").encode("utf-8"), timeout_ms)
         logger.debug("Sent to daemon: %s", message[:200])
 
-        # Read response — loop to handle large responses
+        # Read response — loop to handle large responses. Check the size cap
+        # BEFORE appending so a runaway daemon response can't balloon `resp_data`
+        # past MAX_MESSAGE_SIZE before the cap fires (mirrors read_pipe).
         resp_data = b""
         while True:
             chunk = _overlapped_read_chunk(pipe, timeout_ms)
-            resp_data += chunk
-            if len(resp_data) > MAX_MESSAGE_SIZE:
+            if len(resp_data) + len(chunk) > MAX_MESSAGE_SIZE:
                 raise RuntimeError("Message exceeds maximum size")
+            resp_data += chunk
             if b"\n" in resp_data or not chunk:
                 break
         response = resp_data.decode("utf-8").strip()
