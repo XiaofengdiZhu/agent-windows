@@ -9,9 +9,11 @@ def main() -> None:
 
         run_daemon()
     else:
-        from agent_windows.cli.main import app
+        # cli.main.main() runs the negative-coordinate argv preprocessing then
+        # the Typer app (C1). Direct app() would skip it.
+        from agent_windows.cli.main import main as cli_main
 
-        app()
+        cli_main()
 
 
 if __name__ == "__main__":

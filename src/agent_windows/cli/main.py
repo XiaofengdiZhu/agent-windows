@@ -1,5 +1,8 @@
 """CLI entry point: Typer app with command registration."""
 
+import re
+import sys
+
 import typer
 
 app = typer.Typer(
@@ -8,6 +11,54 @@ app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
 )
+
+
+# ── Negative-coordinate support (C1) ──────────────────────────────────
+# Commands whose positional args are integer screen coordinates. Multi-monitor
+# desktops put windows at negative coordinates (e.g. x=-1920 on a monitor left
+# of the primary). Click/Typer treat a bare ``-1`` token as an unknown option
+# and exit 2 before the command runs — there is no Click-native fix on a
+# multi-command app (group-level ignore_unknown_options breaks subcommand
+# routing). So main() rewrites argv for these commands only: a leading
+# ``-<digits>`` token is marked so Click sees a non-option positional, and the
+# command's parse_coord strips the marker. The native Rust launcher handles
+# the same case natively (commands.rs:376-380); this brings the Python fallback
+# (agent-windows-python / --no-daemon) to parity.
+_COORD_CMDS = frozenset({
+    "click", "scroll", "move", "dblclick", "hover",
+    "mouse-down", "mouse-up", "drag", "highlight",
+})
+
+# A leading "-<digits>" (optionally a fractional part) is a coordinate, not a
+# flag. No legal option here starts with a digit (they're letters: -s/-o/...).
+_NEG_NUMBER_RE = re.compile(r"-\d+(?:\.\d+)?$")
+
+
+def _preprocess_argv(argv: list[str]) -> list[str]:
+    """Mark negative-number tokens on coordinate commands so Click parses them
+    as positionals instead of rejecting them as unknown options.
+
+    Scoped to ``_COORD_CMDS`` (argv[1]) so other commands — fs/shell/config, and
+    value-taking options like ``--monitor -1`` — are passed through untouched.
+    Stops at a literal ``--`` (Click's raw-positional sentinel) to preserve its
+    native semantics. Returns a new list; never mutates the caller's argv.
+    """
+    if len(argv) < 2 or argv[1] not in _COORD_CMDS:
+        return argv
+    out = list(argv)
+    for i in range(2, len(out)):
+        if out[i] == "--":
+            break  # everything after `--` is already a positional to Click
+        if _NEG_NUMBER_RE.fullmatch(out[i]):
+            from agent_windows.cli.commands.input import _NEG_COORD_MARKER
+            out[i] = _NEG_COORD_MARKER + out[i]
+    return out
+
+
+def main() -> None:
+    """Console-script entry point: rewrite argv for negative coords, then run."""
+    sys.argv = _preprocess_argv(sys.argv)
+    app()
 
 
 # ── Global options ────────────────────────────────────────────────

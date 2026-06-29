@@ -3,6 +3,9 @@
 import typer
 
 from agent_windows.cli.dispatcher import _cmd
+# parse_coord strips the negative-coordinate marker (C1) added by argv
+# preprocessing — see cli/commands/input.py for why this exists.
+from agent_windows.cli.commands.input import parse_coord
 
 app = typer.Typer(help="Observation commands")
 
@@ -141,10 +144,10 @@ def cleanup(ctx: typer.Context) -> None:
 @app.command()
 def highlight(
     ctx: typer.Context,
-    x1: int = typer.Argument(help="Left"),
-    y1: int = typer.Argument(help="Top"),
-    x2: int = typer.Argument(help="Right"),
-    y2: int = typer.Argument(help="Bottom"),
+    x1: int = typer.Argument(parser=parse_coord, help="Left"),
+    y1: int = typer.Argument(parser=parse_coord, help="Top"),
+    x2: int = typer.Argument(parser=parse_coord, help="Right"),
+    y2: int = typer.Argument(parser=parse_coord, help="Bottom"),
     label: str = typer.Option("", "--label", "-l", help="Label text"),
     color: str = typer.Option("red", "--color", "-c", help="Highlight color"),
     image: str = typer.Option("", "--image", "-i", help="Source image (default: fresh screenshot)"),

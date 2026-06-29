@@ -227,6 +227,8 @@ No parameters. Uses config `screenshot.max_screenshot_age_days` (default 7) and 
 
 Most mouse commands accept either explicit `X Y` coordinates or a `--selector`/`-s` `@eN` element ref from a `snapshot`. `--selector` overrides `X Y` when both are given; the element's bbox center is the click point.
 
+> **Negative coordinates** are supported on both the native launcher and the Python CLI (`agent-windows-python` / `--no-daemon`). A multi-monitor desktop extends left or above the primary monitor into negative space (e.g. a window at `x=-1920`), so `agent-windows click -1920 0` and `agent-windows drag -1920 0 -100 100` work without quoting or `--` separators.
+
 ### click
 
 Mouse click at coordinates or an element.

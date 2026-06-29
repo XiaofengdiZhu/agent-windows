@@ -8,12 +8,13 @@ test_shell.py covers the core shell_runner. This file covers the CLI layer.
 """
 
 import json
+import sys
 from unittest.mock import patch, MagicMock
 
 import pytest
 from typer.testing import CliRunner
 
-from agent_windows.cli.main import app
+from agent_windows.cli.main import app, main, _preprocess_argv, _COORD_CMDS
 
 runner = CliRunner()
 
@@ -156,6 +157,198 @@ class TestInputCommands:
         assert params["at_selector"] == "@e3"
         assert "at_x" not in params
         assert params["text"] == "hi"
+
+
+# ── negative coordinates (C1: fallback CLI accepts negative coords) ───
+
+
+class TestNegativeCoordinates:
+    """Multi-monitor coordinates go negative (a window at x=-1920). Click/Typer
+    reject a bare `-1` token as "No such option" before the command ever runs.
+    The fix is argv preprocessing in ``main()`` (a marker prefix so Click sees a
+    non-option token) + a custom ``parser`` that strips the marker.
+
+    These tests exercise BOTH layers — they call ``main()`` with a monkeypatched
+    ``sys.argv`` (the real entry path) rather than ``runner.invoke(app, ...)``,
+    because the preprocessor runs *before* the Typer app parses, and CliRunner
+    bypasses it by passing args directly to ``app.main``.
+    """
+
+    def _run(self, argv_rest, module):
+        """Invoke main() with sys.argv=[prog, *argv_rest], _cmd patched in module.
+
+        Returns (result_exit_code, list_of_(method, params)). main() calls
+        app() which on error raises SystemExit(code); we capture it.
+        """
+        calls: list = []
+
+        def capture(ctx, method, **params):
+            calls.append((method, params))
+            return ""
+
+        with patch(module + "._cmd", side_effect=capture):
+            old = sys.argv
+            sys.argv = ["agent-windows-python"] + argv_rest
+            code = 0
+            try:
+                main()
+            except SystemExit as e:
+                code = e.code if isinstance(e.code, int) else 1
+            finally:
+                sys.argv = old
+        return code, calls
+
+    # ── preprocessing unit tests (pure function, no app) ───────────────
+
+    def test_preprocess_whitelist_only(self):
+        """Only the 9 coord commands get negative tokens rewritten."""
+        for cmd in ("click", "scroll", "move", "dblclick", "hover",
+                    "mouse-down", "mouse-up", "drag", "highlight"):
+            assert cmd in _COORD_CMDS, f"{cmd} missing from whitelist"
+        # rewritten: leading "-<digits>" → marker-prefixed
+        out = _preprocess_argv(["aw", "click", "-1", "-1"])
+        assert out == ["aw", "click", "\x01-1", "\x01-1"]
+
+    def test_preprocess_leaves_positive_coords_untouched(self):
+        """Positive coordinates (no leading dash) pass through verbatim."""
+        out = _preprocess_argv(["aw", "click", "100", "200"])
+        assert out == ["aw", "click", "100", "200"]
+
+    def test_preprocess_skips_non_whitelisted_commands(self):
+        """config/mcp/fs/shell and unknown commands are untouched, even with
+        a leading-`-<digits>` token (a future command's own concern)."""
+        for argv in (["aw", "config", "show", "-1"],
+                     ["aw", "fs", "read", "-1"],
+                     ["aw", "shell", "-1"]):
+            assert _preprocess_argv(list(argv)) == list(argv)
+
+    def test_preprocess_keeps_options_after_negative_coords(self):
+        """`click -1 -1 --right` → both coords marked, --right preserved."""
+        out = _preprocess_argv(["aw", "click", "-1", "-1", "--right"])
+        assert out == ["aw", "click", "\x01-1", "\x01-1", "--right"]
+
+    def test_preprocess_stops_at_double_dash(self):
+        """A literal `--` ends option processing; tokens after it (Click's own
+        raw-positional mechanism) must NOT be marked again — Click already
+        treats everything after `--` as a positional."""
+        out = _preprocess_argv(["aw", "click", "--", "-1", "-1"])
+        assert out == ["aw", "click", "--", "-1", "-1"]
+
+    def test_preprocess_does_not_touch_option_values(self):
+        """A leading-`-<digits>` that is the *value* of a value-taking option
+        on a whitelisted command is still rewritten — but Click consumes it as
+        the option's value before the parser runs, so the marker is harmless
+        (the option's own converter receives the marked string). In practice no
+        whitelisted coord command has a value-taking option, so this is moot.
+        The key invariant: the rewrite is scoped to whitelisted commands only,
+        so `screenshot --monitor -1` is never touched."""
+        out = _preprocess_argv(["aw", "screenshot", "--monitor", "-1"])
+        assert out == ["aw", "screenshot", "--monitor", "-1"]
+
+    # ── end-to-end: negative coords reach the handler as ints ──────────
+
+    def test_click_negative_coords_forwarded(self):
+        """`click -1 -1` → _cmd receives x=-1, y=-1 (regression: was exit 2)."""
+        code, calls = self._run(["click", "-1", "-1"], "agent_windows.cli.commands.input")
+        assert code == 0, "negative click must not exit 2 (Click option-reject)"
+        method, params = calls[0]
+        assert method == "click"
+        assert params["x"] == -1 and params["y"] == -1
+        assert isinstance(params["x"], int)  # marker stripped, not leaked
+
+    def test_click_negative_coords_mixed_with_flags(self):
+        """Flags after negative coords are still parsed as flags, not coords."""
+        code, calls = self._run(["click", "-1", "-1", "--right", "--double"],
+                                "agent_windows.cli.commands.input")
+        assert code == 0
+        _, params = calls[0]
+        assert params == {"x": -1, "y": -1, "right": True, "double": True}
+
+    def test_click_negative_coords_after_option_reach_parser(self):
+        """`click -1 -1 --right -100`: the negative `-100` after the option is
+        NOT swallowed by --right (a flag, no value). It reaches coords as a 3rd
+        positional, which _xy_or_selector rejects with a clear usage error
+        (len != 2). The point: preprocessing let it through Click without the
+        old "No such option: -1" — the error is now the *command's* own
+        "provide X Y" message, not Click's option-reject."""
+        code, calls = self._run(["click", "-1", "-1", "--right", "-100"],
+                                "agent_windows.cli.commands.input")
+        # _xy_or_selector sees 3 coords → BadParameter → non-zero, but NOT the
+        # old Click "No such option" (that would also be code 2, so assert the
+        # message differs to prove preprocessing ran).
+        assert code != 0
+        # _cmd was never reached (the error is at param assembly)
+        assert calls == []
+
+    def test_all_seven_list_coord_commands_accept_negatives(self):
+        """Each list[int]-coords command (click/scroll/move/dblclick/hover/
+        mouse-down/mouse-up) accepts negative X Y."""
+        for cmd in ("click", "scroll", "move", "dblclick", "hover",
+                    "mouse-down", "mouse-up"):
+            code, calls = self._run([cmd, "-1", "-1"],
+                                    "agent_windows.cli.commands.input")
+            assert code == 0, f"{cmd} -1 -1 exited {code}"
+            _, params = calls[0]
+            assert params["x"] == -1 and params["y"] == -1, f"{cmd} got {params}"
+
+    def test_drag_four_negative_coords(self):
+        """drag takes 4 separate int params; all can be negative (multi-mon)."""
+        code, calls = self._run(["drag", "-1920", "0", "-100", "100"],
+                                "agent_windows.cli.commands.input")
+        assert code == 0
+        _, params = calls[0]
+        assert params == {"x1": -1920, "y1": 0, "x2": -100, "y2": 100,
+                          "right": False}
+
+    def test_highlight_negative_coords(self):
+        """highlight (in observe.py) takes 4 int params; multi-mon negatives ok."""
+        code, calls = self._run(["highlight", "-10", "-10", "10", "10"],
+                                "agent_windows.cli.commands.observe")
+        assert code == 0
+        _, params = calls[0]
+        assert params == {"x1": -10, "y1": -10, "x2": 10, "y2": 10}
+
+    # ── non-regression: positive coords & options still work via main() ─
+
+    def test_positive_coords_still_work_via_main(self):
+        """main() preprocessing is a no-op for positive coords."""
+        code, calls = self._run(["click", "100", "200"],
+                                "agent_windows.cli.commands.input")
+        assert code == 0
+        _, params = calls[0]
+        assert params["x"] == 100 and params["y"] == 200
+
+    def test_selector_still_works_via_main(self):
+        """--selector/-s path is unaffected by preprocessing."""
+        code, calls = self._run(["click", "-s", "@e2"],
+                                "agent_windows.cli.commands.input")
+        assert code == 0
+        _, params = calls[0]
+        assert params["selector"] == "@e2"
+        assert "x" not in params
+
+    def test_non_coord_command_untouched_via_main(self):
+        """A non-whitelisted command runs through main() unchanged."""
+        code, calls = self._run(["shortcut", "ctrl+c"],
+                                "agent_windows.cli.commands.input")
+        assert code == 0
+        _, params = calls[0]
+        assert params == {"keys": "ctrl+c"}
+
+    # ── --help is not broken by the custom parser ──────────────────────
+
+    def test_help_still_works(self):
+        """The custom parser must not break `--help` (it runs on real args only)."""
+        old = sys.argv
+        sys.argv = ["agent-windows-python", "click", "--help"]
+        code = 0
+        try:
+            main()
+        except SystemExit as e:
+            code = e.code if isinstance(e.code, int) else 1
+        finally:
+            sys.argv = old
+        assert code == 0
 
 
 # ── observe/screenshot param assembly ────────────────────────────────

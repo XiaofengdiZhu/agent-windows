@@ -74,7 +74,7 @@ dev = ["pytest>=9.0.3"]
 # the wheel is packaged (see [tool.uv.build-backend] below). It lands in
 # Scripts/ on install as the fast (~15ms) entry point. This Python entry is the
 # fallback for --no-daemon mode and commands not yet ported to the launcher.
-agent-windows-python = "agent_windows.cli.main:app"
+agent-windows-python = "agent_windows.cli.main:main"
 
 [build-system]
 requires = ["uv_build>=0.11.20,<0.12.0"]

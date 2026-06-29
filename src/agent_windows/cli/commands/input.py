@@ -6,6 +6,31 @@ from agent_windows.cli.dispatcher import _cmd
 
 app = typer.Typer(help="Input commands")
 
+# ── Negative-coordinate support (C1) ──────────────────────────────────
+# Click/Typer reject a bare token like ``-1`` as "No such option" before the
+# command runs — so multi-monitor coordinates (a window at x=-1920) crash the
+# Python fallback CLI. The native Rust launcher handles this
+# (commands.rs:376-380: a leading-``-<digit>`` is a positional, not a flag).
+#
+# On the Python side there is no Click-native fix (group-level
+# ignore_unknown_options breaks subcommand routing; int() accepts no Unicode
+# minus, so sign re-encoding can't round-trip). The fix is argv preprocessing
+# in cli/main.main(): a leading ``-<digits>`` token on a coordinate command is
+# prefixed with this marker so Click sees a non-option, then parse_coord
+# strips it. The marker is SOH (0x01): never an option prefix, never in real
+# user input.
+_NEG_COORD_MARKER = "\x01"
+
+
+def parse_coord(raw: str) -> int:
+    """Argument parser for coordinate positionals.
+
+    Strips the negative-coordinate marker (added by _preprocess_argv) and
+    converts to int. For positive coordinates the marker is absent and
+    ``removeprefix`` is a no-op, so the positive path is unchanged.
+    """
+    return int(raw.removeprefix(_NEG_COORD_MARKER))
+
 
 def _xy_or_selector(coords: list[int] | None, selector: str) -> dict:
     """Assemble the coordinate params for a mouse command. (TODO #13)
@@ -27,7 +52,7 @@ def _xy_or_selector(coords: list[int] | None, selector: str) -> dict:
 @app.command()
 def click(
     ctx: typer.Context,
-    coords: list[int] = typer.Argument(None, help="X Y coordinates (omit with --selector)"),
+    coords: list[int] = typer.Argument(None, parser=parse_coord, help="X Y coordinates (omit with --selector)"),
     selector: str = typer.Option("", "--selector", "-s", help="Element ref (@eN); overrides X Y"),
     right: bool = typer.Option(False, "--right", help="Right-click"),
     double: bool = typer.Option(False, "--double", help="Double-click"),
@@ -66,7 +91,7 @@ def type_text(
 @app.command()
 def scroll(
     ctx: typer.Context,
-    coords: list[int] = typer.Argument(None, help="X Y coordinates (omit with --selector)"),
+    coords: list[int] = typer.Argument(None, parser=parse_coord, help="X Y coordinates (omit with --selector)"),
     selector: str = typer.Option("", "--selector", "-s", help="Element ref (@eN); overrides X Y"),
     direction: str = typer.Option("down", "--direction", help="Scroll direction: up/down"),
     amount: int = typer.Option(3, "--amount", help="Scroll amount"),
@@ -79,7 +104,7 @@ def scroll(
 @app.command()
 def move(
     ctx: typer.Context,
-    coords: list[int] = typer.Argument(None, help="X Y coordinates (omit with --selector)"),
+    coords: list[int] = typer.Argument(None, parser=parse_coord, help="X Y coordinates (omit with --selector)"),
     selector: str = typer.Option("", "--selector", "-s", help="Element ref (@eN); overrides X Y"),
 ) -> None:
     """Move mouse to (X, Y) or to an element (@eN via --selector)."""
@@ -89,7 +114,7 @@ def move(
 @app.command()
 def dblclick(
     ctx: typer.Context,
-    coords: list[int] = typer.Argument(None, help="X Y coordinates (omit with --selector)"),
+    coords: list[int] = typer.Argument(None, parser=parse_coord, help="X Y coordinates (omit with --selector)"),
     selector: str = typer.Option("", "--selector", "-s", help="Element ref (@eN); overrides X Y"),
     right: bool = typer.Option(False, "--right", help="Right-button double-click"),
 ) -> None:
@@ -100,7 +125,7 @@ def dblclick(
 @app.command()
 def hover(
     ctx: typer.Context,
-    coords: list[int] = typer.Argument(None, help="X Y coordinates (omit with --selector)"),
+    coords: list[int] = typer.Argument(None, parser=parse_coord, help="X Y coordinates (omit with --selector)"),
     selector: str = typer.Option("", "--selector", "-s", help="Element ref (@eN); overrides X Y"),
 ) -> None:
     """Hover at (X, Y) or at an element (@eN via --selector)."""
@@ -110,7 +135,7 @@ def hover(
 @app.command(name="mouse-down")
 def mouse_down(
     ctx: typer.Context,
-    coords: list[int] = typer.Argument(None, help="X Y coordinates (omit with --selector)"),
+    coords: list[int] = typer.Argument(None, parser=parse_coord, help="X Y coordinates (omit with --selector)"),
     selector: str = typer.Option("", "--selector", "-s", help="Element ref (@eN); overrides X Y"),
     button: str = typer.Option("left", "--button", help="Mouse button: left, right, middle"),
 ) -> None:
@@ -121,7 +146,7 @@ def mouse_down(
 @app.command(name="mouse-up")
 def mouse_up(
     ctx: typer.Context,
-    coords: list[int] = typer.Argument(None, help="X Y coordinates (omit with --selector)"),
+    coords: list[int] = typer.Argument(None, parser=parse_coord, help="X Y coordinates (omit with --selector)"),
     selector: str = typer.Option("", "--selector", "-s", help="Element ref (@eN); overrides X Y"),
     button: str = typer.Option("left", "--button", help="Mouse button: left, right, middle"),
 ) -> None:
@@ -132,10 +157,10 @@ def mouse_up(
 @app.command()
 def drag(
     ctx: typer.Context,
-    x1: int = typer.Argument(help="Start X"),
-    y1: int = typer.Argument(help="Start Y"),
-    x2: int = typer.Argument(help="End X"),
-    y2: int = typer.Argument(help="End Y"),
+    x1: int = typer.Argument(parser=parse_coord, help="Start X"),
+    y1: int = typer.Argument(parser=parse_coord, help="Start Y"),
+    x2: int = typer.Argument(parser=parse_coord, help="End X"),
+    y2: int = typer.Argument(parser=parse_coord, help="End Y"),
     right: bool = typer.Option(False, "--right", help="Right-button drag"),
 ) -> None:
     """Drag from (x1,y1) to (x2,y2)."""
