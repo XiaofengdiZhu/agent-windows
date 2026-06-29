@@ -82,7 +82,10 @@ class COMWorkerThread(threading.Thread):
     """Dedicated STA thread for all COM/UIA operations.
 
     All UIA calls happen here. Commands are received via queue,
-    results are placed back keyed by command ID.
+    results are placed back keyed by a per-submit monotonic seq (NOT the
+    request.id — the single client reuses a fixed id, so keying by id would let
+    an orphaned command's late write collide with a later request's slot; see
+    submit()'s docstring and B1).
 
     This worker processes one command at a time, which together with the
     single-instance named pipe and the blocking I/O loop makes the daemon
@@ -102,6 +105,13 @@ class COMWorkerThread(threading.Thread):
         self._ready = threading.Event()
         self._stop_event = threading.Event()
         self._result_events: dict[str | int | None, threading.Event] = {}
+        # Monotonic per-submit handle. Results/events are keyed by this, NOT by
+        # request.id — the single client reuses a fixed id (1) for every request,
+        # so an orphaned (timed-out) command's late write would otherwise land on
+        # the same key a later request reads. The seq makes every command's
+        # result key unique, so an orphan's completion writes to a key no later
+        # request is waiting on. (B1)
+        self._submit_seq = 0
 
     def run(self):
         """Thread entry point: initialize COM STA and process commands."""
@@ -154,26 +164,37 @@ class COMWorkerThread(threading.Thread):
             logger.info("COM STA worker thread stopped")
 
     def _execute_command(self, cmd: dict):
-        """Execute a single command and store the result."""
+        """Execute a single command and store the result.
+
+        Results and the completion event are keyed by the command's ``seq``
+        (assigned by submit), NOT by request.id. The single client reuses a
+        fixed request.id, so keying by id would let an orphaned command's late
+        write collide with a later request's slot. Falls back to ``id`` only
+        when ``seq`` is absent (legacy/test callers that don't go through
+        submit). (B1)
+        """
         cmd_id = cmd.get("id")
+        # The result key: the per-submit seq if submit assigned one, else the
+        # request id (for direct _execute_command callers without a seq).
+        key = cmd.get("seq", cmd_id)
         request = cmd.get("request")
 
         try:
             # Route to the handler (handlers are registered in router.py)
             response = route_request(request)
             with self._results_lock:
-                self.results[cmd_id] = {"response": response.to_json()}
+                self.results[key] = {"response": response.to_json()}
         except Exception as e:
             error_resp = make_error(-1999, str(e), cmd_id)
             with self._results_lock:
-                self.results[cmd_id] = {"response": error_resp.to_json()}
+                self.results[key] = {"response": error_resp.to_json()}
         finally:
             # Signal completion. _result_events is read here (STA worker thread)
             # and written in submit() (I/O thread) — guard both under the same
             # lock so a re-entrant submit or a future second client can't lose
             # the completion signal. (PERF3-01)
             with self._results_lock:
-                evt = self._result_events.get(cmd_id)
+                evt = self._result_events.get(key)
             if evt:
                 evt.set()
 
@@ -193,50 +214,50 @@ class COMWorkerThread(threading.Thread):
 
         On timeout the finally block pops this command's event + result slot,
         but the orphaned ``_execute_command`` still runs on the worker and
-        writes its result to ``self.results[cmd_id]`` AFTER that pop. That late
-        write lingers until a later submit reuses the same id (which reaps it)
-        or, if a same-id request is submitted while the orphan is still
-        running, the orphan's completion sets the NEW request's event and
-        overwrites its result — delivering the orphan's response to the later
-        request. The single client (ipc/client.py) reuses a fixed id for every
-        request, so this stale-response path is reachable in principle, not
-        just theoretical. It is not closed here: a true fix needs per-command
-        event objects keyed by a queue-assigned handle rather than by request
-        id (a protocol change). Today the risk is mitigated in practice because
-        a timed-out request triggers disconnect (the client must reconnect), so
-        the immediate next request arrives after the orphaned command has had
-        time to settle; the window is the reconnect delay plus any commands the
-        client sends before the orphan finishes.
+        writes its result to ``self.results[seq]`` AFTER that pop. That late
+        write is now harmless: results and the completion event are keyed by a
+        per-submit monotonic ``seq`` (assigned below), not by request.id, so the
+        orphan's late write lands on its own seq key — a key no later submit
+        reads (each gets a fresh seq). The single client (ipc/client.py) reuses
+        a fixed request.id for every request, which is exactly what made the
+        old id-keyed scheme vulnerable; the seq closes that cross-delivery
+        path. (B1) In practice the window was already narrow because a timed-out
+        request triggers disconnect (the client must reconnect), so the next
+        request arrives after the orphan has had time to settle.
         """
         cmd_id = request.id
         event = threading.Event()
         with self._results_lock:
-            # Enforce the single-in-flight invariant explicitly: a re-entrant
-            # submit or a second client would race on the event slot and could
-            # silently drop a completion signal. (PERF3-01)
-            if cmd_id in self._result_events:
+            # Assign a fresh, unique seq for THIS submit. Keying the result/event
+            # slot by seq (not the reused request.id) is the B1 fix: an orphaned
+            # command's late write can't collide with a later request's slot.
+            self._submit_seq += 1
+            seq = self._submit_seq
+            # PERF3-01 single-in-flight guard, now keyed by seq. With per-submit
+            # seqs a second submit can never collide on the slot by construction,
+            # so this is a belt-and-braces check against a genuinely re-entrant
+            # submit (same thread calling submit while one is already waiting) —
+            # which would otherwise deadlock silently waiting on an event that
+            # can never be set until the outer submit returns.
+            if seq in self._result_events:
                 raise RuntimeError(
-                    f"Command id {cmd_id} already in flight — the daemon serializes "
-                    "one command at a time per id")
-            self._result_events[cmd_id] = event
-            # Clear a result left by a previously-retired (timed-out) command so
-            # its stale response can't be returned for this new request. (PERF3-02)
-            # NOTE: this guards against a *retired* prior command's leftover
-            # result; the daemon's serial single-client model means a second
-            # command for the same id cannot register while the worker is still
-            # mid-execution (enforced by the single-in-flight check above), so a
-            # racing late write is not reachable today.
-            self.results.pop(cmd_id, None)
+                    f"Submit seq {seq} already in flight — unreachable (seq is "
+                    "monotonic); indicates a re-entrant submit")
+            self._result_events[seq] = event
+            # Clear any result a previously-retired (timed-out) command with this
+            # exact seq left behind. Unreachable in practice (seqs are unique and
+            # monotonic), retained as a defensive no-op guard. (PERF3-02 lineage)
+            self.results.pop(seq, None)
 
         try:
-            self.command_queue.put({"id": cmd_id, "request": request})
+            self.command_queue.put({"id": cmd_id, "seq": seq, "request": request})
 
             # Wait for result
             if not event.wait(timeout=timeout):
                 raise TimeoutError(f"Command {request.method} timed out after {timeout}s")
 
             with self._results_lock:
-                result = self.results.pop(cmd_id, None)
+                result = self.results.pop(seq, None)
 
             if result is None:
                 raise RuntimeError(f"No result for command {request.method}")
@@ -244,8 +265,8 @@ class COMWorkerThread(threading.Thread):
             return result["response"]
         finally:
             with self._results_lock:
-                self._result_events.pop(cmd_id, None)
-                self.results.pop(cmd_id, None)
+                self._result_events.pop(seq, None)
+                self.results.pop(seq, None)
 
     def stop(self):
         """Signal the worker thread to stop."""

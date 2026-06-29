@@ -229,17 +229,26 @@ class TestSubmitHandshake:
         assert 3 not in w._result_events
         assert 3 not in w.results
 
-    def test_reentrant_submit_rejected(self):
-        """PERF3-01: a second submit with an already-in-flight cmd_id is rejected
-        rather than racing on the event slot. The daemon serializes one command
-        per id; a re-entrant submit must surface clearly instead of silently
-        dropping a completion signal."""
+    def test_submit_does_not_collide_on_reused_request_id(self):
+        """B1/PERF3-01 lineage: submit now keys its slot by a per-submit seq, not
+        the request.id. A pre-seeded id-keyed slot (the old in-flight marker) no
+        longer blocks a submit that reuses that id — the submit mints its own
+        fresh seq. Before the seq fix, a second submit with an already-seeded
+        cmd_id was REJECTED; that rejection was a workaround for the id-collision
+        the seq now eliminates at the root. With a drainer consuming, the submit
+        succeeds rather than raising 'already in flight'."""
         w = COMWorkerThread()
-        # Pre-seed an in-flight event for cmd_id 5 (simulating an active submit).
-        import threading as _t
-        w._result_events[5] = _t.Event()
-        with pytest.raises(RuntimeError, match="already in flight"):
-            w.submit(JSONRPCRequest(id=5, method="ping"), timeout=0.1)
+        # Pre-seed an in-flight event under the OLD id-keyed scheme (cmd_id 5).
+        w._result_events[5] = threading.Event()
+        drainer = self._start_drainer(w)
+        try:
+            # A submit reusing id=5 must NOT be rejected by the stale id-keyed
+            # slot — it gets its own seq (1) and completes normally.
+            resp = w.submit(JSONRPCRequest(id=5, method="ping"), timeout=5.0)
+            assert json.loads(resp)["result"]["status"] == "ok"
+        finally:
+            w.stop()
+            drainer.join(timeout=2.0)
 
     def test_submit_clears_stale_result_from_prior_timeout(self):
         """PERF3-02: a timed-out command leaves a late result in self.results;
@@ -257,6 +266,141 @@ class TestSubmitHandshake:
         # The new ping response must be returned, not the stale one.
         assert json.loads(resp)["result"]["status"] == "ok"
         assert "stale" not in json.loads(resp)["result"]
+
+
+# ── COMWorkerThread: orphan-command isolation (B1) ────────────────────
+
+
+class TestOrphanSeqIsolation:
+    """B1: a timed-out command (the orphan) keeps running on the single-threaded
+    STA worker. The single client reuses a fixed JSON-RPC id (1) for every
+    request, so after a timeout the client reconnects and submits a new command
+    with the SAME id while the orphan is still on the worker queue ahead of it.
+
+    The fix keys results/events by a per-submit monotonic ``seq`` rather than by
+    the reused request.id, so the orphan's late write lands on a key no later
+    request reads. The deterministic test below drives _execute_command with
+    explicit seqs and proves the keying directly (it FAILS on the old
+    cmd_id-keyed code, where B's event is never set because the event lookup
+    used cmd_id=1 instead of seq=2)."""
+
+    def test_orphan_late_write_isolated_by_seq(self):
+        """The deterministic proof of B1.
+
+        Orphan A (seq 1) and a later command B (seq 2) share request.id=1 (the
+        real client reuses it). A completes 'late' (after its submit timed out
+        and popped its slot). B then runs. On the seq-keyed code:
+          - A writes results[1] (its seq key); no event registered for A → no-op.
+          - B writes results[2] (its seq key); looks up _result_events[2] → B's
+            event → sets it.
+        On the OLD cmd_id-keyed code both write results[1] and B looks up
+        _result_events[1] (miss — B's event is under key 2) → B's event is NEVER
+        set → submit would hang. This test asserts B's event IS set, so it fails
+        deterministically on the old code."""
+        w = COMWorkerThread()
+        req = JSONRPCRequest(id=1, method="ping")
+        # Orphan A: seq 1, no event registered (submit popped it on timeout).
+        w._execute_command({"id": 1, "seq": 1, "request": req})
+        assert 1 in w.results  # A's late write landed on its seq key
+        # Later command B: SAME request.id=1, but a distinct seq=2.
+        evt_b = threading.Event()
+        w._result_events[2] = evt_b
+        w._execute_command({"id": 1, "seq": 2, "request": req})
+        # B's completion must set B's event (looked up by seq, not request.id).
+        assert evt_b.is_set(), (
+            "B's event was not set — _execute_command keyed by request.id, not seq")
+        # B's result is under seq key 2, distinct from A's residue at key 1.
+        assert json.loads(w.results[2]["response"])["result"]["status"] == "ok"
+        assert 1 in w.results and 2 in w.results  # both keys coexist, isolated
+
+    def test_consecutive_submits_with_reused_request_id_both_succeed(self):
+        """submit() mints a fresh seq per call, so two back-to-back submits that
+        reuse the same request.id (id=1, as the real client does) both complete
+        normally — the second isn't rejected by a stale id-keyed in-flight
+        marker, and each returns its own fresh response. (This is the normal
+        reconnect-then-resend path; the orphan window is exercised by the
+        deterministic test above and the timing test below.)"""
+        w = COMWorkerThread()
+        drainer = self._drainer(w)
+        try:
+            for _ in range(2):
+                req = JSONRPCRequest(id=1, method="ping")  # same id both times
+                resp = w.submit(req, timeout=5.0)
+                assert json.loads(resp)["result"]["status"] == "ok"
+        finally:
+            w.stop()
+            drainer.join(timeout=2.0)
+
+    def test_orphan_does_not_deliver_to_later_request(self):
+        """End-to-end B1 scenario (best-effort timing).
+
+        Command A blocks in route_request, its submit times out (orphaning A),
+        then B (same id=1) is submitted. The worker is FIFO so A finishes first,
+        then B. B must receive ping's response, not A's. Under the seq keying
+        A's completion writes to A's seq key (no listener) and sets only A's
+        event (already popped) — B's event is untouched until B itself runs.
+
+        NOTE: this is a scheduling-dependent check (the harmful window requires
+        B's submit to read between A's write and B's overwrite, which the
+        single-threaded FIFO worker largely closes). The deterministic guarantee
+        is in test_orphan_late_write_isolated_by_seq above; this test confirms
+        the end-to-end path doesn't regress to hanging or cross-delivery in the
+        common scheduling."""
+        w = COMWorkerThread()
+        a_release = threading.Event()
+
+        def slow_route(req):
+            if req.method == "fs_read":
+                a_release.wait(timeout=5.0)
+            from agent_windows.daemon import router
+            return router.route_request(req)
+
+        drainer = self._drainer(w)
+        try:
+            with patch("agent_windows.daemon.server.route_request",
+                       side_effect=slow_route):
+                req_a = JSONRPCRequest(id=1, method="fs_read", params={"path": "x"})
+                with pytest.raises(TimeoutError):
+                    w.submit(req_a, timeout=0.3)
+                # A orphaned; worker still blocked on a_release.
+
+                b_out = {}
+                def run_b():
+                    try:
+                        b_out["resp"] = w.submit(
+                            JSONRPCRequest(id=1, method="ping"), timeout=5.0)
+                    except Exception as e:
+                        b_out["err"] = e
+                t_b = threading.Thread(target=run_b, daemon=True)
+                t_b.start()
+                time.sleep(0.1)  # let B register its event under its seq key
+                a_release.set()  # A finishes, then B runs
+                t_b.join(timeout=5.0)
+
+            assert "err" not in b_out, f"B failed: {b_out.get('err')}"
+            resp_b = json.loads(b_out["resp"])
+            assert resp_b["result"]["status"] == "ok", (
+                f"B received the orphan A's response: {resp_b}")
+        finally:
+            w.stop()
+            drainer.join(timeout=2.0)
+
+    def _drainer(self, worker):
+        """Background thread mimicking run()'s command-processing loop (no COM)."""
+        def loop():
+            while True:
+                try:
+                    cmd = worker.command_queue.get(timeout=0.5)
+                except queue.Empty:
+                    if worker._stop_event.is_set():
+                        return
+                    continue
+                if cmd is None:
+                    return
+                worker._execute_command(cmd)
+        t = threading.Thread(target=loop, daemon=True)
+        t.start()
+        return t
 
 
 # ── COMWorkerThread: stop / wait_ready ───────────────────────────────

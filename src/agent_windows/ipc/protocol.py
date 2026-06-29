@@ -13,10 +13,10 @@ class JSONRPCRequest:
         # by the CLI/dispatcher — is well-formed. A non-dict params (e.g. a list)
         # would leak to a handler as the wrong type; a non-string method would
         # key the handler registry wrongly; and a non-hashable id (a list/dict)
-        # would crash COMWorkerThread.submit (which uses id as a dict key) and
-        # drop the connection with no JSON-RPC error sent back. Raises
-        # ValueError so the server maps it to INVALID_REQUEST / INVALID_PARAMS.
-        # (M-08)
+        # would crash COMWorkerThread.submit (which carries id in the queue dict
+        # and echoes it in error responses) and drop the connection with no
+        # JSON-RPC error sent back. Raises ValueError so the server maps it to
+        # INVALID_REQUEST / INVALID_PARAMS. (M-08)
         if not isinstance(method, str):
             raise ValueError("JSON-RPC 'method' must be a string")
         if params is not None and not isinstance(params, dict):
