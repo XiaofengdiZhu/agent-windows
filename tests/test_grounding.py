@@ -106,6 +106,28 @@ class TestParseModelCoordinates:
     def test_json_form(self):
         assert parse_model_coordinates('{"x": 500, "y": 600}') == (500, 600)
 
+    def test_json_form_reversed_keys(self):
+        """A model may emit {"y":..,"x":..} (keys out of order). x/y must be
+        resolved by KEY, not capture position — otherwise the coordinate is
+        silently swapped to a reflected, wrong-but-valid point."""
+        assert parse_model_coordinates('{"y": 600, "x": 500}') == (500, 600)
+
+    def test_float_coordinates_truncated(self):
+        """A vision model may emit decimal coordinates (500.5). They must
+        truncate to int via float→int, not mis-parse the fractional digits as a
+        separate number (which previously gave (500, 5) for '500.5')."""
+        assert parse_model_coordinates('{"x": 500.5, "y": 600}') == (500, 600)
+        assert parse_model_coordinates("POINT:500.5,600.7") == (500, 600)
+        assert parse_model_coordinates("(500.5, 600)") == (500, 600)
+
+    def test_multiple_markers_takes_last(self):
+        """A model that reasons aloud may emit several POINT markers; the LAST
+        is its final answer (same rationale as the last-pair fallback). Taking
+        the first would return a discarded guess."""
+        assert parse_model_coordinates(
+            "First guess POINT:100,200 — actually POINT:500,600"
+        ) == (500, 600)
+
     def test_fallback_first_two_numbers(self):
         # No separators at all → first two integers.
         assert parse_model_coordinates("the point is 100 200") == (100, 200)

@@ -143,6 +143,19 @@ class TestDuplicateKeyRecovery:
         assert len(result) == 1
         assert result[0]["label"] == "solo"
 
+    def test_mismatched_label_bbox_count_truncates(self, caplog):
+        """When the packed object has unequal label/bbox counts, the unpaired
+        extras can't be reconstructed (a half-specified target is unusable), so
+        zip truncates to the shorter — but the loss is logged (observable, not
+        silent, per this hook's purpose)."""
+        import logging
+        response = ('[{"label": "a", "bbox": [1, 2, 3, 4], '
+                    '"label": "b", "bbox": [5, 6, 7, 8], "label": "c"}]')
+        with caplog.at_level(logging.WARNING, logger="agent_windows.core.grounding"):
+            result = _parse_detection_json(response)
+        assert len(result) == 2  # 3 labels, 2 bboxes → 2 recoverable targets
+        assert any("dropping the unpaired extras" in r.message for r in caplog.records)
+
 
 class TestValidateTargets:
     def test_valid_targets(self):
@@ -215,6 +228,33 @@ class TestDetectElements:
         assert result["count"] == 3
         assert result["targets"][0]["index"] == 1
         assert result["targets"][2]["index"] == 3
+
+    @patch("agent_windows.core.screenshot.capture_screenshot")
+    @patch("agent_windows.core.grounding.call_vision_model")
+    @patch("agent_windows.core.grounding.load_config")
+    def test_packed_object_response_recovered_end_to_end(self, mock_config, mock_api, mock_capture):
+        """End-to-end: a model that packs 3 targets into one object (repeated
+        label/bbox keys) must yield 3 targets through the full detect_elements
+        path, not collapse to 1. This is the real-world regression this recovery
+        exists for (observed with xopqwen36v35b); the unit tests above cover the
+        parser in isolation, this one exercises the whole call path."""
+        mock_config.return_value = {
+            "vlm": {"enabled": True, "model": "test", "engine": "openai", "width": 1000, "height": 1000}
+        }
+        # One object, three repeated label/bbox groups — the malformed form.
+        mock_api.return_value = (
+            '[{"label": "btn", "bbox": [100, 100, 150, 150], '
+            '"label": "btn", "bbox": [300, 100, 350, 150], '
+            '"label": "btn", "bbox": [500, 100, 550, 150]}]'
+        )
+        mock_capture.return_value = Image.new("RGB", (1920, 1080))
+
+        result = detect_elements("buttons")
+        assert result["count"] == 3, f"expected 3 recovered targets, got {result['count']}"
+        # Each target is well-formed (normalized after the physical clamp).
+        for t in result["targets"]:
+            assert t["box"]["x1"] <= t["box"]["x2"]
+            assert t["box"]["y1"] <= t["box"]["y2"]
 
     @patch("agent_windows.core.screenshot.capture_screenshot")
     @patch("agent_windows.core.grounding.call_vision_model")

@@ -452,13 +452,25 @@ def _expand_duplicate_target_keys(pairs):
     lists). An ``object_pairs_hook`` must return a single object (not a bare
     list, which the parent array would treat as one nested element), hence the
     wrapper. Objects with single (or no) label/bbox pass through unchanged.
+
+    Note: ``_packed_targets`` is a reserved key for this sentinel. A model is
+    vanishingly unlikely to emit it literally; if one did, ``_validate_targets``
+    would treat a non-list value as a normal object and ignore the key.
     """
     labels = [v for k, v in pairs if k == "label"]
     bboxes = [v for k, v in pairs if k == "bbox"]
     # Only trigger the recovery when there's more than one target packed in.
     if len(labels) > 1 or len(bboxes) > 1:
-        # Pair up by position; if counts mismatch, zip to the shorter (drop the
-        # unpaired extras — they're uninterpretable without the other field).
+        # Pair up by position; if counts mismatch, zip to the shorter and warn
+        # about the dropped extras — a half-specified target (label without
+        # bbox or vice versa) is uninterpretable, but the loss should be
+        # observable rather than silent (the whole point of this hook).
+        if len(labels) != len(bboxes):
+            logger.warning(
+                "detect: model packed %d labels and %d bboxes into one object; "
+                "recovering %d targets, dropping the unpaired extras",
+                len(labels), len(bboxes), min(len(labels), len(bboxes)),
+            )
         return {"_packed_targets": [
             {"label": lbl, "bbox": bb} for lbl, bb in zip(labels, bboxes)
         ]}
