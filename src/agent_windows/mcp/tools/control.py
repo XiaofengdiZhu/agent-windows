@@ -17,7 +17,15 @@ _MIN_POLL_INTERVAL = 0.05
 
 
 def ping_fn() -> str:
-    return str(_call("ping").get("output", "pong"))
+    # The daemon's ping handler returns {"status": "ok", "message": "pong"} —
+    # note there is NO "output" key (unlike every other handler). Read the
+    # actual fields rather than a hard-coded literal, so an unhealthy daemon
+    # (e.g. status != "ok", or a future richer reply) is reflected faithfully.
+    # A daemon that's truly down surfaces as a JSON-RPC error before this line.
+    r = _call("ping")
+    status = r.get("status", "unknown")
+    message = r.get("message", "")
+    return f"{status}: {message}" if message else str(status)
 
 
 def wait_fn(

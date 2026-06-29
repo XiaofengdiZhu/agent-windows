@@ -481,11 +481,19 @@ def test_multi_edit_fn_forwards_locs():
 import agent_windows.mcp.tools.control as ctl
 
 
-def test_ping_fn_returns_output():
-    # the real ping handler returns {"status","message"} with NO output key —
-    # ping_fn falls back to "pong" via .get("output", "pong"). Mirror reality.
+def test_ping_fn_reads_daemon_status_and_message():
+    # The real ping handler returns {"status","message"} with NO "output" key.
+    # ping_fn must read those fields (not a hard-coded "pong" via a nonexistent
+    # "output" key), so an unhealthy or richer daemon reply is reflected.
     with patch.object(ctl, "_call", return_value={"status": "ok", "message": "pong"}):
-        assert ctl.ping_fn() == "pong"
+        assert ctl.ping_fn() == "ok: pong"
+    # A non-default status/message propagates faithfully (regression: the old
+    # .get("output","pong") always returned "pong", ignoring the daemon).
+    with patch.object(ctl, "_call", return_value={"status": "degraded", "message": "slow"}):
+        assert ctl.ping_fn() == "degraded: slow"
+    # Missing message → just the status.
+    with patch.object(ctl, "_call", return_value={"status": "ok"}):
+        assert ctl.ping_fn() == "ok"
 
 
 def test_wait_fn_sleep_mode_calls_sleep():
