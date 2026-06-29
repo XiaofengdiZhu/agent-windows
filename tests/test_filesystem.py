@@ -444,6 +444,85 @@ class TestReadOffsetLimit:
         assert "lines_total" not in r  # whole-file path, not line-range path
 
 
+class TestReadOffsetLimitValidation:
+    def test_offset_must_be_positive(self, tmp_path):
+        import pytest
+        from agent_windows.core.filesystem import read_file
+        f = tmp_path / "x.txt"
+        f.write_text("a\n", encoding="utf-8")
+        with pytest.raises(ValueError):
+            read_file(str(f), offset=0)
+        with pytest.raises(ValueError):
+            read_file(str(f), offset=-3)
+
+    def test_offset_must_be_int_not_bool(self, tmp_path):
+        # bool is a subclass of int; True must not silently mean offset=1.
+        import pytest
+        from agent_windows.core.filesystem import read_file
+        f = tmp_path / "x.txt"
+        f.write_text("a\n", encoding="utf-8")
+        with pytest.raises(ValueError):
+            read_file(str(f), offset=True)
+        with pytest.raises(ValueError):
+            read_file(str(f), limit=False)
+
+    def test_limit_must_be_positive(self, tmp_path):
+        import pytest
+        from agent_windows.core.filesystem import read_file
+        f = tmp_path / "x.txt"
+        f.write_text("a\n", encoding="utf-8")
+        with pytest.raises(ValueError):
+            read_file(str(f), limit=0)
+        with pytest.raises(ValueError):
+            read_file(str(f), limit=-1)
+
+    def test_limit_capped_to_max_lines(self, tmp_path, monkeypatch):
+        # A runaway limit must not force islice/readlines to walk a huge file.
+        from agent_windows.core import filesystem as fs
+        f = tmp_path / "big.txt"
+        f.write_text("\n".join(f"l{i}" for i in range(10)) + "\n", encoding="utf-8")
+        monkeypatch.setattr(fs, "MAX_READ_LINES", 3)
+        # limit=1_000_000 collapses to MAX_READ_LINES=3 → only 3 lines.
+        r = fs.read_file(str(f), limit=1_000_000)
+        assert r["content"].count("\n") == 3
+
+
+class TestReadOffsetLimitLargeFile:
+    def test_large_file_streams_only_window(self, tmp_path, monkeypatch):
+        # Simulate a file larger than the read budget without writing 5 MiB:
+        # lower MAX_READ_BYTES so a small file takes the streaming branch.
+        # Budget must be < file size (15 B) but >= the 5 B window so it isn't
+        # byte-truncated; that isolates the streaming path from the byte cap.
+        from agent_windows.core import filesystem as fs
+        f = tmp_path / "tall.txt"
+        f.write_text("l1\nl2\nl3\nl4\nl5\n", encoding="utf-8")
+        monkeypatch.setattr(fs, "MAX_READ_BYTES", 10)
+        r = fs.read_file(str(f), offset=2, limit=2)
+        # Streaming branch: total unknown (window didn't reach EOF), but the
+        # requested slice is correct.
+        assert r["content"] == "l2\nl3\n"
+        assert r["lines_total"] is None
+
+    def test_large_file_window_at_eof_knows_total(self, tmp_path, monkeypatch):
+        from agent_windows.core import filesystem as fs
+        f = tmp_path / "tall.txt"
+        f.write_text("l1\nl2\nl3\n", encoding="utf-8")
+        monkeypatch.setattr(fs, "MAX_READ_BYTES", 8)  # < file(9), >= window(5)
+        # offset=2, limit=5 reads to EOF → total is known (=3).
+        r = fs.read_file(str(f), offset=2, limit=5)
+        assert r["content"] == "l2\nl3\n"
+        assert r["lines_total"] == 3
+
+    def test_large_file_byte_budget_truncates_long_lines(self, tmp_path, monkeypatch):
+        from agent_windows.core import filesystem as fs
+        f = tmp_path / "wide.txt"
+        f.write_text("AAAA" * 100 + "\n", encoding="utf-8")  # one long line
+        monkeypatch.setattr(fs, "MAX_READ_BYTES", 16)
+        monkeypatch.setattr(fs, "MAX_READ_LINES", 100_000)
+        r = fs.read_file(str(f), offset=1, limit=1)
+        assert len(r["content"]) <= 16
+
+
 class TestWriteAppend:
     def test_append_adds_to_existing(self, tmp_path):
         from agent_windows.core.filesystem import write_file

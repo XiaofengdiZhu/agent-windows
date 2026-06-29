@@ -2,6 +2,7 @@
 
 import fnmatch
 import functools
+import itertools
 import logging
 import os
 import shutil
@@ -55,6 +56,11 @@ def _with_elevation_hint(fn: F) -> F:
 MAX_READ_BYTES = 5 * 1024 * 1024  # 5 MiB
 MAX_LIST_ENTRIES = 5000
 MAX_SEARCH_RESULTS = 1000
+# Upper bound on how many lines the line-range mode will pull off disk in one
+# call. Bounds work even for files small enough to fit in memory: a runaway
+# ``limit`` (e.g. 1e9) can't force islice/readlines to walk the whole file.
+# 2 MiB at ~80 chars/line ≈ 26k lines, comfortably above any sane request.
+MAX_READ_LINES = 100_000
 
 # Path blacklist: match by path component to deny access to sensitive
 # directories and files. Each entry is a tuple: (match pattern, description)
@@ -313,13 +319,53 @@ def read_file(path: str, offset: int | None = None, limit: int | None = None,
 
     size = p.stat().st_size
 
-    # Line-range mode (TODO #4): read by lines and slice. The cap still applies
-    # to the returned content; offset/limit let callers avoid reading a huge
-    # file whole by selecting the slice they want.
+    # Line-range mode (TODO #4): read by lines and slice. offset/limit let
+    # callers avoid reading a huge file whole by selecting the slice they want.
+    # Validation first so a bad range surfaces as INVALID_PARAMS, not a partial
+    # read. ``bool`` is excluded because bool is a subclass of int —
+    # ``read_file(p, offset=True)`` would otherwise mean offset=1 silently.
+    if offset is not None:
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 1:
+            raise ValueError(f"offset must be a positive int (>=1), got {offset!r}")
+    if limit is not None:
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+            raise ValueError(f"limit must be a positive int (>=1), got {limit!r}")
+        limit = min(limit, MAX_READ_LINES)
+    # Cap an unbounded limit so islice below never walks the whole file.
+    line_window = limit if limit is not None else MAX_READ_LINES
+
     if offset is not None or limit is not None:
+        start = (offset or 1) - 1  # 1-based → 0-based
         try:
-            with p.open("r", encoding=enc, errors=errors) as f:
-                lines = f.readlines()
+            # When the file fits the read budget, readlines() is safe (the whole
+            # file is within MAX_READ_BYTES anyway) and gives us an exact total.
+            # For files larger than the budget, stream only the requested window
+            # via islice so a multi-GB file can't force the whole thing into
+            # memory — at the cost of not knowing the exact total line count
+            # unless the window happens to reach EOF.
+            if size <= MAX_READ_BYTES:
+                with p.open("r", encoding=enc, errors=errors) as f:
+                    lines = f.readlines()
+                total = len(lines)
+                selected = lines[start:start + line_window]
+                content = "".join(selected)
+                end_line = start + len(selected)
+                known_total = True
+            else:
+                with p.open("r", encoding=enc, errors=errors) as f:
+                    selected = list(itertools.islice(f, start, start + line_window))
+                content = "".join(selected)
+                end_line = start + len(selected)
+                # If the window ended short of its requested span, we reached
+                # EOF and know the total; otherwise the file is longer and we
+                # won't consume it just to count.
+                reached_eof = limit is not None and len(selected) < limit
+                known_total = reached_eof
+                total = end_line if reached_eof else None
+                # Byte-budget the streamed slice: a wide window on a file with
+                # very long lines could still exceed MAX_READ_BYTES.
+                if len(content) > MAX_READ_BYTES:
+                    content = content[:MAX_READ_BYTES]
         except UnicodeDecodeError:
             return {
                 "output": f"## File Read\nPath: {p}\n[Binary file, cannot read by lines]",
@@ -327,22 +373,28 @@ def read_file(path: str, offset: int | None = None, limit: int | None = None,
                 "size": size,
                 "truncated": False,
             }
-        total = len(lines)
-        start = max(0, (offset or 1) - 1)  # 1-based → 0-based
-        end = start + limit if limit else total
-        selected = lines[start:end]
-        content = "".join(selected)
-        if len(content) > MAX_READ_BYTES:
-            content = content[:MAX_READ_BYTES]
-        note = f"\n\n[Showing lines {start + 1}-{min(end, total)} of {total}]"
-        return {
-            "output": f"## File Read\nPath: {p}\nSize: {size} bytes\n---\n{content}{note}",
-            "content": content,
-            "size": size,
-            "truncated": False,
-            "lines_total": total,
-            "lines_shown": f"{start + 1}-{min(end, total)}",
-        }
+        shown = f"{start + 1}-{min(end_line, total) if known_total else end_line}"
+        if known_total:
+            note = f"\n\n[Showing lines {start + 1}-{min(end_line, total)} of {total}]"
+            res: dict[str, Any] = {
+                "output": f"## File Read\nPath: {p}\nSize: {size} bytes\n---\n{content}{note}",
+                "content": content,
+                "size": size,
+                "truncated": False,
+                "lines_total": total,
+                "lines_shown": shown,
+            }
+        else:
+            note = f"\n\n[Showing lines {start + 1}-{end_line} of ≥{end_line + 1}]"
+            res = {
+                "output": f"## File Read\nPath: {p}\nSize: {size} bytes\n---\n{content}{note}",
+                "content": content,
+                "size": size,
+                "truncated": False,
+                "lines_total": None,
+                "lines_shown": shown,
+            }
+        return res
 
     truncated = size > MAX_READ_BYTES
 
