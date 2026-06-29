@@ -217,6 +217,13 @@ pub fn parse(argv: &[String], global: &GlobalFlags) -> Result<Action, ParseError
                 params: json!({ "keys": keys }),
             })
         }
+        // `expand`/`collapse` drive a live UIA ExpandCollapsePattern at @eN (no
+        // coordinates — the element is reverse-looked-up from the snapshot). They
+        // were registered in the Python CLI (input.py:154-169) and the daemon
+        // (handlers/input.py:160,178) but missing from this table, so under the
+        // recommended `uv tool install` path they failed with "Unknown command".
+        "expand" => parse_selector_only(rest, "expand"),
+        "collapse" => parse_selector_only(rest, "collapse"),
 
         // ── System groups ─────────────────────────────────────────────────
         "app" => parse_app(rest),
@@ -757,6 +764,19 @@ fn parse_type(rest: &[String]) -> Result<Action, ParseError> {
     Ok(Action::Call { method: "type".into(), params: Value::Object(params) })
 }
 
+/// `expand`/`collapse @eN`: forward `{"selector": sel}`. Like `get-text`, these
+/// take a single positional `selector` and nothing else (no coordinates — the
+/// daemon's ExpandCollapsePattern handler reverse-looks-up the element from the
+/// snapshot). Mirrors input.py:154-169.
+fn parse_selector_only(rest: &[String], method: &str) -> Result<Action, ParseError> {
+    let p = ParsedArgs::parse(rest, &[]);
+    let selector = p.pos(0, "selector")?;
+    Ok(Action::Call {
+        method: method.into(),
+        params: json!({ "selector": selector }),
+    })
+}
+
 fn parse_app(rest: &[String]) -> Result<Action, ParseError> {
     const VALID: &[&str] = &["launch", "switch", "list", "resize"];
     let sub = rest.first()
@@ -801,9 +821,13 @@ fn parse_app(rest: &[String]) -> Result<Action, ParseError> {
 }
 
 fn parse_fs(rest: &[String]) -> Result<Action, ParseError> {
-    const VALID: &[&str] = &["read", "write", "list"];
+    // Eight subcommands; mirrors the Python `fs` Typer group (system.py:76-187).
+    // read/write/list existed first; copy/move/delete/search/info were added for
+    // CLI/launcher parity (the daemon already implemented them — handlers/
+    // system.py:120-167 — but the launcher rejected them as unknown_subcommand).
+    const VALID: &[&str] = &["read", "write", "list", "copy", "move", "delete", "search", "info"];
     let sub = rest.first()
-        .ok_or_else(|| missing("Missing fs subcommand (read/write/list)"))?;
+        .ok_or_else(|| missing("Missing fs subcommand (read/write/list/copy/move/delete/search/info)"))?;
     let args = &rest[1..];
     match sub.as_str() {
         "read" => {
@@ -824,6 +848,56 @@ fn parse_fs(rest: &[String]) -> Result<Action, ParseError> {
             let p = ParsedArgs::parse(args, &[]);
             let path = p.pos(0, "path")?;
             Ok(Action::Call { method: "fs_list".into(), params: json!({ "path": path }) })
+        }
+        // `copy`/`move SRC DEST [--overwrite]`. overwrite forwards only when the
+        // flag is present (Python system.py:136-138, 150-152).
+        "copy" | "move" => {
+            let method = if sub == "copy" { "fs_copy" } else { "fs_move" };
+            let p = ParsedArgs::parse(args, &[]);
+            let path = p.pos(0, "path")?;
+            let destination = p.pos(1, "destination")?;
+            let mut params = Map::new();
+            params.insert("path".into(), path.into());
+            params.insert("destination".into(), destination.into());
+            if p.flag(&["overwrite"]) {
+                params.insert("overwrite".into(), true.into());
+            }
+            Ok(Action::Call { method: method.into(), params: Value::Object(params) })
+        }
+        // `delete PATH [--recursive]` (non-empty dirs need recursive).
+        "delete" => {
+            let p = ParsedArgs::parse(args, &[]);
+            let path = p.pos(0, "path")?;
+            let mut params = Map::new();
+            params.insert("path".into(), path.into());
+            if p.flag(&["recursive"]) {
+                params.insert("recursive".into(), true.into());
+            }
+            Ok(Action::Call { method: "fs_delete".into(), params: Value::Object(params) })
+        }
+        // `search PATH PATTERN [--no-recursive]`. Inverted vs. the others: the
+        // daemon defaults recursive=True (handlers/system.py:159), so we forward
+        // `recursive=false` only when --no-recursive is given, and forward
+        // nothing otherwise (letting the daemon's True default apply). Python
+        // always sends `recursive = not no_recursive` (system.py:177); we mirror
+        // its omission of the default to avoid clobbering a config default.
+        "search" => {
+            let p = ParsedArgs::parse(args, &[]);
+            let path = p.pos(0, "path")?;
+            let pattern = p.pos(1, "pattern")?;
+            let mut params = Map::new();
+            params.insert("path".into(), path.into());
+            params.insert("pattern".into(), pattern.into());
+            if p.flag(&["no-recursive"]) {
+                params.insert("recursive".into(), false.into());
+            }
+            Ok(Action::Call { method: "fs_search".into(), params: Value::Object(params) })
+        }
+        // `info PATH` — metadata only, no options.
+        "info" => {
+            let p = ParsedArgs::parse(args, &[]);
+            let path = p.pos(0, "path")?;
+            Ok(Action::Call { method: "fs_info".into(), params: json!({ "path": path }) })
         }
         _ => Err(unknown_subcommand("fs", sub, VALID)),
     }
@@ -1297,6 +1371,102 @@ mod tests {
         let e = parse(&argv(&["registry", "frob"]), &g).unwrap_err();
         assert_eq!(e.type_name(), "unknown_subcommand");
         assert!(e.message().contains("get") && e.message().contains("list"));
+    }
+
+    #[test]
+    fn expand_collapse_forward_selector() {
+        let g = GlobalFlags::default();
+        // expand @e5 → method expand, {selector}. These drove a live UIA pattern
+        // but were missing from the launcher, failing with "Unknown command".
+        match parse(&argv(&["expand", "@e5"]), &g) {
+            Ok(Action::Call { method, params }) => {
+                assert_eq!(method, "expand");
+                assert_eq!(params["selector"], "@e5");
+            }
+            other => panic!("got {:?}", other),
+        }
+        match parse(&argv(&["collapse", "@e5"]), &g) {
+            Ok(Action::Call { method, params }) => {
+                assert_eq!(method, "collapse");
+                assert_eq!(params["selector"], "@e5");
+            }
+            other => panic!("got {:?}", other),
+        }
+        // Missing selector → missing_argument.
+        let e = parse(&argv(&["expand"]), &g).unwrap_err();
+        assert_eq!(e.type_name(), "missing_argument");
+    }
+
+    #[test]
+    fn fs_extra_subcommands_and_unknown_lists_all() {
+        let g = GlobalFlags::default();
+        // copy/move SRC DEST [--overwrite]: overwrite forwards only when present.
+        match parse(&argv(&["fs", "copy", "a", "b"]), &g) {
+            Ok(Action::Call { method, params }) => {
+                assert_eq!(method, "fs_copy");
+                assert_eq!(params["path"], "a");
+                assert_eq!(params["destination"], "b");
+                assert!(params.get("overwrite").is_none());
+            }
+            other => panic!("got {:?}", other),
+        }
+        match parse(&argv(&["fs", "copy", "a", "b", "--overwrite"]), &g) {
+            Ok(Action::Call { params, .. }) => assert_eq!(params["overwrite"], true),
+            other => panic!("got {:?}", other),
+        }
+        match parse(&argv(&["fs", "move", "a", "b", "--overwrite"]), &g) {
+            Ok(Action::Call { method, params }) => {
+                assert_eq!(method, "fs_move");
+                assert_eq!(params["overwrite"], true);
+            }
+            other => panic!("got {:?}", other),
+        }
+        // delete PATH [--recursive]
+        match parse(&argv(&["fs", "delete", "d"]), &g) {
+            Ok(Action::Call { method, params }) => {
+                assert_eq!(method, "fs_delete");
+                assert_eq!(params["path"], "d");
+                assert!(params.get("recursive").is_none());
+            }
+            other => panic!("got {:?}", other),
+        }
+        match parse(&argv(&["fs", "delete", "d", "--recursive"]), &g) {
+            Ok(Action::Call { params, .. }) => assert_eq!(params["recursive"], true),
+            other => panic!("got {:?}", other),
+        }
+        // search PATH PATTERN [--no-recursive]: inverted — recursive=false only
+        // with the flag; absent forwards nothing (daemon default is True).
+        match parse(&argv(&["fs", "search", ".", "*.py"]), &g) {
+            Ok(Action::Call { method, params }) => {
+                assert_eq!(method, "fs_search");
+                assert_eq!(params["path"], ".");
+                assert_eq!(params["pattern"], "*.py");
+                assert!(params.get("recursive").is_none());
+            }
+            other => panic!("got {:?}", other),
+        }
+        match parse(&argv(&["fs", "search", ".", "*.py", "--no-recursive"]), &g) {
+            Ok(Action::Call { params, .. }) => assert_eq!(params["recursive"], false),
+            other => panic!("got {:?}", other),
+        }
+        // info PATH
+        match parse(&argv(&["fs", "info", "f"]), &g) {
+            Ok(Action::Call { method, params }) => {
+                assert_eq!(method, "fs_info");
+                assert_eq!(params["path"], "f");
+            }
+            other => panic!("got {:?}", other),
+        }
+        // Missing positionals → missing_argument.
+        let e = parse(&argv(&["fs", "info"]), &g).unwrap_err();
+        assert_eq!(e.type_name(), "missing_argument");
+        // unknown sub → lists all EIGHT valid choices (regression: the old VALID
+        // only had read/write/list, so copy/move/... were misclassified).
+        let e = parse(&argv(&["fs", "frob"]), &g).unwrap_err();
+        assert_eq!(e.type_name(), "unknown_subcommand");
+        for sub in &["read", "write", "list", "copy", "move", "delete", "search", "info"] {
+            assert!(e.message().contains(sub), "message must list {:?}", sub);
+        }
     }
 
     #[test]
