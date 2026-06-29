@@ -53,7 +53,7 @@ fn main() -> ExitCode {
     // `agent-windows-python mcp serve ...` directly. Only the literal top-level
     // command name is delegated; `mcp` appearing as an argument to another command
     // can't reach here (cmd_argv[0] is the command name).
-    if cmd_argv.first().is_some_and(|c| c == "config" || c == "mcp") {
+    if first_command_name(&argv).is_some_and(|c| c == "config" || c == "mcp") {
         return run_python_cli(&argv, &global);
     }
 
@@ -242,6 +242,34 @@ fn strip_global_flags(argv: &[String]) -> (GlobalFlags, Vec<String>) {
     }
 
     (g, rest)
+}
+
+/// First token of argv that is the *command name*: the first token after the
+/// global-flag prefix. Used to detect `config`/`mcp` for Python-CLI delegation.
+///
+/// Why not reuse `strip_global_flags`' `rest`? That function hoists a stray
+/// `--help`/`-h` to the front of `rest` (so `parse` prints help regardless of
+/// position). A delegation check against its output would therefore see
+/// `--help` instead of the command — turning `config --help` into the GLOBAL
+/// help instead of delegating to Python for config's own help. This helper
+/// skips `--help`/`-h` (rather than hoisting) so the real command name surfaces;
+/// `run_python_cli` then forwards the *original* argv verbatim and Python's
+/// Typer re-parses `--help` in its correct position.
+///
+/// Mirrors `strip_global_flags`' global-flag set so both agree on where the
+/// prefix ends (same foot-gun too: a prefix `--format`/`--config` with no value
+/// swallows the next token as its value, e.g. `--format config` → no command).
+fn first_command_name(argv: &[String]) -> Option<&str> {
+    let mut i = 0;
+    while i < argv.len() {
+        match argv[i].as_str() {
+            "--no-daemon" | "--debug" | "--help" | "-h" => i += 1,
+            "--format" | "--config" => i += 2, // flag + its value token
+            s if s.starts_with("--format=") || s.starts_with("--config=") => i += 1,
+            other => return Some(other),
+        }
+    }
+    None
 }
 
 /// Run a daemon call: ensure daemon up → build request → IPC → print.
@@ -815,7 +843,7 @@ mod tests {
     // `--format json` to `click` and rejects it. These lock the prefix-only
     // contract. `--help`/`-h` stays reachable anywhere (Typer special-cases it).
 
-    use super::strip_global_flags;
+    use super::{first_command_name, strip_global_flags};
 
     fn argv(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| s.to_string()).collect()
@@ -985,5 +1013,46 @@ mod tests {
         let (g, rest) = strip_global_flags(&argv(&["--format"]));
         assert!(!g.format_json);
         assert!(rest.is_empty());
+    }
+
+    // ── first_command_name: config/mcp delegation behind --help ────────────
+    //
+    // strip_global_flags hoists a tail --help to the front of rest, so the old
+    // delegation check (cmd_argv.first()) saw "--help" and printed the GLOBAL
+    // help for `config --help` instead of delegating to Python for config's own
+    // help. first_command_name skips --help/-h so the real command name surfaces.
+
+    #[test]
+    fn first_command_name_surfaces_config_behind_help() {
+        assert_eq!(first_command_name(&argv(&["config", "--help"])), Some("config"));
+        assert_eq!(first_command_name(&argv(&["config", "show", "--help"])), Some("config"));
+        assert_eq!(first_command_name(&argv(&["mcp", "--help"])), Some("mcp"));
+        // -h short form, and --help before the command (Typer would show global
+        // help for that placement, but the command name still resolves so the
+        // decision is delegated to Python, which re-parses --help correctly).
+        assert_eq!(first_command_name(&argv(&["config", "-h"])), Some("config"));
+        assert_eq!(first_command_name(&argv(&["--help", "config"])), Some("config"));
+    }
+
+    #[test]
+    fn first_command_name_skips_global_prefix() {
+        assert_eq!(first_command_name(&argv(&["--no-daemon", "config"])), Some("config"));
+        assert_eq!(first_command_name(&argv(&["--format", "json", "config"])), Some("config"));
+        assert_eq!(first_command_name(&argv(&["--config", "p.toml", "mcp"])), Some("mcp"));
+        assert_eq!(first_command_name(&argv(&["--format=json", "config"])), Some("config"));
+        assert_eq!(first_command_name(&argv(&["--config=p.toml", "mcp", "serve"])), Some("mcp"));
+        // A non-delegated command still resolves (delegation only acts on config/mcp).
+        assert_eq!(first_command_name(&argv(&["click", "10", "20"])), Some("click"));
+    }
+
+    #[test]
+    fn first_command_name_none_when_no_command() {
+        assert_eq!(first_command_name(&argv(&["--help"])), None);
+        assert_eq!(first_command_name(&argv(&["--no-daemon", "--debug"])), None);
+        assert_eq!(first_command_name(&argv(&[])), None);
+        // The foot-gun, locked explicitly: a prefix --format with no value eats
+        // the next token ("config") as its value, so no command name remains —
+        // matching strip_global_flags' behavior.
+        assert_eq!(first_command_name(&argv(&["--format", "config"])), None);
     }
 }
