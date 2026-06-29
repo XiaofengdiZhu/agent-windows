@@ -189,6 +189,41 @@ def _validate_path(path: str) -> Path:
     return p
 
 
+def _in_blacklisted_components(p: Path) -> bool:
+    """Non-raising blacklist test on a path's LITERAL component names.
+
+    Mirrors :func:`_validate_path`'s component logic but returns a bool instead
+    of raising, so recursive walkers (:func:`list_dir`/:func:`search_files`)
+    can PRUNE blacklisted subtrees without aborting the whole listing.
+
+    Why literal names (not ``.resolve()``): rglob/os.walk traversal yields
+    real, long file names — never 8.3 aliases — so a credential dir like
+    ``.ssh`` appears in ``p.parts`` under its real name. The reparse-point
+    defense in :func:`_validate_path` (resolve 8.3 / follow junctions) is about
+    a *user-supplied path string*, not the walker's output; the walker can't
+    produce a short name. Resolving every entry here would also be expensive
+    and could fail on inaccessible paths. A junction into ``.ssh`` is never
+    traversed at all: ``os.walk`` defaults to ``followlinks=False``, so a
+    junction is listed as an entry under its own name but its contents are not
+    enumerated (strictly stronger than pruning); any read THROUGH such a
+    junction is still caught by ``_validate_path``'s ``.resolve()`` (M-03).
+    A real subdir literally named ``.ssh`` is pruned by the literal-name check.
+    (F4)
+
+    Note this does NOT consider the prefix rules (``windows/system32``): those
+    are absolute-path prefixes that a relative walker under a user-chosen root
+    won't reconstruct meaningfully, and descending into ``System32`` during a
+    listing is already gated by ``_validate_path`` on the root (a listing of
+    ``System32`` itself is refused up front). The exact-component credential
+    dirs are the real exposure for a recursive listing.
+    """
+    parts = [part.lower() for part in p.parts]
+    for part in parts:
+        if part in _BLOCKED_PARTS:
+            return True
+    return False
+
+
 def validate_read_path(path: str) -> Path:
     """Validate a user-supplied read path (e.g. an image passed to a handler).
 
@@ -307,6 +342,40 @@ def validate_executable_path(path: str) -> None:
             "Access denied: refusing to launch a binary inside the agent's "
             "install tree or data directory (L-03)"
         )
+
+
+def _walk_pruned(root: Path, pattern: str | None) -> Any:
+    """Recursive generator mirroring ``root.rglob(pattern or "*")`` but PRUNING
+    blacklisted credential dirs so their contents are never enumerated.
+
+    Yields each matching entry's absolute ``Path`` once. With the default
+    pattern (``*`` / None) every file and directory under ``root`` is yielded,
+    matching ``rglob("*")``; with a glob like ``"*.py"`` only entries whose name
+    matches are yielded (matching ``rglob("*.py")``'s recursive name match).
+
+    Pruning uses top-down ``os.walk`` so a blacklisted dir is dropped from
+    ``dirs[:]`` before the walk descends into it — neither the dir's children
+    nor the dir itself (when blacklisted) are yielded. (F4, round 2)
+
+    A blacklisted dir is detected by ``_in_blacklisted_components`` on its
+    absolute path, which also catches a junction whose traversal lands on a
+    part named e.g. ``.ssh``. ``onerror`` swallows access-denied on a single
+    subtree (matches rglob silently skipping unreadable dirs) rather than
+    aborting the whole listing.
+    """
+    pat = pattern or "*"
+    for dirpath, dirnames, filenames in os.walk(root, topdown=True, onerror=lambda e: None):
+        base = Path(dirpath)
+        # Prune blacklisted subdirs in place so os.walk skips them entirely.
+        dirnames[:] = [d for d in dirnames if not _in_blacklisted_components(base / d)]
+        # Yield directories that match the pattern (rglob("*") yields dirs too).
+        for d in dirnames:
+            entry = base / d
+            if fnmatch.fnmatch(d, pat):
+                yield entry
+        for f in filenames:
+            if fnmatch.fnmatch(f, pat):
+                yield base / f
 
 
 def _top_cap_by_key(
@@ -599,12 +668,18 @@ def list_dir(path: str, pattern: str | None = None, recursive: bool = False, sho
     recursive = _as_bool(recursive)
     show_hidden = _as_bool(show_hidden)
 
-    # In recursive mode the pattern is the glob itself (rglob(pattern)); in
-    # non-recursive mode it's a post-filter on each name via fnmatch.
+    # F4 (round 2): a recursive listing used rglob, which descends into
+    # blacklisted credential dirs (.ssh/.aws/...). Their own entry was hidden by
+    # the dotfile filter, but their CHILDREN (id_rsa, config, known_hosts) have
+    # ordinary names and leaked straight through — exposing filenames + sizes
+    # that can even hint at key types. Prune the walk so we never descend into a
+    # blacklisted dir, and also skip any blacklisted direct child in the
+    # non-recursive case (so show_hidden=True can't surface e.g. ".ssh"). The
+    # root itself is already rejected by _validate_path if it's blacklisted.
     if recursive:
-        iterator = p.rglob(pattern or "*")
+        iterator = _walk_pruned(p, pattern)
     else:
-        iterator = p.iterdir()
+        iterator = (e for e in p.iterdir() if not _in_blacklisted_components(e))
 
     def _visible(it: Any):
         """Yield only entries that pass the hidden/non-recursive-pattern filters,
@@ -767,7 +842,13 @@ def search_files(path: str, pattern: str, recursive: bool = True) -> dict[str, A
     if not p.is_dir():
         raise ValueError(f"Search path is not a directory: {path}")
 
-    iterator = p.rglob(pattern) if recursive else p.glob(pattern)
+    # F4 (round 2): prune blacklisted credential dirs from the walk so a search
+    # can't enumerate .ssh/.aws/... contents. The recursive path uses the shared
+    # pruning walker; the non-recursive path skips any blacklisted direct child.
+    if recursive:
+        iterator = _walk_pruned(p, pattern)
+    else:
+        iterator = (e for e in p.glob(pattern) if not _in_blacklisted_components(e))
 
     # Select the globally-smallest MAX_SEARCH_RESULTS names over a bounded heap
     # (O(cap) memory, not O(tree)). search_files stops once the cap fills

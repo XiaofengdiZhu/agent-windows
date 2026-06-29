@@ -795,6 +795,51 @@ class TestListEnhancements:
         shown = list_dir(str(tmp_path), show_hidden=True)
         assert ".secret" in shown["output"]
 
+    # ── F4 (round 2): recursive listing must not descend into blacklisted
+    # credential dirs. The old rglob walked into .ssh/.aws/..., whose own entry
+    # was dotfile-filtered but whose children (id_rsa, config, known_hosts) have
+    # ordinary names and leaked through — exposing filenames + sizes that can
+    # even hint at key types. The walk now prunes these dirs.
+
+    @pytest.mark.parametrize("cred", [".ssh", ".aws", ".gnupg", ".kube"])
+    def test_recursive_listing_prunes_credential_dir(self, tmp_path, cred):
+        """A recursive listing must not enumerate the contents of a blacklisted
+        credential dir, even with show_hidden=True (the dir itself is pruned,
+        not merely hidden)."""
+        from agent_windows.core.filesystem import list_dir
+        secret = tmp_path / cred
+        secret.mkdir()
+        (secret / "id_rsa").write_text("PRIVATE", encoding="utf-8")
+        (secret / "config").write_text("cfg", encoding="utf-8")
+        (tmp_path / "visible.txt").write_text("ok", encoding="utf-8")
+        r = list_dir(str(tmp_path), recursive=True, show_hidden=True)
+        assert "visible.txt" in r["output"]
+        # Neither the dir entry nor any of its children appear.
+        assert cred not in r["output"]
+        assert "id_rsa" not in r["output"]
+        assert "config" not in r["output"]
+
+    def test_recursive_listing_still_lists_normal_subdirs(self, tmp_path):
+        """Pruning blacklisted dirs must not over-reach into ordinary dirs —
+        a nested normal subdir's contents still appear."""
+        from agent_windows.core.filesystem import list_dir
+        sub = tmp_path / "projects"
+        sub.mkdir()
+        (sub / "app.py").write_text("x", encoding="utf-8")
+        r = list_dir(str(tmp_path), recursive=True)
+        assert "projects" in r["output"]
+        assert "app.py" in r["output"]
+
+    def test_nonrecursive_listing_skips_blacklisted_child(self, tmp_path):
+        """A blacklisted direct child is skipped even non-recursively (so
+        show_hidden=True can't surface the '.ssh' directory entry itself)."""
+        from agent_windows.core.filesystem import list_dir
+        (tmp_path / ".ssh").mkdir()
+        (tmp_path / "readme.txt").write_text("x", encoding="utf-8")
+        r = list_dir(str(tmp_path), show_hidden=True)
+        assert "readme.txt" in r["output"]
+        assert ".ssh" not in r["output"]
+
 
 class TestCopyPath:
     def test_copy_file(self, tmp_path):
@@ -1044,6 +1089,36 @@ class TestSearchFiles:
         from agent_windows.core.filesystem import search_files
         with pytest.raises(ValueError, match="Access denied"):
             search_files(r"C:\Windows\System32", "*.dll")
+
+    # ── F4 (round 2): search must prune blacklisted credential dirs too.
+
+    def test_recursive_search_prunes_credential_dir(self, tmp_path):
+        """A recursive search must not return matches inside a blacklisted dir,
+        even when the pattern would match its files."""
+        from agent_windows.core.filesystem import search_files
+        secret = tmp_path / ".aws"
+        secret.mkdir()
+        (secret / "credentials").write_text("SECRET", encoding="utf-8")
+        (tmp_path / "credentials").write_text("ok", encoding="utf-8")
+        r = search_files(str(tmp_path), "credentials")
+        assert r["count"] == 1
+        # The top-level match is found; the one inside .aws is pruned (no
+        # ".aws" relative path appears in the listing).
+        assert ".aws" not in r["output"]
+        # The only FILE entry is the top-level one (not .aws\credentials).
+        file_lines = [ln for ln in r["output"].splitlines() if "[FILE]" in ln]
+        assert len(file_lines) == 1
+        assert "credentials" in file_lines[0]
+
+    def test_recursive_search_finds_in_normal_subdir(self, tmp_path):
+        """Pruning must not over-reach — matches in ordinary nested dirs found."""
+        from agent_windows.core.filesystem import search_files
+        sub = tmp_path / "src"
+        sub.mkdir()
+        (sub / "main.py").write_text("x", encoding="utf-8")
+        r = search_files(str(tmp_path), "*.py")
+        assert r["count"] == 1
+        assert "main.py" in r["output"]
 
 
 class TestGetFileInfo:
