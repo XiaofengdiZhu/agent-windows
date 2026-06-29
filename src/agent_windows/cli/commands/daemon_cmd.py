@@ -50,6 +50,18 @@ def daemon_start() -> None:
         # Start daemon subprocess. Propagate --config if an override is active
         # in this process so the daemon reads the same file (TODO #21-1).
         # Mirrors ipc.client._start_daemon_process.
+        #
+        # --debug is NOT passed on the argv here. If the user ran with --debug,
+        # main()'s global_options callback already called enable_debug(), which
+        # sets AGENT_WINDOWS_DEBUG in this process's environment; Popen inherits
+        # it, so the spawned daemon picks debug mode up via that env var. This
+        # matches the Python auto-start path (_start_daemon_process), where the
+        # flag is "redundant-but-harmless" for the same reason. The argv --debug
+        # is only load-bearing on the Rust-launcher spawn path (the launcher
+        # never sets the env var, so the daemon reads "--debug" from argv and
+        # calls enable_debug() itself). Keeping this path env-var-driven avoids
+        # divergence; do not add `--debug` to `cmd` without also reconsidering
+        # _start_daemon_process. (C3, TODO #21-3)
         cmd = [sys.executable, "-m", "agent_windows", "--daemon"]
         from agent_windows.utils.config import get_config_override
         if (override := get_config_override()) is not None:
