@@ -35,6 +35,12 @@ def wait_fn(
     timeout: float = 30.0,
     interval: float = 0.5,
 ) -> str:
+    # Reject the ambiguous combination up front, matching the CLI's `wait`
+    # (which errors "cannot specify both a target and --text"). Without this,
+    # passing both seconds and a selector silently drops seconds and polls for
+    # the element — surprising for a caller that asked to sleep.
+    if seconds and (selector or text):
+        raise ValueError("seconds is mutually exclusive with selector/text")
     # Mode 1: plain sleep — no selector/text.
     if not selector and not text:
         if not seconds or seconds <= 0:

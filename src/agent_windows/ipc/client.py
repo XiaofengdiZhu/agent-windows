@@ -15,7 +15,7 @@ import subprocess
 import sys
 import time
 
-from agent_windows.ipc.protocol import JSONRPCRequest, JSONRPCResponse
+from agent_windows.ipc.protocol import JSONRPCRequest, JSONRPCResponse, DAEMON_INTERNAL_ERROR
 from agent_windows.ipc.pipe import (
     PIPE_NAME,
     MAX_CONNECT_RETRIES,
@@ -59,8 +59,16 @@ def unwrap_response(response: JSONRPCResponse) -> dict:
     ELEMENT_NOT_FOUND / COORDINATE_OUT_OF_RANGE / PERMISSION_DENIED).
     """
     if response.error is not None:
+        # Default to DAEMON_INTERNAL_ERROR if the code is missing: the daemon's
+        # make_error always sets one, but a malformed error object shouldn't
+        # produce DaemonError.code=None (which would break any caller that
+        # branches on .code, e.g. the CLI exit-code mapping) or render the
+        # message as "Daemon error [None]: ...".
+        code = response.error.get("code")
+        if code is None or not isinstance(code, int):
+            code = DAEMON_INTERNAL_ERROR
         raise DaemonError(
-            response.error.get("code"),
+            code,
             response.error.get("message", ""),
         )
     return response.result

@@ -76,6 +76,14 @@ class JSONRPCResponse:
     @classmethod
     def from_json(cls, data: str) -> "JSONRPCResponse":
         obj = json.loads(data)
+        # Reject non-object JSON (e.g. "null", a bare number, an array) before
+        # .get() — otherwise it raises a misleading AttributeError and the
+        # caller sees an unhelpful traceback instead of a protocol error. The
+        # daemon always sends an object, but a client parsing an untrusted
+        # source shouldn't crash on shape. Mirrors JSONRPCRequest.from_json's
+        # dict check.
+        if not isinstance(obj, dict):
+            raise ValueError("JSON-RPC response must be a JSON object")
         return cls(
             id=obj.get("id"),
             result=obj.get("result"),

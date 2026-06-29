@@ -12,6 +12,12 @@ import typer
 
 from agent_windows.cli.dispatcher import dispatch, print_result
 
+# Floor for the poll interval: a caller-supplied 0 (or tiny) value, or a
+# config value of 0, would spin without yielding and pin the daemon's single
+# STA worker for the whole timeout. Clamp so the worker always gets a breather
+# between probes. Mirrors mcp/tools/control.py::_MIN_POLL_INTERVAL.
+_MIN_POLL_INTERVAL = 0.05
+
 
 def wait(
     ctx: typer.Context,
@@ -72,6 +78,7 @@ def wait(
     poll_interval = interval or (
         load_config().get("wait", {}).get("poll_interval", 0.5)
     )
+    poll_interval = max(poll_interval, _MIN_POLL_INTERVAL)
 
     # Poll client-side: each probe is one short wait_check request, the CLI
     # sleeps between probes so the daemon's STA worker is never blocked for
@@ -175,6 +182,7 @@ def wait_for(
     poll_interval = interval or (
         load_config().get("wait", {}).get("poll_interval", 0.5)
     )
+    poll_interval = max(poll_interval, _MIN_POLL_INTERVAL)
 
     probe = {"condition": condition, "text": text, "window_name": window}
 

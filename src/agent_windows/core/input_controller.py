@@ -465,22 +465,32 @@ def shortcut(keys: str, wait_time: float = 0.3) -> None:
 
         resolved.append((name, vk))
 
-    # Press modifier keys (hold them)
+    # Press modifier keys (hold them), press the final key, then release
+    # modifiers in reverse order. The whole press→final→release sequence is
+    # wrapped in try/finally so an exception (ctypes OSError, a Ctrl+C, a
+    # handler timeout) can't leave a modifier (Ctrl/Shift/Alt/Win) stuck down
+    # — which would corrupt every subsequent input on the desktop. multi_select
+    # (below) has the same guard for the same reason.
     held_vks: list[int] = []
-    for name, vk in resolved[:-1]:
-        _press_key(vk)
-        held_vks.append(vk)
-        time.sleep(0.01)
+    try:
+        for name, vk in resolved[:-1]:
+            _press_key(vk)
+            held_vks.append(vk)
+            time.sleep(0.01)
 
-    # Press the final key
-    final_name, final_vk = resolved[-1]
-    _send_vk_key(final_vk)
-    time.sleep(0.01)
-
-    # Release modifiers in reverse order
-    for vk in reversed(held_vks):
-        _release_key(vk)
+        # Press the final key
+        final_name, final_vk = resolved[-1]
+        _send_vk_key(final_vk)
         time.sleep(0.01)
+    finally:
+        # Release modifiers in reverse order (best-effort: each release is
+        # independent, so one failing release still attempts the rest).
+        for vk in reversed(held_vks):
+            try:
+                _release_key(vk)
+            except Exception:
+                logger.warning("Failed to release modifier key %s", vk, exc_info=True)
+            time.sleep(0.01)
 
     time.sleep(wait_time)
 

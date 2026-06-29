@@ -69,6 +69,14 @@ def _shell(params: dict) -> dict[str, Any]:
     """
     from agent_windows.core.shell_runner import run_shell
     timeout = params.get("timeout")
+    # An MCP/JSON client may pass timeout as a float, int, or (erroneously) a
+    # string/bool. Coerce real numbers; 0 → None ("use config default", since
+    # a literal 0 would mean instant timeout). Reject non-numeric values with
+    # a clear INVALID_PARAMS error instead of letting run_shell crash on a bad
+    # type (a bool True == 1 would otherwise silently pass `== 0` and become a
+    # 1s timeout).
+    if isinstance(timeout, bool) or (timeout is not None and not isinstance(timeout, (int, float))):
+        raise ValueError("timeout must be a number (seconds)")
     if timeout == 0:
         timeout = None
     return run_shell(require(params, "command", str), timeout=timeout)

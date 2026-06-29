@@ -167,14 +167,6 @@ def create_pipe_server(pipe_name: str = PIPE_NAME, buffer_size: int = BUFFER_SIZ
     return pipe
 
 
-def wait_for_client(pipe) -> None:
-    """Block until a client connects to the pipe."""
-    import win32pipe
-
-    win32pipe.ConnectNamedPipe(pipe, None)
-    logger.debug("Client connected to pipe")
-
-
 def read_pipe(pipe, buffer_size: int = BUFFER_SIZE, timeout: float | None = None) -> str:
     """Server-side: read a newline-delimited request from a connected client.
 

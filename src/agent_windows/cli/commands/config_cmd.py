@@ -29,20 +29,23 @@ def config_show() -> None:
 
     config = load_config()
     display_config = copy.deepcopy(config)
-    # Mask API key
-    if "vlm" in display_config and "api_key" in display_config["vlm"]:
-        key = display_config["vlm"]["api_key"]
-        if key and len(key) > 8:
-            display_config["vlm"]["api_key"] = key[:4] + "..." + key[-4:]
-        elif key:
-            display_config["vlm"]["api_key"] = "***"
-    # Mask MCP auth key (same secret-class as the VLM api key)
-    if "mcp" in display_config and "auth_key" in display_config["mcp"]:
-        mkey = display_config["mcp"]["auth_key"]
-        if mkey and len(mkey) > 8:
-            display_config["mcp"]["auth_key"] = mkey[:4] + "..." + mkey[-4:]
-        elif mkey:
-            display_config["mcp"]["auth_key"] = "***"
+    # Mask secrets so `config show` never prints them in the clear (they may
+    # be captured in screen recordings, shell history, support bundles, …).
+    # Masking is done on the decrypted values: a length threshold avoids
+    # exposing most of a short secret (a len<=8 secret shows as "***" rather
+    # than first-4 + last-4, which for a 9-char token would reveal all but one
+    # character). Each key handled here is the same secret-class as the VLM
+    # api key.
+    def _mask(section: str, key: str) -> None:
+        val = display_config.get(section, {}).get(key)
+        if val and len(val) > 8:
+            display_config[section][key] = val[:4] + "..." + val[-4:]
+        elif val:
+            display_config[section][key] = "***"
+
+    _mask("vlm", "api_key")
+    _mask("mcp", "auth_key")
+    _mask("security", "oauth_client_secret")
     path = get_config_path()
     typer.echo(f"# Config file: {path}")
     typer.echo(toml.dumps(display_config))

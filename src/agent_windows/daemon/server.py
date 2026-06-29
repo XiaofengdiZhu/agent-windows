@@ -39,7 +39,6 @@ from agent_windows.ipc.pipe import (
     DaemonStartupError,
     PipeReadTimeout,
     SERVER_WRITE_TIMEOUT_S,
-    wait_for_client,
     read_pipe,
     write_pipe,
     disconnect_pipe,
@@ -110,45 +109,49 @@ class COMWorkerThread(threading.Thread):
 
         pythoncom.CoInitialize()
         logger.info("COM STA worker thread initialized")
-
-        # Set DPI awareness (must be done before any UIA calls)
         try:
-            ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PerMonitorDpiAware
-            logger.info("DPI awareness set (PerMonitorDpiAware)")
-        except Exception as e:
-            logger.warning("Failed to set DPI awareness: %s (may already be set)", e)
+            # Set DPI awareness (must be done before any UIA calls)
+            try:
+                ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PerMonitorDpiAware
+                logger.info("DPI awareness set (PerMonitorDpiAware)")
+            except Exception as e:
+                logger.warning("Failed to set DPI awareness: %s (may already be set)", e)
 
-        # Initialize UIA on this thread
-        try:
-            from agent_windows.uia.core import _AutomationClient
-            client = _AutomationClient.instance()
-            logger.info("UIA initialized on STA thread")
-        except Exception as e:
-            logger.error("Failed to initialize UIA: %s", e)
+            # Initialize UIA on this thread
+            try:
+                from agent_windows.uia.core import _AutomationClient
+                client = _AutomationClient.instance()
+                logger.info("UIA initialized on STA thread")
+            except Exception as e:
+                logger.error("Failed to initialize UIA: %s", e)
+                self._ready.set()
+                return
+
             self._ready.set()
-            return
 
-        self._ready.set()
+            # Command processing loop with COM message pump
+            while not self._stop_event.is_set():
+                # Pump COM messages (required for STA)
+                try:
+                    pythoncom.PumpWaitingMessages()
+                except Exception:
+                    logger.debug("PumpWaitingMessages failed", exc_info=True)
 
-        # Command processing loop with COM message pump
-        while not self._stop_event.is_set():
-            # Pump COM messages (required for STA)
-            try:
-                pythoncom.PumpWaitingMessages()
-            except Exception:
-                logger.debug("PumpWaitingMessages failed", exc_info=True)
-
-            try:
-                cmd = self.command_queue.get(timeout=0.05)
-                if cmd is None:
-                    # Shutdown signal
-                    break
-                self._execute_command(cmd)
-            except queue.Empty:
-                continue
-
-        pythoncom.CoUninitialize()
-        logger.info("COM STA worker thread stopped")
+                try:
+                    cmd = self.command_queue.get(timeout=0.05)
+                    if cmd is None:
+                        # Shutdown signal
+                        break
+                    self._execute_command(cmd)
+                except queue.Empty:
+                    continue
+        finally:
+            # Always pair CoUninitialize with the CoInitialize above — even on
+            # the UIA-init-failure early return or an unexpected exception out
+            # of the command loop. Leaving it unpaired can leak STA-apartment
+            # resources until process exit.
+            pythoncom.CoUninitialize()
+            logger.info("COM STA worker thread stopped")
 
     def _execute_command(self, cmd: dict):
         """Execute a single command and store the result."""

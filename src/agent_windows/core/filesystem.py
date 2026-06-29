@@ -358,8 +358,11 @@ def read_file(path: str, offset: int | None = None, limit: int | None = None,
         else:
             content = p.read_text(encoding=enc, errors=errors)
     except UnicodeDecodeError:
-        content = p.read_bytes()
-        content = f"[Binary file, {len(content)} bytes]"
+        # The file isn't decodable in `enc`. Report it as binary using the
+        # already-known stat size rather than read_bytes() — that would load
+        # the *entire* (potentially multi-GB) file into memory just to count
+        # its bytes, defeating MAX_READ_BYTES and risking OOM.
+        content = f"[Binary file, {size} bytes]"
 
     note = f"\n\n[Truncated: file is {size} bytes, showed first {MAX_READ_BYTES}]" if truncated else ""
     return {

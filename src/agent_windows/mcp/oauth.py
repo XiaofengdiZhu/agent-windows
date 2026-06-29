@@ -238,12 +238,21 @@ def build_oauth_routes(
         # for the same code cannot both pass the checks before one deletes it.
         # If you add an await in this block, the single-use guarantee breaks —
         # guard the get+del as a critical section at that point.
+        #
+        # Per RFC 7636 §4.12/§5.2, a code MUST be single-use: once it has been
+        # presented at the token endpoint, ANY subsequent attempt (success or
+        # failure) MUST be rejected. So every failure branch below deletes the
+        # code before returning — a leaked code that only fails on the *right*
+        # verifier would otherwise let an attacker retry verifiers until the
+        # expiry window closes.
         if auth_code.client_id != client_id:
+            del store.codes[code_value]
             return JSONResponse(
                 {"error": "invalid_grant", "error_description": "client_id mismatch"}, status_code=400
             )
 
         if auth_code.redirect_uri != redirect_uri:
+            del store.codes[code_value]
             return JSONResponse(
                 {"error": "invalid_grant", "error_description": "redirect_uri mismatch"}, status_code=400
             )
@@ -255,6 +264,7 @@ def build_oauth_routes(
             )
 
         if not _verify_pkce(code_verifier, auth_code.code_challenge, auth_code.code_challenge_method):
+            del store.codes[code_value]
             return JSONResponse(
                 {"error": "invalid_grant", "error_description": "PKCE verification failed"}, status_code=400
             )
