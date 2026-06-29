@@ -252,6 +252,30 @@ class TestDetectElements:
     @patch("agent_windows.core.screenshot.capture_screenshot")
     @patch("agent_windows.core.grounding.call_vision_model")
     @patch("agent_windows.core.grounding.load_config")
+    def test_bbox_normalized_after_clamp(self, mock_config, mock_api, mock_capture):
+        """A box whose two corners clamp to the same edge could be re-inverted
+        by the per-corner clamp (model_to_physical clamps each corner
+        independently). Re-normalize in physical space so x1<x2, y1<y2 always."""
+        mock_config.return_value = {
+            "vlm": {"enabled": True, "model": "test", "engine": "openai", "width": 1000, "height": 1000}
+        }
+        # Corners far outside the image: both x's clamp near the right edge, but
+        # at slightly different model→physical ratios the order could flip.
+        mock_api.return_value = '[{"label": "edge", "bbox": [9990, 9990, 9995, 9995]}]'
+        mock_capture.return_value = Image.new("RGB", (1920, 1080))
+
+        result = detect_elements("test")
+        assert result["count"] == 1
+        b = result["targets"][0]["box"]
+        assert b["x1"] <= b["x2"], "box must be normalized after physical clamp"
+        assert b["y1"] <= b["y2"]
+        # And stayed in bounds.
+        assert 0 <= b["x1"] and b["x2"] < 1920
+        assert 0 <= b["y1"] and b["y2"] < 1080
+
+    @patch("agent_windows.core.screenshot.capture_screenshot")
+    @patch("agent_windows.core.grounding.call_vision_model")
+    @patch("agent_windows.core.grounding.load_config")
     def test_max_targets_truncation(self, mock_config, mock_api, mock_capture):
         mock_config.return_value = {
             "vlm": {"enabled": True, "model": "test", "engine": "openai", "width": 1000, "height": 1000}

@@ -144,20 +144,53 @@ def crop_around_point(
 def parse_model_coordinates(response: str) -> tuple[int, int] | None:
     """Extract (x, y) coordinates from a vision model response.
 
-    Tries structured patterns first (parenthesized coordinates),
-    then falls back to first-two-numbers heuristic.
+    Parsing is layered from most- to least-precise, so a model that follows the
+    requested format is matched exactly, while a loose/small model that decorates
+    its answer with prose still yields a sensible coordinate:
+
+    1. **Explicit marker** — ``POINT:x,y`` / ``<coord>x,y</coord>`` /
+       ``{"x":..,"y":..}`` (the formats the prompts ask for). Highest confidence:
+       the marker is unambiguous, so prose numbers elsewhere are ignored.
+    2. **Parenthesized** — ``(x, y)``. The parens signal "this is the coordinate".
+    3. **Last comma-pair** — the final ``N, M`` in the response. Models tend to
+       put the answer last ("...so the point is 500, 600"), so the *last* pair is
+       a better guess than the *first* (which is often an incidental pair like
+       "Section 3, Row 4").
+    4. **First two integers** — final fallback for a model that emits bare
+       numbers with no separators ("the point is 100 200").
 
     Returns:
         (x, y) tuple or None if parsing fails.
     """
     import re
 
-    # Try structured patterns first: (x, y) or (x,y) or x,y
-    structured = re.search(r"\(?\s*(\d+)\s*[,，]\s*(\d+)\s*\)?", response)
-    if structured:
-        return int(structured.group(1)), int(structured.group(2))
+    # Level 1: explicit marker. The prompts request POINT:x,y; a model honoring
+    # it is unambiguous, so we trust the marker and ignore any other numbers in
+    # the prose. Also accept the <coord>x,y</coord> and JSON {"x":..,"y":..}
+    # forms a model might emit.
+    for _pat in (
+        r"POINT\s*[:=]\s*\(?\s*(\d+)\s*[,，]\s*(\d+)\s*\)?",            # POINT:500,600
+        r"<coord>\s*\(?\s*(\d+)\s*[,，]\s*(\d+)\s*\)?\s*</coord>",     # <coord>..</coord>
+        r'"x"\s*:\s*(\d+)\D+"y"\s*:\s*(\d+)',                          # {"x":500,"y":600}
+    ):
+        m = re.search(_pat, response, re.IGNORECASE)
+        if m:
+            return int(m.group(1)), int(m.group(2))
 
-    # Fallback: first two numbers in the response
+    # Level 2: parenthesized (x, y) — the parens mark the coordinate explicitly.
+    m = re.search(r"\(\s*(\d+)\s*[,，]\s*(\d+)\s*\)", response)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+
+    # Level 3: the LAST "N, M" pair. Models usually emit the answer at the end
+    # ("...the point is 500, 600"), and prose often contains an incidental
+    # earlier pair ("Section 3, Row 4"). Taking the last pair avoids grabbing
+    # that incidental one. (Chinese comma ， supported.)
+    pairs = re.findall(r"(\d+)\s*[,，]\s*(\d+)", response)
+    if pairs:
+        return int(pairs[-1][0]), int(pairs[-1][1])
+
+    # Level 4: first two bare integers (no separator between them).
     numbers = re.findall(r"\d+", response)
     if len(numbers) >= 2:
         return int(numbers[0]), int(numbers[1])

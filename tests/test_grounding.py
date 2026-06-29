@@ -75,16 +75,39 @@ class TestCropAroundPoint:
 
 
 class TestParseModelCoordinates:
+    def test_point_marker(self):
+        # The format the prompts now request. Unambiguous — must match even
+        # when prose contains other numbers.
+        assert parse_model_coordinates("POINT:500,600") == (500, 600)
+
+    def test_point_marker_ignores_prose_numbers(self):
+        assert parse_model_coordinates("I see Section 3, Row 4. POINT:500,600") == (500, 600)
+
     def test_parenthesized_format(self):
         assert parse_model_coordinates("(320, 240)") == (320, 240)
 
-    def test_no_parens(self):
+    def test_parenthesized_beats_prose_pair(self):
+        # No marker, but the parens mark the coordinate explicitly; the
+        # incidental "Section 3, Row 4" pair must not win.
+        assert parse_model_coordinates("Section 3, Row 4 at (320, 240)") == (320, 240)
+
+    def test_last_pair_beats_earlier_incidental_pair(self):
+        # Regression for the original bug: a prose pair ("Section 3, Row 4")
+        # appearing BEFORE the real coordinate used to be grabbed. Now the LAST
+        # pair wins (models put the answer last).
+        assert parse_model_coordinates("Section 3, Row 4, point 500, 600") == (500, 600)
+
+    def test_no_parens_single_pair(self):
         assert parse_model_coordinates("320, 240") == (320, 240)
 
     def test_chinese_comma(self):
         assert parse_model_coordinates("(320，240)") == (320, 240)
 
+    def test_json_form(self):
+        assert parse_model_coordinates('{"x": 500, "y": 600}') == (500, 600)
+
     def test_fallback_first_two_numbers(self):
+        # No separators at all → first two integers.
         assert parse_model_coordinates("the point is 100 200") == (100, 200)
 
     def test_no_numbers_returns_none(self):
@@ -93,8 +116,8 @@ class TestParseModelCoordinates:
     def test_one_number_returns_none(self):
         assert parse_model_coordinates("42") is None
 
-    def test_extra_numbers(self):
-        # Structured pattern should match first
+    def test_extra_numbers_parens_win(self):
+        # Parenthesized coordinate is preferred over incidental prose numbers.
         assert parse_model_coordinates("width=50, point (320, 240)") == (320, 240)
 
 

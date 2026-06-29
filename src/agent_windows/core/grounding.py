@@ -214,14 +214,18 @@ def _save_marked_screenshot(
 _DEFAULT_COARSE_PROMPT = (
     "Query:{description}\n"
     "Output only the coordinate of one point in your response. "
-    "Coordinates are in image pixel space, (0,0) is top-left. Output as x,y integers."
+    "Coordinates are in image pixel space, (0,0) is top-left.\n"
+    "Format the answer EXACTLY as: POINT:x,y  (two integers, no parentheses, "
+    "no extra text). Example: POINT:500,600"
 )
 
 _DEFAULT_FINE_PROMPT = (
     "Query:{description}\n"
     "The previous coarse location is ({x},{y}). Crop from ({cx},{cy}).\n"
     "Output only the coordinate of one point in your response. "
-    "Coordinates are in image pixel space, (0,0) is top-left. Output as x,y integers."
+    "Coordinates are in image pixel space, (0,0) is top-left.\n"
+    "Format the answer EXACTLY as: POINT:x,y  (two integers, no parentheses, "
+    "no extra text). Example: POINT:500,600"
 )
 
 
@@ -393,21 +397,27 @@ def detect_elements(
     logger.info("detect: parsed %d raw targets", len(raw_targets))
 
     # Convert coordinates for each target
-    # _validate_targets already guarantees valid bbox [x1,y1,x2,y2] lists
+    # _validate_targets already guarantees valid bbox [x1,y1,x2,y2] lists.
     targets = []
     for i, raw in enumerate(raw_targets[:max_targets]):
         bbox = raw["bbox"]
         mx1, my1, mx2, my2 = (int(v) for v in bbox)
 
-        # Auto-swap inverted boxes
+        # Auto-swap inverted boxes (model occasionally emits BR→TL).
         if mx2 < mx1:
             mx1, mx2 = mx2, mx1
         if my2 < my1:
             my1, my2 = my2, my1
 
-        # Convert to physical pixels
+        # Convert to physical pixels. model_to_physical clamps each corner to
+        # [0, src-1], which can collapse a small box whose corners map near an
+        # edge — and the per-corner clamp can even re-invert a box. Re-normalize
+        # in physical space so every emitted box is well-formed (x1<x2, y1<y2,
+        # within bounds), guaranteeing the annotation rectangle renders sensibly.
         px1, py1 = model_to_physical(mx1, my1, model_w, model_h, src_width, src_height)
         px2, py2 = model_to_physical(mx2, my2, model_w, model_h, src_width, src_height)
+        px1, px2 = sorted((px1, px2))
+        py1, py2 = sorted((py1, py2))
 
         targets.append({
             "index": i + 1,
