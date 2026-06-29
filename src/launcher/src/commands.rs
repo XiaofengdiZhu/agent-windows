@@ -1516,6 +1516,18 @@ mod tests {
             }
             other => panic!("got {:?}", other),
         }
+        // move shares an arm with copy; lock its no-overwrite path explicitly so
+        // a future split (e.g. defaulting move's overwrite on) is caught rather
+        // than relying on copy's test above to cover the shared block.
+        match parse(&argv(&["fs", "move", "a", "b"]), &g) {
+            Ok(Action::Call { method, params }) => {
+                assert_eq!(method, "fs_move");
+                assert_eq!(params["path"], "a");
+                assert_eq!(params["destination"], "b");
+                assert!(params.get("overwrite").is_none());
+            }
+            other => panic!("got {:?}", other),
+        }
         // delete PATH [--recursive]
         match parse(&argv(&["fs", "delete", "d"]), &g) {
             Ok(Action::Call { method, params }) => {
@@ -1605,6 +1617,24 @@ mod tests {
             }
             other => panic!("got {:?}", other),
         }
+        // Regression lock: grid lines forward ONLY alongside --annotate. Without
+        // --annotate the grid value is parsed but NOT forwarded (the daemon
+        // ignores width/height_reference_line when use_annotation is absent).
+        // This is the one conditional-forwarding rule in this file (forwarding
+        // gated on a sibling flag), so a refactor that moves grid handling
+        // outside the `if annotate` block would slip past every test above —
+        // this one catches it.
+        match parse(&argv(&["screenshot", "--grid-w", "10"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert!(params.get("use_annotation").is_none());
+                assert!(params.get("width_reference_line").is_none());
+            }
+            other => panic!("got {:?}", other),
+        }
+        match parse(&argv(&["screenshot", "--grid-h", "8"]), &g) {
+            Ok(Action::Call { params, .. }) => assert!(params.get("height_reference_line").is_none()),
+            other => panic!("got {:?}", other),
+        }
 
         // ── fs read --offset/--limit/--encoding (non-default only) ─────────
         match parse(&argv(&["fs", "read", "f", "--offset", "100", "--limit", "5", "--encoding", "gbk"]), &g) {
@@ -1620,6 +1650,17 @@ mod tests {
                 assert!(params.get("offset").is_none());
                 assert!(params.get("limit").is_none());
                 assert!(params.get("encoding").is_none());
+            }
+            other => panic!("got {:?}", other),
+        }
+        // Explicit default values (0) are omitted too, not forwarded as 0 — so a
+        // config default on the daemon side isn't clobbered. Regression: a change
+        // from value-comparison to "forward whenever the flag is present" would
+        // pass the absent-flag case above but wrongly send offset/limit as 0.
+        match parse(&argv(&["fs", "read", "f", "--offset", "0", "--limit", "0"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert!(params.get("offset").is_none());
+                assert!(params.get("limit").is_none());
             }
             other => panic!("got {:?}", other),
         }
@@ -1687,6 +1728,24 @@ mod tests {
                 assert!(params.get("limit").is_none());
                 assert!(params.get("name").is_none());
             }
+            other => panic!("got {:?}", other),
+        }
+        // Explicit default values are omitted too — `--sort-by memory` is the
+        // daemon's default, so forwarding it would clobber a config default.
+        // Regression: a change to "forward sort_by whenever the flag is present"
+        // would pass the absent-flag case above but wrongly send "memory".
+        match parse(&argv(&["process", "list", "--sort-by", "memory", "--name", ""]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert!(params.get("sort_by").is_none());
+                assert!(params.get("name").is_none());
+            }
+            other => panic!("got {:?}", other),
+        }
+        // A negative --limit IS forwarded (the gate is `!= 0`, not `> 0`) —
+        // locking the current behavior so a future tightening to `> 0` is a
+        // visible, intentional change rather than a silent one.
+        match parse(&argv(&["process", "list", "--limit", "-5"]), &g) {
+            Ok(Action::Call { params, .. }) => assert_eq!(params["limit"], -5),
             other => panic!("got {:?}", other),
         }
 

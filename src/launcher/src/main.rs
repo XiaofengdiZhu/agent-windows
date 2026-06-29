@@ -53,7 +53,7 @@ fn main() -> ExitCode {
     // `agent-windows-python mcp serve ...` directly. Only the literal top-level
     // command name is delegated; `mcp` appearing as an argument to another command
     // can't reach here (cmd_argv[0] is the command name).
-    if first_command_name(&argv).is_some_and(|c| c == "config" || c == "mcp") {
+    if should_delegate_to_python(&argv) {
         return run_python_cli(&argv, &global);
     }
 
@@ -270,6 +270,21 @@ fn first_command_name(argv: &[String]) -> Option<&str> {
         }
     }
     None
+}
+
+/// Whether the invocation should be delegated to the Python CLI rather than
+/// routed through the daemon. True iff the command name (after the global-flag
+/// prefix, ignoring any `--help`/`-h`) is `config` or `mcp` — both are handled
+/// entirely in Python (config touches only the local file; mcp runs a long-lived
+/// FastMCP server), so porting them would duplicate tested logic.
+///
+/// Extracted from the inline `main()` check so the delegation DECISION is
+/// unit-testable: `first_command_name` is tested, but without this seam a
+/// regression to the old `cmd_argv.first()` check (which saw a hoisted `--help`
+/// and printed global help for `config --help`) would slip past every test,
+/// since main()'s routing isn't directly reachable from a unit test.
+fn should_delegate_to_python(argv: &[String]) -> bool {
+    matches!(first_command_name(argv), Some("config") | Some("mcp"))
 }
 
 /// Run a daemon call: ensure daemon up → build request → IPC → print.
@@ -843,7 +858,7 @@ mod tests {
     // `--format json` to `click` and rejects it. These lock the prefix-only
     // contract. `--help`/`-h` stays reachable anywhere (Typer special-cases it).
 
-    use super::{first_command_name, strip_global_flags};
+    use super::{first_command_name, should_delegate_to_python, strip_global_flags};
 
     fn argv(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| s.to_string()).collect()
@@ -1054,5 +1069,51 @@ mod tests {
         // the next token ("config") as its value, so no command name remains —
         // matching strip_global_flags' behavior.
         assert_eq!(first_command_name(&argv(&["--format", "config"])), None);
+    }
+
+    // ── should_delegate_to_python: the routing DECISION, not just the helper ─
+    //
+    // first_command_name is tested above, but the actual behavior change in
+    // main() is the delegation branch. Without this seam a regression to the
+    // old cmd_argv.first() check (which saw a hoisted --help and printed global
+    // help for `config --help`) would pass every first_command_name test yet
+    // break the user-visible routing. These lock the decision directly.
+
+    #[test]
+    fn delegates_config_and_mcp_even_behind_help() {
+        // The original bug: `config --help` was misrouted to global help. Both
+        // config and mcp must delegate regardless of where --help sits, and with
+        // or without subcommands / global flags.
+        for yes in [
+            &["config"][..],
+            &["config", "--help"][..],
+            &["config", "show", "--help"][..],
+            &["config", "-h"][..],
+            &["--help", "config"][..],
+            &["--no-daemon", "config"][..],
+            &["mcp"][..],
+            &["mcp", "--help"][..],
+            &["mcp", "serve", "--help"][..],
+            &["--config", "p.toml", "mcp", "serve"][..],
+        ] {
+            assert!(should_delegate_to_python(&argv(yes)), "should delegate: {:?}", yes);
+        }
+    }
+
+    #[test]
+    fn does_not_delegate_non_config_commands() {
+        for no in [
+            &["ping"][..],
+            &["click", "10", "20"][..],
+            &["fs", "read", "f"][..],
+            &["expand", "@e5"][..],
+            // config/mcp as an ARGUMENT to another command can't reach the
+            // delegation branch — the first token is the real command name.
+            &["shell", "config"][..],
+            &["--help"][..],
+            &[] as &[&str],
+        ] {
+            assert!(!should_delegate_to_python(&argv(no)), "should NOT delegate: {:?}", no);
+        }
     }
 }
