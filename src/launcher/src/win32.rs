@@ -613,6 +613,12 @@ pub fn spawn_daemon(
             &mut info,
         )
     };
+    // Capture the spawn-failure code IMMEDIATELY. GetLastError is thread-local
+    // and is clobbered by any subsequent Win32 call — the CloseHandle calls and
+    // the attribute-list Drop below would overwrite it, so the error message
+    // previously reported a meaningless/random code instead of the real reason
+    // (e.g. 2 = not found, 5 = access denied, 193 = bad exe format).
+    let spawn_err = if ok == 0 { Some(unsafe { GetLastError() }) } else { None };
     // `attr` (and its backing buffer) drops here, AFTER CreateProcessW — but
     // the attribute list must be freed with DeleteProcThreadAttributeList
     // before the buffer is freed; HandleList's Drop does that in order.
@@ -630,15 +636,12 @@ pub fn spawn_daemon(
         unsafe { CloseHandle(stderr_write) };
     }
 
-    if ok == 0 {
+    if let Some(err) = spawn_err {
         // Spawn failed — clean up the pipe read end too.
         if !stderr_read.is_null() {
             unsafe { CloseHandle(stderr_read) };
         }
-        return Err(format!(
-            "Failed to spawn daemon (winerror {})",
-            unsafe { GetLastError() }
-        ));
+        return Err(format!("Failed to spawn daemon (winerror {})", err));
     }
 
     // We don't need the thread handle or the primary thread; close it. Keep

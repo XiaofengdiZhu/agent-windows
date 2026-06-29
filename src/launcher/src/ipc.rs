@@ -20,6 +20,10 @@ use crate::win32::pipe_exists;
 
 /// Win32 error: file not found (the pipe doesn't exist right now).
 const ERROR_FILE_NOT_FOUND: u32 = 2;
+/// Win32 error: all pipe instances are busy (the daemon's single instance is
+/// occupied by another client, or is in the create→ConnectNamedPipe window).
+/// The contract is "pipe exists but no instance available — wait and retry."
+const ERROR_PIPE_BUSY: u32 = 231;
 
 pub const PIPE_NAME: &str = r"\\.\pipe\agent-windows";
 /// Connect retry: 50 × 10ms = up to ~0.5s, matching the Python client.
@@ -117,13 +121,22 @@ fn connect_and_transact(request: &str, timeout_ms: u32) -> Result<String, String
 
         if handle == INVALID_HANDLE_VALUE {
             let err = unsafe { GetLastError() };
-            if err == ERROR_FILE_NOT_FOUND && attempt + 1 < CONNECT_RETRIES {
-                // Pipe is in the recreate gap — back off and retry.
+            let transient = err == ERROR_FILE_NOT_FOUND || err == ERROR_PIPE_BUSY;
+            if transient && attempt + 1 < CONNECT_RETRIES {
+                // ERROR_FILE_NOT_FOUND: pipe is in the recreate gap.
+                // ERROR_PIPE_BUSY: the single instance is occupied or in the
+                // create→ConnectNamedPipe window. For 231 the documented wait
+                // is WaitNamedPipe (blocks until an instance frees up, bounded
+                // by CONNECT_BACKOFF here); for 2 the pipe simply reappears on
+                // the next CreateFile. Either way: back off and retry.
+                if err == ERROR_PIPE_BUSY {
+                    let _ = crate::win32::wait_named_pipe(PIPE_NAME, CONNECT_BACKOFF);
+                }
                 std::thread::sleep(CONNECT_BACKOFF);
                 continue;
             }
-            // ERROR_FILE_NOT_FOUND at the end of the retry window is also
-            // transient (the daemon may be starting); anything else is not.
+            // Both codes at the end of the retry window are still transient
+            // (the daemon may be starting / busy); anything else is not.
             return Err(format!("Cannot connect to daemon pipe (winerror {})", err));
         }
 
@@ -133,7 +146,9 @@ fn connect_and_transact(request: &str, timeout_ms: u32) -> Result<String, String
         return result;
     }
 
-    Err("daemon pipe not available (winerror 2)".into())
+    // Unreachable in practice: every loop iteration either continues (transient
+    // failure with retries left) or returns. Kept to satisfy the type checker.
+    Err("daemon pipe not available after retries".into())
 }
 
 /// Classify an IPC error string as transient (retryable) or permanent.
@@ -147,6 +162,7 @@ fn connect_and_transact(request: &str, timeout_ms: u32) -> Result<String, String
 fn is_transient(err: &str) -> bool {
     let e = err.to_ascii_lowercase();
     e.contains("winerror 2")
+        || e.contains("winerror 231")
         || e.contains("winerror 109")
         || e.contains("winerror 232")
         || e.contains("winerror 233")
@@ -194,6 +210,10 @@ mod tests {
         // ERROR_FILE_NOT_FOUND (2): pipe not up yet (daemon starting).
         assert!(is_transient("Cannot connect to daemon pipe (winerror 2)"));
         assert!(is_transient("daemon pipe not available (winerror 2)"));
+        // ERROR_PIPE_BUSY (231): single instance occupied / in create→Connect
+        // window — transient, retried on the connect loop and classified so
+        // the outer transient-retry path covers it too.
+        assert!(is_transient("Cannot connect to daemon pipe (winerror 231)"));
         // ERROR_BROKEN_PIPE (109): daemon closed the pipe mid-request.
         assert!(is_transient(
             "Daemon closed the connection without responding (winerror 109)"
