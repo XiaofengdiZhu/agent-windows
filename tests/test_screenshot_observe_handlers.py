@@ -16,6 +16,7 @@ import pytest
 from PIL import Image
 
 from agent_windows.daemon.router import HANDLERS
+from agent_windows.ipc.protocol import INVALID_PARAMS
 
 
 def _fake_image(w=100, h=80):
@@ -473,12 +474,56 @@ class TestObserveHandler:
         assert "ground failed" in r["output"]
         assert "grounding API key missing" in r["output"]
 
-    def test_all_sub_commands_failing_still_returns_output(self):
-        """Even if every sub-command fails, observe returns a dict (not raise)."""
+    def test_all_sub_commands_failing_raises(self):
+        """F3 (round 2): if EVERY requested sub-command fails, observe raises
+        (→ DAEMON_INTERNAL_ERROR via the router) rather than returning 200-OK.
+        A success response with only inline failure notes would mislead callers
+        that branch on the JSON-RPC error code / a structured field."""
         with patch.dict(HANDLERS, {
             "snapshot": MagicMock(side_effect=ValueError("no UIA")),
             "screenshot": MagicMock(side_effect=RuntimeError("no backend")),
         }):
+            with pytest.raises(RuntimeError, match="every sub-command failed"):
+                HANDLERS["observe"]({})
+
+    def test_single_sub_command_failing_raises(self):
+        """A single requested sub-command that fails is the all-failed case too
+        — observe raises rather than return an empty 200-OK."""
+        with patch.dict(HANDLERS, {
+            "snapshot": MagicMock(side_effect=RuntimeError("no UIA")),
+        }):
+            with pytest.raises(RuntimeError, match="every sub-command failed"):
+                HANDLERS["observe"]({"snapshot": True})
+
+    def test_partial_failure_returns_output_and_structured_errors(self):
+        """F3 (round 2): a PARTIAL failure returns 200-OK with both the useful
+        ``output`` AND a structured ``errors`` list of {method, code, message},
+        so a programmatic caller can detect the failure without grepping output."""
+        def ground_boom(_params):
+            raise ValueError("grounding API key missing")
+
+        with patch.dict(HANDLERS, {
+            "snapshot": MagicMock(return_value={"output": "SNAP"}),
+            "ground": ground_boom,
+        }):
+            r = HANDLERS["observe"]({"snapshot": True, "ground": "x"})
+        # Output still carries the useful part + inline note.
+        assert "SNAP" in r["output"]
+        # Structured errors field present, describing the ground failure.
+        assert "errors" in r
+        assert len(r["errors"]) == 1
+        err = r["errors"][0]
+        assert err["method"] == "ground"
+        assert err["code"] == INVALID_PARAMS  # ValueError → -32602
+        assert "grounding API key missing" in err["message"]
+
+    def test_all_success_has_no_errors_field(self):
+        """When nothing failed, the result omits the errors field entirely
+        (no empty list noise for the common success path)."""
+        with patch.dict(HANDLERS, {
+            "snapshot": MagicMock(return_value={"output": "S"}),
+            "screenshot": MagicMock(return_value={"output": "T"}),
+        }):
             r = HANDLERS["observe"]({})
-        assert "snapshot failed" in r["output"]
-        assert "screenshot failed" in r["output"]
+        assert "errors" not in r
+        assert "S" in r["output"] and "T" in r["output"]
