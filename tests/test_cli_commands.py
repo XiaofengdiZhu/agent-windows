@@ -599,6 +599,17 @@ class TestConfigCommand:
             result = runner.invoke(app, ["config", "show"])
         assert result.exit_code == 0
 
+    def test_show_masks_oauth_client_secret(self):
+        """oauth_client_secret is the same secret-class as the api key and must
+        be masked too — otherwise `config show` leaks it to the terminal /
+        screen captures."""
+        with patch("agent_windows.cli.commands.config_cmd.load_config",
+                   return_value={"security": {"oauth_client_secret": "super-secret-12345678"}}):
+            result = runner.invoke(app, ["config", "show"])
+        assert result.exit_code == 0
+        assert "super-secret-12345678" not in result.output  # full secret not leaked
+        assert "***" in result.output or ("supe" in result.output and "5678" in result.output)
+
     @patch("agent_windows.cli.commands.config_cmd.set_config_value")
     def test_set_calls_set_config_value(self, mock_set):
         result = runner.invoke(app, ["config", "set", "vlm.model", "gpt-4o"])

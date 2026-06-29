@@ -49,6 +49,19 @@ class TestUnwrapResponse:
         err = DaemonError(-32602, "bad params")
         assert isinstance(err, RuntimeError)
 
+    def test_error_missing_code_defaults_to_internal_error(self):
+        """A malformed error object without a `code` must not produce
+        DaemonError.code=None (which would break any caller branching on .code,
+        e.g. the CLI exit-code mapping) or render "[None]". Default to
+        DAEMON_INTERNAL_ERROR. The daemon's make_error always sets a code, so
+        this is defensive against a malformed/untrusted response."""
+        from agent_windows.ipc.protocol import DAEMON_INTERNAL_ERROR
+        resp = JSONRPCResponse(id=1, error={"message": "something broke"})
+        with pytest.raises(DaemonError) as exc_info:
+            unwrap_response(resp)
+        assert exc_info.value.code == DAEMON_INTERNAL_ERROR
+        assert "None" not in str(exc_info.value)
+
 
 class TestEnsureDaemonRunning:
     """M-31: ensure_daemon_running fails fast when the spawned daemon exits

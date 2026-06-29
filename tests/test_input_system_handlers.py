@@ -490,6 +490,24 @@ class TestShellHandler:
         with pytest.raises(ValueError, match="must be str"):
             HANDLERS["shell"]({"command": 5})
 
+    def test_timeout_rejects_string(self):
+        """A JSON/MCP client may pass timeout as a string; the handler must
+        reject it (INVALID_PARAMS) rather than forwarding a bad type to
+        run_shell, which would crash on arithmetic."""
+        with pytest.raises(ValueError, match="timeout"):
+            HANDLERS["shell"]({"command": "Get-Date", "timeout": "30"})
+
+    def test_timeout_rejects_bool(self):
+        """bool is an int subclass but not a real timeout; True == 1 would
+        otherwise silently become a 1s timeout. Reject it explicitly."""
+        with pytest.raises(ValueError, match="timeout"):
+            HANDLERS["shell"]({"command": "Get-Date", "timeout": True})
+
+    def test_timeout_accepts_float(self):
+        with patch("agent_windows.core.shell_runner.run_shell", return_value={"output": "done"}) as m:
+            HANDLERS["shell"]({"command": "Get-Date", "timeout": 1.5})
+        m.assert_called_once_with("Get-Date", timeout=1.5)
+
 
 class TestFsHandlers:
     def test_fs_read_forwards_path(self):

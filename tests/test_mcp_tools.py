@@ -519,6 +519,16 @@ def test_wait_fn_requires_some_arg():
         ctl.wait_fn(seconds=0, selector=None, text="")
 
 
+def test_wait_fn_rejects_seconds_with_selector():
+    """seconds is mutually exclusive with selector/text — passing both would
+    otherwise silently drop seconds and poll for the element. Mirrors the CLI
+    `wait` (which errors "cannot specify both a target and --text")."""
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        ctl.wait_fn(seconds=2, selector="@e3")
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        ctl.wait_fn(seconds=2, text="Done")
+
+
 def test_wait_for_fn_polls_condition():
     with patch.object(ctl, "_call", side_effect=[{"found": False}, {"found": True}]) as m, \
          patch("time.sleep"):

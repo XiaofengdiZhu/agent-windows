@@ -43,7 +43,11 @@ def mock_config():
         m.return_value = {
             "vlm": {"enabled": True, "model": "test", "engine": "openai", "width": 1000, "height": 1000},
             "screenshot": {"backend": "auto", "scale": 1.0, "max_screenshot_age_days": 7, "max_screenshot_dir_mb": 500, "cleanup_interval_minutes": 10},
-            "tree": {"max_depth": 30},
+            # Match the production default (utils/config.py DEFAULT_CONFIG,
+            # H-04): max_depth was lowered from 30 to 15. A stale 30 here would
+            # run depth-sensitive tests under a different limit than production
+            # and could mask a regression.
+            "tree": {"max_depth": 15},
             "daemon": {"idle_timeout_minutes": 30},
             "wait": {"poll_interval": 0.5},
             "clipboard": {"method": "system"},

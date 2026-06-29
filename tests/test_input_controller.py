@@ -297,6 +297,25 @@ class TestShortcutParsing:
             ic.shortcut("?")
         assert log == [("send", 0xBF)]
 
+    def test_modifiers_released_even_if_final_key_raises(self):
+        """If sending the final key fails (or is interrupted), the already-held
+        modifier keys MUST still be released — otherwise the desktop is left
+        with Ctrl/Shift/Alt stuck down, corrupting every subsequent input.
+        This is the same guarantee multi_select makes with its try/finally."""
+        press, release, send, log = self._captured()
+
+        def boom(vk, scan=0):
+            raise OSError("send failed")
+
+        with patch.object(ic, "_press_key", press), patch.object(ic, "_release_key", release), \
+             patch.object(ic, "_send_vk_key", boom):
+            with pytest.raises(OSError):
+                ic.shortcut("ctrl+shift+s")
+        # Both modifiers were held; both must be released (in reverse order)
+        # despite the exception on the final key.
+        released = [vk for (kind, vk) in log if kind == "release"]
+        assert released == [ic.VK_SHIFT, ic.VK_CONTROL]
+
 
 # ── Low-level key senders: _send_vk_key / _press_key / _release_key ──
 

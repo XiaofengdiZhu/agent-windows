@@ -166,6 +166,17 @@ class TestJSONRPCResponse:
         assert resp2.error["code"] == INVALID_PARAMS
         assert resp2.result is None
 
+    def test_from_json_rejects_non_object(self):
+        """A non-object JSON body (null, number, array) must raise ValueError
+        rather than AttributeError, mirroring JSONRPCRequest.from_json's check.
+        A client parsing an untrusted source shouldn't crash on shape."""
+        with pytest.raises(ValueError):
+            JSONRPCResponse.from_json("null")
+        with pytest.raises(ValueError):
+            JSONRPCResponse.from_json("[1, 2]")
+        with pytest.raises(ValueError):
+            JSONRPCResponse.from_json("42")
+
 
 class TestReadTimeoutConfig:
     def test_default_150(self):

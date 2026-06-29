@@ -330,6 +330,34 @@ def test_token_rejects_redirect_uri_mismatch():
     assert r.status_code == 400 and r.json()["error"] == "invalid_grant"
 
 
+def test_token_consumes_code_on_failed_check():
+    """A code presented at the token endpoint is single-use per RFC 7636: even a
+    FAILED validation (PKCE / client_id / redirect_uri) must consume it, so a
+    leaked code can't be retried against verifiers/params until it expires.
+    Without the consume-on-failure fix, a wrong-verifier attempt would leave the
+    code live for a follow-up correct-verifier attempt."""
+    from starlette.testclient import TestClient
+    for wrong in (
+        # PKCE failure (wrong verifier).
+        {"code_verifier": "wrong-verifier", "client_id": "test-client",
+         "redirect_uri": "http://localhost:8765/cb"},
+        # client_id mismatch.
+        {"code_verifier": "v", "client_id": "OTHER-client",
+         "redirect_uri": "http://localhost:8765/cb"},
+        # redirect_uri mismatch.
+        {"code_verifier": "v", "client_id": "test-client",
+         "redirect_uri": "http://127.0.0.1:9999/cb"},
+    ):
+        app, store = _oauth_app()
+        code = _full_flow(TestClient(app), store)
+        body = dict(grant_type="authorization_code", code=code,
+                    client_secret="test-secret", **wrong)
+        r = TestClient(app).post("/oauth/token", data=body)
+        assert r.status_code == 400, wrong
+        # The failed check must have consumed the code.
+        assert code not in store.codes, wrong
+
+
 def test_authorize_server_error_when_client_not_configured():
     """authorize with no configured client_id/secret → server_error 500."""
     from starlette.testclient import TestClient
