@@ -590,6 +590,33 @@ class TestReadOffsetLimitValidation:
         r = fs.read_file(str(f), limit=1_000_000)
         assert r["content"].count("\n") == 3
 
+    def test_offset_above_max_is_rejected(self, tmp_path, monkeypatch):
+        """F10: a runaway offset must not make islice consume+discard the whole
+        file (DoS on the single-threaded daemon). Unlike ``limit`` (which is
+        clamped, since shrinking a line count is always safe), ``offset`` selects
+        WHERE to read — clamping it would read the wrong window with no signal,
+        a data-correctness bug — so it is REJECTED, raising ValueError
+        (→ INVALID_PARAMS at the router)."""
+        import pytest
+        from agent_windows.core import filesystem as fs
+        f = tmp_path / "x.txt"
+        f.write_text("a\n", encoding="utf-8")
+        monkeypatch.setattr(fs, "MAX_OFFSET", 3)
+        # 1e12 is the runaway case; 4 just exceeds the patched cap of 3.
+        for bad in (10**12, 4):
+            with pytest.raises(ValueError, match="exceeds maximum"):
+                fs.read_file(str(f), offset=bad)
+
+    def test_offset_at_max_is_accepted(self, tmp_path, monkeypatch):
+        """The cap is a <= bound, not < : offset == MAX_OFFSET is allowed."""
+        from agent_windows.core import filesystem as fs
+        f = tmp_path / "x.txt"
+        f.write_text("a\nb\n", encoding="utf-8")
+        monkeypatch.setattr(fs, "MAX_OFFSET", 3)
+        # offset == cap is fine (reads an empty window past EOF here, no error).
+        r = fs.read_file(str(f), offset=3)
+        assert r["content"] == ""
+
 
 class TestReadOffsetLimitLargeFile:
     def test_large_file_streams_only_window(self, tmp_path, monkeypatch):

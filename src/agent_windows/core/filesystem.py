@@ -62,6 +62,15 @@ MAX_SEARCH_RESULTS = 1000
 # ``limit`` (e.g. 1e9) can't force islice/readlines to walk the whole file.
 # 2 MiB at ~80 chars/line ≈ 26k lines, comfortably above any sane request.
 MAX_READ_LINES = 100_000
+# Upper bound on ``offset`` (1-based line number). islice(f, start, ...) must
+# consume+discard ``start`` lines before reading the window, so a runaway
+# ``offset`` (e.g. 1e12) makes the single-threaded daemon read-and-throw the
+# entire file (DoS — memory stays bounded via MAX_READ_BYTES but the daemon is
+# tied up). Reject above the cap rather than silently clamping: clamping a
+# position offset would read the wrong window with no signal, a data-correctness
+# bug, unlike capping ``limit`` (capping a count of lines is always safe).
+# (F10)
+MAX_OFFSET = 100_000
 
 # Path blacklist: match by path component to deny access to sensitive
 # directories and files. Each entry is a tuple: (match pattern, description)
@@ -502,6 +511,17 @@ def read_file(path: str, offset: int | None = None, limit: int | None = None,
     if offset is not None:
         if isinstance(offset, bool) or not isinstance(offset, int) or offset < 1:
             raise ValueError(f"offset must be a positive int (>=1), got {offset!r}")
+        if offset > MAX_OFFSET:
+            # Reject rather than clamp: a position offset selects WHERE to read,
+            # so clamping would read the wrong window silently (data-correctness
+            # bug), unlike capping ``limit`` (a count of lines is always safe
+            # to shrink). islice(f, offset-1, ...) must consume-and-discard
+            # offset-1 lines first, so an unbounded offset ties up the
+            # single-threaded daemon reading the whole file. (F10)
+            raise ValueError(
+                f"offset {offset} exceeds maximum {MAX_OFFSET}; "
+                "read a smaller line range or use a byte-offset tool"
+            )
     if limit is not None:
         if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
             raise ValueError(f"limit must be a positive int (>=1), got {limit!r}")
