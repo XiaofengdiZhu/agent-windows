@@ -174,7 +174,9 @@ def register(mcp) -> None:
         "enter text, input text, write text, keyboard, fill field. Optionally "
         "click a target first via loc=[x,y] or at_selector=@eN. enter=True "
         "presses Enter after; clear=True select-all+deletes first; "
-        "caret_position: start|idle|end."
+        "caret_position: start|idle|end. text is capped at 10000 characters "
+        "(typing is char-by-char with a delay, so a longer string would block "
+        "the worker)."
     ), annotations=ToolAnnotations(title="Type", readOnlyHint=False,
                                    destructiveHint=True, idempotentHint=False, openWorldHint=False))
     def _type(text: str, loc: list[int] | None = None,

@@ -390,9 +390,16 @@ def read_file(path: str, offset: int | None = None, limit: int | None = None,
 
     # Line-range mode (TODO #4): read by lines and slice. offset/limit let
     # callers avoid reading a huge file whole by selecting the slice they want.
-    # Validation first so a bad range surfaces as INVALID_PARAMS, not a partial
-    # read. ``bool`` is excluded because bool is a subclass of int —
+    # Normalize first: 0 means "not set" (the documented CLI/MCP convention —
+    # ``--offset 0`` / ``--limit 0`` = whole file), so treat it like None. Only
+    # a real int 0 is normalized — a bool ``False`` (== 0) must still be rejected
+    # below, so exclude bool here.
+    # ``bool`` is excluded because bool is a subclass of int —
     # ``read_file(p, offset=True)`` would otherwise mean offset=1 silently.
+    if isinstance(offset, int) and not isinstance(offset, bool) and offset == 0:
+        offset = None
+    if isinstance(limit, int) and not isinstance(limit, bool) and limit == 0:
+        limit = None
     if offset is not None:
         if isinstance(offset, bool) or not isinstance(offset, int) or offset < 1:
             raise ValueError(f"offset must be a positive int (>=1), got {offset!r}")

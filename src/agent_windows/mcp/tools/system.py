@@ -177,10 +177,11 @@ def register(mcp) -> None:
 
     @mcp.tool(name="fs_read", description=(
         "Read a text file. Keywords: read file, cat, view file, file content, "
-        "open file. offset/limit select a 1-based line range (both must be "
-        "positive ints; limit is capped, large files are streamed so a big "
-        "file is not read whole). encoding overrides UTF-8 for legacy "
-        "codepage files (e.g. 'gbk', 'latin-1')."
+        "open file. offset/limit select a 1-based line range (0 or omitted = "
+        "whole file; otherwise positive ints; limit is capped at 100000 lines "
+        "and large files are streamed so a multi-GB file is not read whole). "
+        "encoding overrides UTF-8 for legacy codepage files (e.g. 'gbk', "
+        "'latin-1')."
     ), annotations=_REG(title="FS Read", readOnlyHint=True, idempotentHint=True, openWorldHint=False))
     def _fs_read(path: str, offset: int | None = None, limit: int | None = None,
                  encoding: Annotated[str | None, Field(

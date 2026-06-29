@@ -403,6 +403,8 @@ agent-windows type "Hello World" [--at X,Y] [--at-selector @eN] [--enter] [--cle
 
 `--at-selector` resolves the element's bbox center and clicks there before typing; it overrides `--at` when both are given. `--caret` moves the text caret after the click (or in the already-focused field when `--at`/`--at-selector` are omitted): `start` presses Home, `end` presses End, `idle` leaves it where the platform placed it. Applied before `--clear`, so `--caret start --clear` selects-from-start semantics still wipe the field. Omitting the flag (or sending `null`) uses `idle`.
 
+> **Length cap**: `text` is capped at **10000 characters**. Typing is char-by-char with a per-key delay, so an oversized string would block the single worker thread for minutes/hours — a larger payload is rejected with `INVALID_PARAMS`. To enter a long document, write it to a file with `fs write` and paste it, or type it in chunks.
+
 **Output**: `{output}`
 
 ### shortcut
@@ -590,7 +592,7 @@ agent-windows fs info C:\Users\test\file.txt
 
 | Command | Parameters |
 |---------|-----------|
-| `fs read` | `path` (str, **required**), `--offset` (int, default 0 — 1-based start line, 0 = whole file), `--limit` (int, default 0 — max lines, 0 = to EOF), `--encoding` (str, default `""` = UTF-8 — override for legacy codepage files, e.g. `gbk`, `latin-1`, `cp1252`) |
+| `fs read` | `path` (str, **required**), `--offset` (int, default 0 — 1-based start line, 0 = whole file), `--limit` (int, default 0 — max lines, 0 = to EOF; capped at 100000), `--encoding` (str, default `""` = UTF-8 — override for legacy codepage files, e.g. `gbk`, `latin-1`, `cp1252`) |
 | `fs write` | `path` (str, **required**), `content` (str, **required**), `--append` (bool, default `false` — append instead of overwriting) |
 | `fs list` | `path` (str, **required**), `--pattern` (str, default `""` — name glob filter), `--recursive` (bool, default `false` — walk subdirectories), `--show-hidden` (bool, default `false` — include dotfiles) |
 | `fs copy` | `path` (str, **required**), `destination` (str, **required**), `--overwrite` (bool, default `false` — replace existing destination) |
@@ -598,6 +600,8 @@ agent-windows fs info C:\Users\test\file.txt
 | `fs delete` | `path` (str, **required**), `--recursive` (bool, default `false` — required to delete non-empty directories) |
 | `fs search` | `path` (str, **required**), `pattern` (str, **required** — glob, e.g. `*.py`), `--no-recursive` (bool, default `false` — search top level only) |
 | `fs info` | `path` (str, **required**) — returns metadata (size, timestamps, attributes) |
+
+> **Memory bounds (read/list/search)**: to keep the worker from loading huge trees into RAM, results are capped — `fs read` returns at most ~5 MiB (a larger file is truncated, or use `--offset`/`--limit` to stream just the lines you need; a line range is also byte-bounded so a multi-GB file is never read whole), `fs list` at 5000 entries, `fs search` at 1000 matches. When truncated, the output ends with a `[Truncated: ...]` notice.
 
 ### clipboard get / clipboard set
 

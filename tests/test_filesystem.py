@@ -501,18 +501,29 @@ class TestReadOffsetLimit:
 
 
 class TestReadOffsetLimitValidation:
+    def test_offset_zero_means_whole_file(self, tmp_path):
+        """The documented CLI/MCP convention: offset=0 (and limit=0) means "not
+        set" → whole file, not an error. A bare 0 must not be rejected."""
+        from agent_windows.core.filesystem import read_file
+        f = tmp_path / "x.txt"
+        f.write_text("a\nb\nc\n", encoding="utf-8")
+        assert read_file(str(f), offset=0)["content"] == "a\nb\nc\n"
+        assert read_file(str(f), limit=0)["content"] == "a\nb\nc\n"
+        assert read_file(str(f), offset=0, limit=0)["content"] == "a\nb\nc\n"
+
     def test_offset_must_be_positive(self, tmp_path):
         import pytest
         from agent_windows.core.filesystem import read_file
         f = tmp_path / "x.txt"
         f.write_text("a\n", encoding="utf-8")
         with pytest.raises(ValueError):
-            read_file(str(f), offset=0)
-        with pytest.raises(ValueError):
             read_file(str(f), offset=-3)
+        with pytest.raises(ValueError):
+            read_file(str(f), limit=-1)
 
     def test_offset_must_be_int_not_bool(self, tmp_path):
-        # bool is a subclass of int; True must not silently mean offset=1.
+        # bool is a subclass of int; True must not silently mean offset=1, and
+        # False (== 0) must be rejected too — not normalized to "whole file".
         import pytest
         from agent_windows.core.filesystem import read_file
         f = tmp_path / "x.txt"
@@ -521,14 +532,14 @@ class TestReadOffsetLimitValidation:
             read_file(str(f), offset=True)
         with pytest.raises(ValueError):
             read_file(str(f), limit=False)
+        with pytest.raises(ValueError):
+            read_file(str(f), offset=False)
 
-    def test_limit_must_be_positive(self, tmp_path):
+    def test_limit_negative_rejected(self, tmp_path):
         import pytest
         from agent_windows.core.filesystem import read_file
         f = tmp_path / "x.txt"
         f.write_text("a\n", encoding="utf-8")
-        with pytest.raises(ValueError):
-            read_file(str(f), limit=0)
         with pytest.raises(ValueError):
             read_file(str(f), limit=-1)
 

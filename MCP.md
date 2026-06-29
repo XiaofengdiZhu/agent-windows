@@ -205,3 +205,16 @@ exclude = ["shell", "registry"]        # blacklist
 The server exposes ~48 tools mapping 1:1 to the CLI commands: `screenshot`, `snapshot`, `observe`, `ground`, `detect`, `ask_vision`, `highlight`, `diff`, `get_text`, `element_state`, `cleanup_screenshots`, `click`, `dblclick`, `hover`, `move`, `mouse_down`, `mouse_up`, `drag`, `scroll`, `type`, `shortcut`, `expand`, `collapse`, `app_launch`, `app_switch`, `app_resize`, `app_list`, `shell`, `fs_read/write/list/copy/move/delete/search/info`, `clipboard_get/set`, `process_list/kill`, `notify`, `registry`, `batch`, `multi_select`, `multi_edit`, `ping`, `wait`, `wait_for`. See the README [Commands](README.md#commands) table for what each does; the MCP tool names match the daemon method names. These exact names are the valid values for `--tools`/`--exclude-tools` (authoritative list in [manifest.json](https://github.com/XiaofengdiZhu/agent-windows/blob/main/manifest.json) `tools[].name`). `batch` is itself a tool, so it is removable the same way — but when present it enforces the active filter on its own sub-commands (see the note under [HTTP security & scaling options](#http-security--scaling-options)).
 
 Same usage tips apply: call `snapshot` first for pixel-exact coordinates, prefer it over `ground`/`detect` for named controls, and always `app switch` before input.
+
+### Per-tool limits (bound worker memory & blocking time)
+
+The single worker thread caps a few inputs so one oversized call can't exhaust memory or block the desktop for minutes. These are enforced at the daemon router (→ `INVALID_PARAMS` if exceeded), not just advisory:
+
+| Tool | Limit | Notes |
+|---|---|---|
+| `type` | **10000 chars** of `text` | Typing is char-by-char with a delay; a longer string would block the worker for hours. Write the text to a file (`fs write`) and paste it, or type in chunks, for longer content. |
+| `fs_read` | **~5 MiB** returned; a line range (`offset`/`limit`) is also byte-bounded | `offset`/`limit` are 1-based (0 or omitted = whole file); `limit` is capped at 100000 lines. A multi-GB file is never read whole — large files are streamed. |
+| `fs_list` | **5000 entries** | A huge directory returns the first 5000 (sorted) + a `[Truncated: ...]` notice; memory stays bounded regardless of tree size. |
+| `fs_search` | **1000 matches** | Stops and reports truncation after 1000 matches. |
+
+These caps exist because the worker is single-threaded and shared — an unbounded read/list/type would stall every other command behind it.
