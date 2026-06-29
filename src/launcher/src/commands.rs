@@ -228,11 +228,20 @@ pub fn parse(argv: &[String], global: &GlobalFlags) -> Result<Action, ParseError
         // ── System groups ─────────────────────────────────────────────────
         "app" => parse_app(rest),
         "shell" => {
-            let p = ParsedArgs::parse(rest, &[]);
+            // --timeout/-t (seconds) overrides the shell.timeout config default.
+            // Forwarded only when > 0 (Python system.py:66-67); 0 means "use the
+            // config default" (the daemon treats a 0/None timeout that way).
+            let p = ParsedArgs::parse(rest, &["timeout", "t"]);
             let command = p.pos(0, "command")?;
+            let timeout: f64 = opt_float(&p, &["timeout", "t"], 0.0)?;
+            let mut params = Map::new();
+            params.insert("command".into(), command.into());
+            if timeout > 0.0 {
+                params.insert("timeout".into(), timeout.into());
+            }
             Ok(Action::Call {
                 method: "shell".into(),
-                params: json!({ "command": command }),
+                params: Value::Object(params),
             })
         }
         "fs" => parse_fs(rest),
@@ -629,7 +638,12 @@ fn push_display(indices: &mut Vec<i64>, raw: &str) -> Result<(), ParseError> {
 }
 
 fn parse_screenshot(rest: &[String]) -> Result<Action, ParseError> {
-    let p = ParsedArgs::parse(rest, &["output", "o", "monitor", "selector", "s", "bbox"]);
+    // value opts: --annotate is a boolean flag (presence only); --grid-w/--grid-h
+    // take integer values. Mirrors observe.py:52-61. Param-name mapping: the
+    // Python CLI renames --annotate→use_annotation, --grid-w→width_reference_line,
+    // --grid-h→height_reference_line (observe.py:69-74); the daemon handler reads
+    // those exact keys (handlers/screenshot.py:74-77,101-113).
+    let p = ParsedArgs::parse(rest, &["output", "o", "monitor", "selector", "s", "bbox", "grid-w", "grid-h"]);
     let output = p.value(&["output", "o"]).unwrap_or("").to_string();
     let monitor: i64 = opt_int(&p, &["monitor"], -1)?;
     let mut params = Map::new();
@@ -644,6 +658,25 @@ fn parse_screenshot(rest: &[String]) -> Result<Action, ParseError> {
             .map(|n| n.parse().map_err(|_| invalid(format!("invalid bbox value: {}", n))))
             .collect();
         params.insert("bbox".into(), Value::Array(nums?.into_iter().map(Value::from).collect()));
+    }
+    // --annotate → use_annotation. Only forwarded when present (observe.py:69-70).
+    // grid lines forward only when their value is non-zero, and only alongside
+    // --annotate (the daemon ignores them otherwise; observe.py:71-74 gates them
+    // on `if annotate`).
+    if p.flag(&["annotate"]) {
+        params.insert("use_annotation".into(), true.into());
+        if let Some(gw) = p.value(&["grid-w"]) {
+            let gw: i64 = gw.parse().map_err(|_| invalid("--grid-w must be an integer"))?;
+            if gw > 0 {
+                params.insert("width_reference_line".into(), gw.into());
+            }
+        }
+        if let Some(gh) = p.value(&["grid-h"]) {
+            let gh: i64 = gh.parse().map_err(|_| invalid("--grid-h must be an integer"))?;
+            if gh > 0 {
+                params.insert("height_reference_line".into(), gh.into());
+            }
+        }
     }
     Ok(Action::Call { method: "screenshot".into(), params: Value::Object(params) })
 }
@@ -831,23 +864,62 @@ fn parse_fs(rest: &[String]) -> Result<Action, ParseError> {
     let args = &rest[1..];
     match sub.as_str() {
         "read" => {
-            let p = ParsedArgs::parse(args, &[]);
+            // offset/limit/encoding forward only when non-default/non-empty
+            // (Python system.py:86-91): offset>0, limit>0, encoding != "".
+            let p = ParsedArgs::parse(args, &["offset", "limit", "encoding"]);
             let path = p.pos(0, "path")?;
-            Ok(Action::Call { method: "fs_read".into(), params: json!({ "path": path }) })
+            let mut params = Map::new();
+            params.insert("path".into(), path.into());
+            let offset: i64 = opt_int(&p, &["offset"], 0)?;
+            if offset > 0 {
+                params.insert("offset".into(), offset.into());
+            }
+            let limit: i64 = opt_int(&p, &["limit"], 0)?;
+            if limit > 0 {
+                params.insert("limit".into(), limit.into());
+            }
+            if let Some(enc) = p.value(&["encoding"]) {
+                if !enc.is_empty() {
+                    params.insert("encoding".into(), enc.into());
+                }
+            }
+            Ok(Action::Call { method: "fs_read".into(), params: Value::Object(params) })
         }
         "write" => {
+            // --append forwards only when present (Python system.py:104-105).
             let p = ParsedArgs::parse(args, &[]);
             let path = p.pos(0, "path")?;
             let content = p.pos(1, "content")?;
+            let mut params = Map::new();
+            params.insert("path".into(), path.into());
+            params.insert("content".into(), content.into());
+            if p.flag(&["append"]) {
+                params.insert("append".into(), true.into());
+            }
             Ok(Action::Call {
                 method: "fs_write".into(),
-                params: json!({ "path": path, "content": content }),
+                params: Value::Object(params),
             })
         }
         "list" => {
-            let p = ParsedArgs::parse(args, &[]);
+            // pattern/recursive/show-hidden forward only when non-default
+            // (Python system.py:119-124): pattern != "", flags present.
+            let p = ParsedArgs::parse(args, &["pattern"]);
             let path = p.pos(0, "path")?;
-            Ok(Action::Call { method: "fs_list".into(), params: json!({ "path": path }) })
+            let mut params = Map::new();
+            params.insert("path".into(), path.into());
+            if let Some(pat) = p.value(&["pattern"]) {
+                if !pat.is_empty() {
+                    params.insert("pattern".into(), pat.into());
+                }
+            }
+            if p.flag(&["recursive"]) {
+                params.insert("recursive".into(), true.into());
+            }
+            if p.flag(&["show-hidden"]) {
+                params.insert("show_hidden".into(), true.into());
+            }
+            Ok(Action::Call { method: "fs_list".into(), params: Value::Object(params) })
         }
         // `copy`/`move SRC DEST [--overwrite]`. overwrite forwards only when the
         // flag is present (Python system.py:136-138, 150-152).
@@ -937,14 +1009,37 @@ fn parse_process(rest: &[String]) -> Result<Action, ParseError> {
         .ok_or_else(|| missing("Missing process subcommand (list/kill)"))?;
     let args = &rest[1..];
     match sub.as_str() {
-        "list" => Ok(Action::Call { method: "process_list".into(), params: json!({}) }),
+        // sort_by/limit/name forward only when they differ from the defaults
+        // (Python system.py:304-309): sort_by != "memory", limit != 0, name != "".
+        // Omitting the defaults lets a config default (if any) apply instead of
+        // being clobbered by the launcher.
+        "list" => {
+            let p = ParsedArgs::parse(args, &["sort-by", "limit", "name"]);
+            let mut params = Map::new();
+            let sort_by = p.value(&["sort-by"]).unwrap_or("memory").to_string();
+            if sort_by != "memory" {
+                params.insert("sort_by".into(), sort_by.into());
+            }
+            let limit: i64 = opt_int(&p, &["limit"], 0)?;
+            if limit != 0 {
+                params.insert("limit".into(), limit.into());
+            }
+            if let Some(name) = p.value(&["name"]) {
+                if !name.is_empty() {
+                    params.insert("name".into(), name.into());
+                }
+            }
+            Ok(Action::Call { method: "process_list".into(), params: Value::Object(params) })
+        }
         "kill" => {
             let p = ParsedArgs::parse(args, &[]);
             let pid_or_name = p.pos(0, "pid_or_name")?;
-            Ok(Action::Call {
-                method: "process_kill".into(),
-                params: json!({ "pid_or_name": pid_or_name }),
-            })
+            let mut params = Map::new();
+            params.insert("pid_or_name".into(), pid_or_name.into());
+            if p.flag(&["force"]) {
+                params.insert("force".into(), true.into());
+            }
+            Ok(Action::Call { method: "process_kill".into(), params: Value::Object(params) })
         }
         _ => Err(unknown_subcommand("process", sub, VALID)),
     }
@@ -1467,6 +1562,164 @@ mod tests {
         for sub in &["read", "write", "list", "copy", "move", "delete", "search", "info"] {
             assert!(e.message().contains(sub), "message must list {:?}", sub);
         }
+    }
+
+    #[test]
+    fn dropped_options_forwarded_with_default_omission() {
+        let g = GlobalFlags::default();
+
+        // ── screenshot --annotate --grid-w/--grid-h ───────────────────────
+        // Param-name remap: --annotate→use_annotation, --grid-w→
+        // width_reference_line, --grid-h→height_reference_line.
+        // No flags → none forwarded.
+        match parse(&argv(&["screenshot"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert!(params.get("use_annotation").is_none());
+                assert!(params.get("width_reference_line").is_none());
+                assert!(params.get("height_reference_line").is_none());
+            }
+            other => panic!("got {:?}", other),
+        }
+        match parse(&argv(&["screenshot", "--annotate"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert_eq!(params["use_annotation"], true);
+                assert!(params.get("width_reference_line").is_none());
+                assert!(params.get("height_reference_line").is_none());
+            }
+            other => panic!("got {:?}", other),
+        }
+        // grid lines forward only when non-zero, alongside --annotate.
+        match parse(&argv(&["screenshot", "--annotate", "--grid-w", "10", "--grid-h", "8"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert_eq!(params["use_annotation"], true);
+                assert_eq!(params["width_reference_line"], 10);
+                assert_eq!(params["height_reference_line"], 8);
+            }
+            other => panic!("got {:?}", other),
+        }
+        // zero grid value → not forwarded.
+        match parse(&argv(&["screenshot", "--annotate", "--grid-w", "0"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert_eq!(params["use_annotation"], true);
+                assert!(params.get("width_reference_line").is_none());
+            }
+            other => panic!("got {:?}", other),
+        }
+
+        // ── fs read --offset/--limit/--encoding (non-default only) ─────────
+        match parse(&argv(&["fs", "read", "f", "--offset", "100", "--limit", "5", "--encoding", "gbk"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert_eq!(params["offset"], 100);
+                assert_eq!(params["limit"], 5);
+                assert_eq!(params["encoding"], "gbk");
+            }
+            other => panic!("got {:?}", other),
+        }
+        match parse(&argv(&["fs", "read", "f"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert!(params.get("offset").is_none());
+                assert!(params.get("limit").is_none());
+                assert!(params.get("encoding").is_none());
+            }
+            other => panic!("got {:?}", other),
+        }
+
+        // ── fs write --append ────────────────────────────────────────────
+        match parse(&argv(&["fs", "write", "f", "c", "--append"]), &g) {
+            Ok(Action::Call { params, .. }) => assert_eq!(params["append"], true),
+            other => panic!("got {:?}", other),
+        }
+        match parse(&argv(&["fs", "write", "f", "c"]), &g) {
+            Ok(Action::Call { params, .. }) => assert!(params.get("append").is_none()),
+            other => panic!("got {:?}", other),
+        }
+
+        // ── fs list --pattern/--recursive/--show-hidden ───────────────────
+        match parse(&argv(&["fs", "list", "d", "--pattern", "*.py", "--recursive", "--show-hidden"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert_eq!(params["pattern"], "*.py");
+                assert_eq!(params["recursive"], true);
+                assert_eq!(params["show_hidden"], true);
+            }
+            other => panic!("got {:?}", other),
+        }
+        match parse(&argv(&["fs", "list", "d"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert!(params.get("pattern").is_none());
+                assert!(params.get("recursive").is_none());
+                assert!(params.get("show_hidden").is_none());
+            }
+            other => panic!("got {:?}", other),
+        }
+
+        // ── shell --timeout/-t (forward only when > 0) ────────────────────
+        match parse(&argv(&["shell", "echo hi", "--timeout", "120"]), &g) {
+            Ok(Action::Call { params, .. }) => assert_eq!(params["timeout"], 120.0),
+            other => panic!("got {:?}", other),
+        }
+        match parse(&argv(&["shell", "echo hi", "-t", "60"]), &g) {
+            Ok(Action::Call { params, .. }) => assert_eq!(params["timeout"], 60.0),
+            other => panic!("got {:?}", other),
+        }
+        // timeout 0 → not forwarded (use config default).
+        match parse(&argv(&["shell", "echo hi", "--timeout", "0"]), &g) {
+            Ok(Action::Call { params, .. }) => assert!(params.get("timeout").is_none()),
+            other => panic!("got {:?}", other),
+        }
+        match parse(&argv(&["shell", "echo hi"]), &g) {
+            Ok(Action::Call { params, .. }) => assert!(params.get("timeout").is_none()),
+            other => panic!("got {:?}", other),
+        }
+
+        // ── process list --sort-by/--limit/--name (non-default only) ──────
+        match parse(&argv(&["process", "list", "--sort-by", "cpu", "--limit", "10", "--name", "chrome"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert_eq!(params["sort_by"], "cpu");
+                assert_eq!(params["limit"], 10);
+                assert_eq!(params["name"], "chrome");
+            }
+            other => panic!("got {:?}", other),
+        }
+        // defaults (memory/0/"") → nothing forwarded.
+        match parse(&argv(&["process", "list"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert!(params.get("sort_by").is_none());
+                assert!(params.get("limit").is_none());
+                assert!(params.get("name").is_none());
+            }
+            other => panic!("got {:?}", other),
+        }
+
+        // ── process kill --force ──────────────────────────────────────────
+        match parse(&argv(&["process", "kill", "notepad", "--force"]), &g) {
+            Ok(Action::Call { params, .. }) => assert_eq!(params["force"], true),
+            other => panic!("got {:?}", other),
+        }
+        match parse(&argv(&["process", "kill", "notepad"]), &g) {
+            Ok(Action::Call { params, .. }) => assert!(params.get("force").is_none()),
+            other => panic!("got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn malformed_dropped_option_is_invalid_value() {
+        // The malformed-numeric→invalid_value contract (L-05) must hold for the
+        // newly-wired value opts too, so a bad arg surfaces rather than silently
+        // defaulting.
+        let g = GlobalFlags::default();
+        // shell --timeout abc
+        let e = parse(&argv(&["shell", "echo", "--timeout", "abc"]), &g).unwrap_err();
+        assert_eq!(e.type_name(), "invalid_value");
+        assert!(e.message().contains("timeout"));
+        // shell --timeout nan (opt_float rejects non-finite)
+        let e = parse(&argv(&["shell", "echo", "--timeout", "nan"]), &g).unwrap_err();
+        assert_eq!(e.type_name(), "invalid_value");
+        // screenshot --grid-w notanumber
+        let e = parse(&argv(&["screenshot", "--annotate", "--grid-w", "x"]), &g).unwrap_err();
+        assert_eq!(e.type_name(), "invalid_value");
+        // process list --limit nope
+        let e = parse(&argv(&["process", "list", "--limit", "nope"]), &g).unwrap_err();
+        assert_eq!(e.type_name(), "invalid_value");
     }
 
     #[test]
