@@ -123,14 +123,14 @@ def _daemon_process_alive() -> bool:
     processes under rapid-fire IPC. Checking the PID file avoids that: if a
     daemon process is still alive, we wait for it rather than spawning a rival.
     """
-    from agent_windows.daemon.lifecycle import is_process_alive, read_pid_file
+    from agent_windows.daemon.lifecycle import is_our_daemon, read_pid_file
     from agent_windows.utils.config import get_pid_path
 
     info = read_pid_file(get_pid_path())
     if info is None:
         return False
-    pid, _ = info
-    return is_process_alive(pid)
+    pid, recorded_start = info
+    return is_our_daemon(pid, recorded_start)
 
 
 def ensure_daemon_running(debug: bool = False) -> None:

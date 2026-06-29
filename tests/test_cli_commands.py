@@ -843,7 +843,7 @@ class TestDaemonCommand:
     # command functions, so patch at their source modules.
     @patch("agent_windows.ipc.pipe.pipe_exists", return_value=False)
     @patch("subprocess.Popen")
-    @patch("agent_windows.cli.commands.daemon_cmd.is_process_alive", return_value=True)
+    @patch("agent_windows.cli.commands.daemon_cmd.is_our_daemon", return_value=True)
     @patch("agent_windows.cli.commands.daemon_cmd.read_pid_file", return_value=(1234, 0.0))
     def test_start_already_running(self, mock_pid, mock_alive, mock_popen, mock_pipe):
         # pipe_exists stubbed False so the PID-file branch (which prints the
@@ -856,7 +856,7 @@ class TestDaemonCommand:
 
     @patch("agent_windows.ipc.pipe.pipe_exists", return_value=False)
     @patch("subprocess.Popen")
-    @patch("agent_windows.cli.commands.daemon_cmd.is_process_alive", return_value=False)
+    @patch("agent_windows.cli.commands.daemon_cmd.is_our_daemon", return_value=False)
     @patch("agent_windows.cli.commands.daemon_cmd.read_pid_file", return_value=None)
     def test_start_spawns_when_not_running(self, mock_pid, mock_alive, mock_popen, mock_pipe):
         mock_popen.return_value = MagicMock(pid=5678)
@@ -867,7 +867,7 @@ class TestDaemonCommand:
 
     @patch("agent_windows.ipc.pipe.pipe_exists", return_value=False)
     @patch("subprocess.Popen")
-    @patch("agent_windows.cli.commands.daemon_cmd.is_process_alive", return_value=False)
+    @patch("agent_windows.cli.commands.daemon_cmd.is_our_daemon", return_value=False)
     @patch("agent_windows.cli.commands.daemon_cmd.read_pid_file", return_value=None)
     def test_start_propagates_config_override(self, mock_pid, mock_alive, mock_popen, mock_pipe, tmp_path):
         # `daemon start --config X` must spawn the daemon with --config so it
@@ -912,7 +912,7 @@ class TestDaemonCommand:
         assert "Error stopping daemon" in result.output
 
     @patch("agent_windows.ipc.pipe.pipe_exists", return_value=True)
-    @patch("agent_windows.cli.commands.daemon_cmd.is_process_alive", return_value=True)
+    @patch("agent_windows.cli.commands.daemon_cmd.is_our_daemon", return_value=True)
     @patch("agent_windows.cli.commands.daemon_cmd.read_pid_file", return_value=(1234, 0.0))
     @patch("agent_windows.cli.commands.daemon_cmd.read_version_file",
            return_value="0.1.0")  # matches agent_windows.__version__
@@ -925,7 +925,7 @@ class TestDaemonCommand:
         assert "Version mismatch" not in result.output
 
     @patch("agent_windows.ipc.pipe.pipe_exists", return_value=True)
-    @patch("agent_windows.cli.commands.daemon_cmd.is_process_alive", return_value=True)
+    @patch("agent_windows.cli.commands.daemon_cmd.is_our_daemon", return_value=True)
     @patch("agent_windows.cli.commands.daemon_cmd.read_pid_file", return_value=(1234, 0.0))
     @patch("agent_windows.cli.commands.daemon_cmd.read_version_file", return_value="9.9.9")
     def test_status_version_mismatch_warns(self, mock_ver, mock_pid, mock_alive, mock_pipe):
@@ -937,7 +937,7 @@ class TestDaemonCommand:
         assert "auto-restart" in result.output
 
     @patch("agent_windows.ipc.pipe.pipe_exists", return_value=False)
-    @patch("agent_windows.cli.commands.daemon_cmd.is_process_alive", return_value=False)
+    @patch("agent_windows.cli.commands.daemon_cmd.is_our_daemon", return_value=False)
     @patch("agent_windows.cli.commands.daemon_cmd.read_pid_file", return_value=None)
     @patch("agent_windows.cli.commands.daemon_cmd.read_version_file", return_value=None)
     def test_status_stopped(self, mock_ver, mock_pid, mock_alive, mock_pipe):

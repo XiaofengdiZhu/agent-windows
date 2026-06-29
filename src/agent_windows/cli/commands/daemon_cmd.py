@@ -5,7 +5,7 @@ import sys
 import typer
 
 from agent_windows.utils.config import get_pid_path, get_version_path
-from agent_windows.daemon.lifecycle import read_pid_file, is_process_alive, read_version_file
+from agent_windows.daemon.lifecycle import read_pid_file, is_our_daemon, read_version_file
 from agent_windows.cli.dispatcher import _cmd
 
 app = typer.Typer(help="Daemon management")
@@ -43,7 +43,7 @@ def daemon_start() -> None:
             typer.echo("Daemon already running")
             return
         info = read_pid_file(get_pid_path())
-        if info and is_process_alive(info[0]):
+        if info and is_our_daemon(info[0], info[1]):
             typer.echo(f"Daemon already running (PID={info[0]})")
             return
 
@@ -105,7 +105,7 @@ def daemon_status() -> None:
     pid_path = get_pid_path()
     version_path = get_version_path()
     info = read_pid_file(pid_path)
-    running = info is not None and is_process_alive(info[0])
+    running = info is not None and is_our_daemon(info[0], info[1])
     pipe_ok = pipe_exists()
     version = read_version_file(version_path) or "unknown"
 
