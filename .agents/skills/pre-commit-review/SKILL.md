@@ -30,25 +30,31 @@ The only exception is a change with **no** source/test diff (docs-only, config-o
 
 1. **Don't commit yet.** Stage the work (or just leave it unstaged — the reviewer reads `git diff`).
 
-2. **Dispatch a code-review subagent** (general-purpose). Give it a self-contained prompt — the reviewer does not share your session history. A minimal shape:
+2. **Dispatch a code-review subagent.** Give it a self-contained prompt — the reviewer does not share your session history.
+
+   **Prefer the `Explore` subagent type** (read-only, reads excerpts rather than whole files). It reliably completes in ~2 minutes. A `general-purpose` reviewer has repeatedly **timed out** (10 min) on this repo — it tends to fan out and scan build artifacts / the whole tree. Only fall back to `general-purpose` if the review needs to *run* code or *edit* a scratch file (Explore can't execute).
+
+   **Critically: scope the prompt.** Name the exact files:lines to read and tell it NOT to do broad searches or scan `target/`, `node_modules/`, build artifacts, or run broad greps. An unscoped review is what times out. A minimal shape:
 
    ```
-   You are a Senior Code Reviewer. Review an uncommitted change BEFORE commit.
+   You are doing a focused pre-commit code review. Read-only, "medium" breadth.
+   Do NOT scan build artifacts/target/node_modules or run broad greps — read
+   ONLY the specific files/functions cited and reason with concrete inputs.
 
-   What was implemented: <1-3 sentence summary, including the bug it fixes if any>
+   What was implemented: <1-3 sentence summary, including the bug it fixes>
+   The fix mechanism: <how it works, so the reviewer can verify against it>
 
-   Requirements/contract it must preserve: <list the invariants, existing tests,
-   documented behavior — e.g. "offset=0 means whole file", "count must be exact">
+   Read these specific files/functions:
+   - <path:lines> — <what to check there>
+   - <path:lines> — <what to check there>
 
-   Read the diff: `git diff HEAD` (uncommitted). Key files: <paths:lines>.
-   Also read <surrounding file / router / handler> for context.
+   VERIFY these specific concerns (the high-risk ones) by reading the code and
+   reasoning with concrete inputs:
+   (a) <e.g. "could the marker leak to IPC?"> (b) <"is the whitelist complete?">
+   ...
 
-   Check: correctness (trace paths with concrete inputs), edge cases, contract
-   preservation, security, and whether the TESTS actually fail if the code
-   regresses (a test that passes on the buggy code is theater — flag it).
-
-   Output: Strengths; Issues (Critical/Important/Minor with file:line + why +
-   fix); Assessment (Ready to commit? Yes/No/With fixes).
+   Report each concern as VERIFIED-SAFE (one-line evidence), BUG-FOUND (concrete
+   failing input + minimal fix), or UNCLEAR. End with "Ready to commit: Yes/No".
    ```
 
    See the `requesting-code-review` skill (`code-reviewer.md`) for the full template; this is the lightweight version for a single in-flight change.
@@ -64,7 +70,7 @@ The only exception is a change with **no** source/test diff (docs-only, config-o
 
 ## Quick checklist before committing
 
-- [ ] A subagent reviewed the *current* diff (not an earlier version).
+- [ ] A subagent reviewed the *current* diff (not an earlier version). Prefer `Explore`; the prompt names exact files:lines and forbids broad scans.
 - [ ] Every Critical/Important finding was verified empirically and either fixed or refuted with evidence.
 - [ ] New tests were checked to actually fail on the pre-fix code.
 - [ ] The reviewer's verdict was "Yes" (or "With fixes" and the fixes are done).
