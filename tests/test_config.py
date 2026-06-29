@@ -115,6 +115,17 @@ class TestSecretProtection:
         # A blob that can't be unprotected is treated as "no key", never leaked.
         assert _decrypt_secret("dpapi:not-valid-base64!!!") == ""
 
+    def test_decrypt_valid_b64_non_dpapi_blob_returns_empty(self):
+        """E2 gap-2: a blob that base64-decodes cleanly but is NOT a DPAPI
+        structure (e.g. random bytes, or a blob encrypted by a different
+        account) must still fail closed to "". The corrupt-blob test above only
+        hits the b64decode error path; this exercises the CryptUnprotectData
+        rejection path, which is the real-world cross-account/restore case."""
+        import base64
+        # 32 bytes of non-DPAPI garbage → decodes fine, CryptUnprotectData raises
+        blob = "dpapi:" + base64.b64encode(b"\x00\x01\x02\x03" * 8).decode("ascii")
+        assert _decrypt_secret(blob) == ""
+
     def test_save_encrypts_and_load_decrypts(self, tmp_path, monkeypatch):
         import agent_windows.utils.config as cfg
 

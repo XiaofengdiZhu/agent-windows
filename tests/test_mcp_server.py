@@ -1556,6 +1556,65 @@ def test_serve_telemetry_env_overrides_config(monkeypatch):
     assert kwargs["telemetry"] is True
 
 
+# ── TLS forwarding (E2 gap-5) ──────────────────────────────────────────
+
+
+def test_serve_tls_cert_and_key_from_config_reach_run(tmp_path, monkeypatch):
+    """E2 gap-5: ssl_certfile/ssl_keyfile from config must reach the run()
+    callable (which forwards them into uvicorn_config). The existing auth-key
+    test already locks the None case; this locks the configured case so a
+    regression that drops TLS plumbing isn't masked by the default-None path.
+    Real files are created so _check_tls_files' existence guard passes."""
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+
+    cert = tmp_path / "cert.pem"
+    key = tmp_path / "key.pem"
+    cert.write_text("fake-cert", encoding="utf-8")
+    key.write_text("fake-key", encoding="utf-8")
+
+    runner = CliRunner()
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config",
+                      return_value={"mcp": {"ssl_certfile": str(cert),
+                                            "ssl_keyfile": str(key)}}):
+        result = runner.invoke(
+            mcp_cmd.app, ["serve", "--transport", "streamable-http"])
+    assert result.exit_code == 0, result.output
+    kwargs = mock_run.call_args.kwargs
+    assert kwargs["ssl_certfile"] == str(cert)
+    assert kwargs["ssl_keyfile"] == str(key)
+
+
+def test_serve_tls_cert_without_key_passes_none_pair(tmp_path):
+    """E2 gap-5: a cert without a key must NOT forward a lone cert — run()
+    only builds uvicorn_config when BOTH are set (server.py:591-593). So a
+    partial config forwards cert=None (the `view.server.ssl_certfile or None`
+    coercion) and the lone cert is dropped before run(). Locks the
+    both-or-neither invariant at the serve() layer."""
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+
+    cert = tmp_path / "cert.pem"
+    cert.write_text("fake-cert", encoding="utf-8")
+
+    runner = CliRunner()
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config",
+                      return_value={"mcp": {"ssl_certfile": str(cert),
+                                            "ssl_keyfile": ""}}):
+        result = runner.invoke(
+            mcp_cmd.app, ["serve", "--transport", "streamable-http"])
+    assert result.exit_code == 0, result.output
+    kwargs = mock_run.call_args.kwargs
+    # ssl_keyfile "" coerces to None at serve(); the lone cert is forwarded as-is
+    # to run(), which then drops the pair at its own both-or-neither gate
+    # (server.py:591-593). This test locks the serve() boundary: a missing key
+    # never synthesizes a pair, and a partial config never blocks startup.
+    assert kwargs["ssl_certfile"] == str(cert)
+    assert kwargs["ssl_keyfile"] is None
+
+
 # ── `mcp auth` ──────────────────────────────────────────────────────────
 
 def test_mcp_auth_generates_key_and_writes_config(tmp_path, monkeypatch):

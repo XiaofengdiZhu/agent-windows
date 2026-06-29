@@ -351,6 +351,43 @@ class TestExecutableLaunchProtection:
         from agent_windows.core.filesystem import validate_executable_path
         validate_executable_path(r"C:\Windows\System32\notepad.exe")  # must not raise
 
+    # ── E2 gap-4: UNC and Windows extended-length paths must not bypass the
+    # credential-dir check. These shapes have a different .parts structure than
+    # drive paths (no drive letter for UNC; a \\?\ prefix for long paths), so
+    # the .parts set-intersection that backs the blocklist needs its own guard.
+    # The validator is pure Path logic (no win32), so these run on any host;
+    # resolve() anchors a non-existent share to the cwd, but the credential
+    # substring still lands in .parts and is still caught — locked here as a
+    # regression guard against a future rewrite that mishandles these prefixes.
+
+    def test_refuses_unc_path_into_credential_dir(self):
+        """A UNC path (\\\\server\\share\\.ssh\\...) must be blocked just like a
+        drive path into a credential dir — the \\server prefix has no drive
+        letter, but .resolve() still surfaces '.ssh' in .parts."""
+        from agent_windows.core.filesystem import validate_executable_path
+        with pytest.raises(ValueError, match="credential"):
+            validate_executable_path(r"\\server\share\.ssh\payload.exe")
+
+    def test_refuses_long_path_prefix_into_credential_dir(self):
+        r"""A Windows extended-length path (\\?\C:\...\.ssh\...) must be
+        blocked. The \\?\ prefix disables path normalization, so a naive
+        parser could mishandle it; .resolve() strips the prefix and the
+        '.ssh' part is still detected."""
+        from agent_windows.core.filesystem import validate_executable_path
+        with pytest.raises(ValueError, match="credential"):
+            validate_executable_path(r"\\?\C:\Users\alice\.ssh\payload.exe")
+
+    def test_allows_unc_path_to_normal_share(self):
+        """A UNC path into an ordinary share (no credential dir) stays
+        launchable — the blocklist must not over-reach to all UNC paths."""
+        from agent_windows.core.filesystem import validate_executable_path
+        validate_executable_path(r"\\server\share\app.exe")  # must not raise
+
+    def test_allows_long_path_prefix_to_system32(self):
+        r"""A \\?\-prefixed legit system path stays launchable."""
+        from agent_windows.core.filesystem import validate_executable_path
+        validate_executable_path(r"\\?\C:\Windows\System32\notepad.exe")  # must not raise
+
 
 class TestReparsePointEvasion:
     """M-03: junctions, 8.3 short names, and case must not bypass the blacklist.
