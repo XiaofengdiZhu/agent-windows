@@ -522,7 +522,20 @@ def _main_pipe_loop(state):
                         logger.warning("Pipe connect error, recreating")
                         disconnect_pipe(pipe)
                         continue
-                    raise
+                    if e.winerror == 535:  # ERROR_PIPE_CONNECTED
+                        # A client connected during the Create→Connect window, so
+                        # overlapped ConnectNamedPipe returned immediately. This
+                        # is a *successful* connect, not an error: fall through
+                        # to read_pipe below (the finally closes the overlapped
+                        # event handle). Without this, 535 raised → the broad
+                        # except below logged a scary traceback and wrote a
+                        # spurious -32603 to a client that connected fine, on
+                        # every fast-connect race (the client retries and
+                        # recovers, but at the cost of error-log noise + a
+                        # wasted round-trip each time). (F8)
+                        logger.debug("Pipe already connected (winerror 535)")
+                    else:
+                        raise
                 finally:
                     if overlapped_event is not None:
                         win32api.CloseHandle(overlapped_event)

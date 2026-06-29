@@ -16,6 +16,8 @@ import threading
 import time
 from unittest.mock import patch, MagicMock
 
+import pywintypes
+
 import pytest
 
 from agent_windows.daemon.server import COMWorkerThread, IdleMonitorThread
@@ -638,6 +640,78 @@ class TestMainPipeLoop:
         assert pid_writes == [], "loser wrote the PID file (would overwrite winner's)"
         assert version_writes == [], "loser wrote the version file"
         assert state["shutdown_event"].is_set()
+
+    def test_pipe_connected_winerror_535_is_a_success_not_an_error(self, caplog):
+        """F8: when a client connects in the Create→Connect window, overlapped
+        ConnectNamedPipe returns immediately with winerror 535
+        (ERROR_PIPE_CONNECTED). That is a *successful* connect — the client is
+        already on the pipe — not an error. Without 535 handling it fell through
+        to ``raise`` → the broad ``except Exception`` (→ scary
+        ``logger.exception`` traceback + a spurious -32603 written to a client
+        that connected fine) on every fast-connect race.
+
+        Drive one connection whose ConnectNamedPipe raises winerror 535, then a
+        second normal one, and assert: (1) no ERROR-or-worse log line was
+        produced (the 535 path must not hit the broad handler), (2) no -32603 /
+        no error response was written to the client, (3) the loop recovered and
+        processed the subsequent request normally.
+        """
+        import logging as _logging
+        from agent_windows.daemon import server as srv
+
+        state = self._make_state()
+        # 535 → fall through and read; subsequent connects behave normally.
+        connects = {"n": 0}
+
+        def fake_connect(_pipe, _overlapped):
+            connects["n"] += 1
+            if connects["n"] == 1:
+                raise pywintypes.error(535, "ConnectNamedPipe", "Pipe is connected.")
+
+        reads = {"n": 0}
+
+        def fake_read(_pipe):
+            reads["n"] += 1
+            # The post-535 connection reads a real request; further reads → ''.
+            if reads["n"] == 1:
+                return json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping"})
+            return ""
+
+        creates = {"n": 0}
+
+        def fake_create():
+            creates["n"] += 1
+            if creates["n"] >= 2:
+                state["shutdown_event"].set()
+            return "fake_pipe"
+
+        written = []
+        state["sta_thread"].submit.return_value = \
+            '{"jsonrpc": "2.0", "id": 1, "result": {"ok": 1}}'
+
+        with patch.object(srv, "create_pipe_server", side_effect=fake_create), \
+             patch.object(srv.win32pipe, "ConnectNamedPipe", side_effect=fake_connect), \
+             patch.object(srv.win32event, "CreateEvent", return_value="evt"), \
+             patch.object(srv.win32event, "WaitForSingleObject", return_value=0), \
+             patch.object(srv.win32api, "CloseHandle"), \
+             patch.object(srv, "read_pipe", side_effect=fake_read), \
+             patch.object(srv, "disconnect_pipe"), \
+             patch.object(srv, "write_pipe",
+                          side_effect=lambda _p, msg, **kw: written.append(msg)), \
+             patch.object(srv, "write_version_file"), \
+             patch.object(srv, "write_pid_file"), \
+             patch.object(srv.pywintypes, "OVERLAPPED",
+                          return_value=MagicMock(hEvent="evt")):
+            with caplog.at_level(_logging.ERROR, logger=srv.logger.name):
+                srv._main_pipe_loop(state)
+
+        # 535 must NOT have reached the broad handler → no scary traceback log.
+        assert not any(rec.levelno >= _logging.ERROR for rec in caplog.records), \
+            "winerror 535 (ERROR_PIPE_CONNECTED) hit the broad error handler"
+        # 535 must NOT have written a spurious -32603 (or any error) to the client.
+        assert written, "the recovered connection should have written the ping reply"
+        assert json.loads(written[-1]).get("error") is None, \
+            "535 path wrote an error response to a successful connection"
 
     def test_winner_writes_pid_file_exactly_once(self):
         """The winning daemon writes PID/version files exactly once — after the
