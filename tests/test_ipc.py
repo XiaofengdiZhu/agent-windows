@@ -278,6 +278,65 @@ class TestSendToDaemonTimeout:
         assert calls["connect"] == 2  # first 231, second success — no fatal raise
         assert json.loads(resp)["result"]["status"] == "ok"
 
+    def test_drip_feed_response_is_bounded_by_total_deadline(self, monkeypatch):
+        """F6 (round 2): the response read applies the timeout as a TOTAL
+        deadline, not per-chunk. A daemon that drip-feeds bytes (each arriving
+        just inside the per-chunk budget, never sending a newline) must trip the
+        timeout within ~one timeout window, not keep the client alive forever.
+
+        Under the old code each loop iteration got the full timeout_ms, so a
+        one-byte-every-(timeout-ε) drip pinned the client open indefinitely.
+        Now the deadline shrinks each iteration's budget, so the simulated
+        overlapped-read (which raises ConnectionError once its budget is
+        exhausted) fires within the window.
+
+        The call is run on a worker thread with a hard join deadline so the
+        buggy (no-total-deadline) variant fails the assertion instead of
+        hanging the whole suite.
+        """
+        import threading
+        import time as _time
+        import win32file
+        import agent_windows.ipc.pipe as pipe_mod
+
+        monkeypatch.setattr(win32file, "CreateFile",
+                            lambda *a, **k: "sentinel-pipe-handle")
+        monkeypatch.setattr(pipe_mod, "_overlapped_write_all", lambda *a, **k: None)
+        monkeypatch.setattr(win32file, "CloseHandle", lambda h: None)
+
+        # Simulate the real overlapped read's contract: while the budget
+        # comfortably allows a read, drip a non-newline byte; once the remaining
+        # budget drops below a threshold, raise ConnectionError (a
+        # WaitForSingleObject timeout). The loop only terminates via this raise
+        # (no newline is ever sent), so it exercises the total-deadline path.
+        def fake_read_chunk(pipe, timeout_ms, *a, **k):
+            if timeout_ms <= 50:
+                raise ConnectionError("read timed out")
+            _time.sleep(0.02)  # let wall-clock advance a little
+            return b"x"  # never a newline → loop would run forever without a deadline
+        monkeypatch.setattr(pipe_mod, "_overlapped_read_chunk", fake_read_chunk)
+
+        outcome: dict = {}
+
+        def _call():
+            try:
+                send_to_daemon("ping", pipe_name="\\\\.\\pipe\\unused", timeout=0.4)
+                outcome["err"] = None
+            except BaseException as e:  # noqa: BLE001 — record for the main thread
+                outcome["err"] = e
+
+        start = _time.monotonic()
+        t = threading.Thread(target=_call, daemon=True)
+        t.start()
+        t.join(3.0)  # hard cap: the fixed code finishes well under 1s
+        elapsed = _time.monotonic() - start
+
+        # The call must have returned (raised ConnectionError) promptly.
+        assert not t.is_alive(), "send_to_daemon hung — total deadline not applied"
+        assert elapsed < 2.0, f"call took {elapsed:.1f}s — not bounded by one timeout window"
+        assert isinstance(outcome.get("err"), ConnectionError), \
+            f"expected ConnectionError, got {outcome.get('err')!r}"
+
 
 class TestServerReadTimeout:
     """SEC3-06: server-side read_pipe must be bounded — a client that connects

@@ -423,9 +423,19 @@ def send_to_daemon(
         # Read response — loop to handle large responses. Check the size cap
         # BEFORE appending so a runaway daemon response can't balloon `resp_data`
         # past MAX_MESSAGE_SIZE before the cap fires (mirrors read_pipe).
+        #
+        # F6 (round 2): apply the timeout as a TOTAL deadline, not per-chunk.
+        # Each loop iteration used to get the full timeout_ms, so a daemon that
+        # drip-feeds one byte every (timeout - epsilon) kept the client alive
+        # indefinitely — past any sane operation time. Now (mirroring read_pipe)
+        # the deadline is fixed once and each chunk read gets only the remaining
+        # budget, so a non-progressing response trips the timeout regardless of
+        # how slowly it arrives.
         resp_data = b""
+        deadline = time.monotonic() + timeout
         while True:
-            chunk = _overlapped_read_chunk(pipe, timeout_ms)
+            remaining = max(1, int((deadline - time.monotonic()) * 1000))
+            chunk = _overlapped_read_chunk(pipe, remaining)
             if len(resp_data) + len(chunk) > MAX_MESSAGE_SIZE:
                 raise RuntimeError("Message exceeds maximum size")
             resp_data += chunk

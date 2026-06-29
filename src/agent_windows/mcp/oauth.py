@@ -15,6 +15,37 @@ Supports:
 
 State is purely in-memory (``OAuthStore``): a process restart invalidates all
 tokens and authorization codes. Clients must re-authenticate after a restart.
+
+Security model (read before trusting this in a multi-tenant setting)
+-------------------------------------------------------------------
+This OAuth server is a **transport-credentials convenience for local /
+loopback deployments**, NOT an authorization decision layer. Concretely:
+
+- The authorization endpoint (``GET /oauth/authorize``) is reachable without a
+  bearer token (it is in ``server._PUBLIC_PATHS``) and issues an authorization
+  code to any caller that supplies the configured ``client_id``, a PKCE
+  challenge, and a loopback ``redirect_uri``. There is **no resource-owner
+  consent screen and no session binding** — ``state`` is reflected, not bound.
+- Therefore any local process that can reach ``127.0.0.1:<port>`` (trivial via a
+  browser-driven ``fetch`` to localhost) can start the flow, receive the code on
+  its own loopback redirect, exchange it at ``/oauth/token`` (the secret is
+  readable by the same user), and obtain a 1-hour bearer token granting the full
+  MCP toolset (shell, registry, file I/O). PKCE is end-to-end attacker-controlled
+  here, so it authenticates nothing in this local-drive scenario.
+
+The hardening that *does* apply: ``redirect_uri`` is constrained to loopback
+and checked for mismatch at the token endpoint, ``client_secret`` is compared
+with ``secrets.compare_digest`` (constant time), and the HTTP bind refuses
+non-loopback addresses unless an ``auth_key`` is set or the operator opts into
+``--allow-insecure-remote``. But none of these stop a *same-user* local process.
+
+This is consistent with the project's overall threat model: the named-pipe /
+loopback channel trusts the current user's process group, and a hostile
+**same-user** process is considered out of scope — it already owns the session
+and could equally impersonate the daemon via the fixed-well-known pipe name
+(``ipc.pipe.PIPE_NAME``). If you need real authorization boundaries across
+mutually-distrusting local clients, put a real auth/consent front-end in front
+of this server; do not rely on this module for that.
 """
 from __future__ import annotations
 
