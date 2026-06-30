@@ -550,7 +550,13 @@ def read_file(path: str, offset: int | None = None, limit: int | None = None,
             else:
                 # Stream the window, byte-budgeting *during* accumulation (not
                 # after a join) so the memory peak stays near MAX_READ_BYTES
-                # even for files with very long lines.
+                # even for files with very long lines. The budget is measured
+                # in ENCODED bytes (len(line.encode(enc))) — not decoded chars —
+                # so a CJK file (3 bytes/char in UTF-8) genuinely stays within
+                # MAX_READ_BYTES bytes, matching the "byte-budgeting" promise.
+                # (A pathological single multi-GB line still materializes via
+                # the text iterator; that needs a binary chunked read and is out
+                # of scope here — the window/byte cap still bounds the result.)
                 chunks: list[str] = []
                 nbytes = 0
                 nlines = 0
@@ -558,12 +564,26 @@ def read_file(path: str, offset: int | None = None, limit: int | None = None,
                 reached_eof = False
                 with p.open("r", encoding=enc, errors=errors) as f:
                     for line in itertools.islice(f, start, start + line_window):
-                        nbytes += len(line)
+                        nbytes += len(line.encode(enc, errors="replace"))
                         if nbytes > MAX_READ_BYTES:
                             # Take the (partial) buffer up to the budget and
                             # stop — further lines would only overshoot more.
-                            if len(content := "".join(chunks)) <= MAX_READ_BYTES:
-                                content += line[: MAX_READ_BYTES - len(content)]
+                            # `content` is bound unconditionally here (the
+                            # result dict below reads it) — the walrus form the
+                            # old code used was load-bearing; the partial line
+                            # is only appended when the budget has room left.
+                            content = "".join(chunks)
+                            have = len(content.encode(enc, errors="replace"))
+                            if have < MAX_READ_BYTES:
+                                # The partial line is sliced in *bytes* (to the
+                                # exact remainder); a multibyte char split at
+                                # the boundary decodes its trailing fragment as
+                                # U+FFFD via errors="replace" (≤2 bytes of
+                                # U+FFFD bloat, capped downstream by IPC).
+                                remainder = MAX_READ_BYTES - have
+                                content += line.encode(
+                                    enc, errors="replace"
+                                )[:remainder].decode(enc, errors="replace")
                             byte_truncated = True
                             nlines += 1  # this line counts (partially) toward end
                             break

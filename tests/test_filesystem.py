@@ -731,6 +731,52 @@ class TestReadOffsetLimitLargeFile:
             f"stop near the window (≈5-6), not walk the whole 10_000-line file"
         )
 
+    def test_streaming_byte_budget_honored_for_cjk(self, tmp_path, monkeypatch):
+        """G6: the streaming byte budget must be measured in *bytes*, not chars.
+        "中" is 3 UTF-8 bytes. Three of them (9 bytes) under a 6-byte budget:
+        the old char-counting (len(line)=3 ≤ 6) FAILED to truncate and returned
+        9 bytes — violating the "byte-budgeting" docstring claim. The byte-count
+        fix must truncate and keep content ≤ MAX_READ_BYTES bytes."""
+        from agent_windows.core import filesystem as fs
+        f = tmp_path / "cjk.txt"
+        f.write_bytes("中中中\n".encode("utf-8"))  # 10 bytes on disk
+        monkeypatch.setattr(fs, "MAX_READ_BYTES", 6)  # < 10 → streaming
+        r = fs.read_file(str(f), offset=1, limit=1)
+        assert r["truncated"] is True
+        assert len(r["content"].encode("utf-8")) <= 6
+        # 6 bytes slices cleanly on the 3-byte char boundary → "中中", no tail.
+        assert r["content"] == "中中"
+
+    def test_streaming_byte_budget_splits_multibyte_char(self, tmp_path, monkeypatch):
+        """When the byte budget lands mid-character, the partial slice decodes
+        the trailing fragment as U+FFFD (errors='replace'). Documents the
+        best-effort partial-fill behavior; content stays ≤ budget + 2 bytes
+        (one U+FFFD is 3 UTF-8 bytes)."""
+        from agent_windows.core import filesystem as fs
+        f = tmp_path / "cjk.txt"
+        f.write_bytes("中中中\n".encode("utf-8"))
+        monkeypatch.setattr(fs, "MAX_READ_BYTES", 7)  # 7 = 2 chars(6) + 1 byte of 3rd
+        r = fs.read_file(str(f), offset=1, limit=1)
+        assert r["truncated"] is True
+        # Two whole chars + a U+FFFD tail from the split byte.
+        assert r["content"] == "中中\ufffd"
+
+    def test_streaming_exact_fit_line_no_partial_fill(self, tmp_path, monkeypatch):
+        """Regression (review catch): when an appended line lands EXACTLY on the
+        byte budget and a later line overflows, the partial-fill guard
+        (have < MAX_READ_BYTES) is False — so content must still be the fully-
+        appended buffer, NOT raise UnboundLocalError. The dropped-walrus rewrite
+        regressed this; plain ASCII triggers it (no CJK needed)."""
+        from agent_windows.core import filesystem as fs
+        f = tmp_path / "exact.txt"
+        # line1 "abcde\n" = 6 bytes exact-fit; line2 "x\n" overflows.
+        f.write_bytes(b"abcde\nx\n")
+        monkeypatch.setattr(fs, "MAX_READ_BYTES", 6)
+        monkeypatch.setattr(fs, "MAX_READ_LINES", 100_000)
+        r = fs.read_file(str(f), offset=1, limit=10)
+        assert r["truncated"] is True
+        assert r["content"] == "abcde\n"
+
 
 class TestWriteAppend:
     def test_append_adds_to_existing(self, tmp_path):
