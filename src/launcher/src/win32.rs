@@ -202,10 +202,10 @@ fn pipe_error(err: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_daemon_args, create_inheritable_pipe, filetime_to_u64, pipe_error,
+        build_daemon_args, create_inheritable_pipe, filetime_to_u64, open_nul, pipe_error,
         read_stderr_to_string, truncate_for_error_msg,
     };
-    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
 
     #[test]
     fn broken_pipe_message_carries_winerror() {
@@ -315,6 +315,28 @@ mod tests {
         let got = read_stderr_to_string(read);
         unsafe { CloseHandle(read) };
         assert!(got.contains("ModuleNotFoundError: No module named 'pywintypes'"));
+    }
+
+    #[test]
+    fn open_nul_succeeds_with_a_valid_non_pseudo_handle() {
+        // F12: CreateFileW signals failure with INVALID_HANDLE_VALUE (-1), not
+        // null — so open_nul must return None on failure (not a handle that
+        // .is_null() would mis-identify as valid). Under normal conditions NUL
+        // opens fine, so we get Some(h) where h is neither null nor the -1
+        // pseudo value, and CloseHandle(h) succeeds. This locks the
+        // Option<HANDLE> contract: a future regression to a bare HANDLE return
+        // (with callers using is_null) would compile but this test still
+        // documents the expected shape.
+        for read in [true, false] {
+            match open_nul(read) {
+                Some(h) => {
+                    assert!(!h.is_null(), "NUL handle was null");
+                    assert!(h != INVALID_HANDLE_VALUE, "NUL handle was INVALID_HANDLE_VALUE");
+                    unsafe { CloseHandle(h) };
+                }
+                None => panic!("open_nul({read}) failed under normal conditions"),
+            }
+        }
     }
 
     #[test]
@@ -518,11 +540,11 @@ pub fn spawn_daemon(
 
     let nul_in = open_nul(true);  // read
     let nul_out = open_nul(false); // write
-    if !nul_in.is_null() {
-        startup.hStdInput = nul_in;
+    if let Some(h) = nul_in {
+        startup.hStdInput = h;
     }
-    if !nul_out.is_null() {
-        startup.hStdOutput = nul_out;
+    if let Some(h) = nul_out {
+        startup.hStdOutput = h;
     }
 
     // Inheritable anonymous pipe for stderr. If creation fails, fall back to
@@ -536,8 +558,8 @@ pub fn spawn_daemon(
         // the INHERIT flag: the PROC_THREAD_ATTRIBUTE_HANDLE_LIST is the sole
         // authority on what gets inherited when present.)
         startup.hStdError = stderr_write;
-    } else if !nul_out.is_null() {
-        startup.hStdError = nul_out;
+    } else if let Some(h) = nul_out {
+        startup.hStdError = h;
     }
 
     let mut info: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
@@ -554,10 +576,13 @@ pub fn spawn_daemon(
     // ignores all other inheritable handles. This is how Rust's std
     // Command+Stdio::piped() avoids the same trap.
     // Collect the handles the child should inherit (deduplicated — stderr may
-    // alias the NUL stdout handle when capture is disabled).
+    // alias the NUL stdout handle when capture is disabled). nul_in/nul_out are
+    // Option<HANDLE> (None if open_nul failed); stderr_write is a bare HANDLE
+    // (null if the pipe failed), so wrap it to unify the filter below.
     let mut inherit_handles: Vec<HANDLE> = Vec::new();
-    for h in [nul_in, nul_out, if stderr_captured { stderr_write } else { nul_out }] {
-        if !h.is_null() && !inherit_handles.contains(&h) {
+    let stderr_for_inherit = if stderr_captured { Some(stderr_write) } else { None };
+    for h in [nul_in, nul_out, stderr_for_inherit].into_iter().flatten() {
+        if !inherit_handles.contains(&h) {
             inherit_handles.push(h);
         }
     }
@@ -623,11 +648,11 @@ pub fn spawn_daemon(
     // the attribute list must be freed with DeleteProcThreadAttributeList
     // before the buffer is freed; HandleList's Drop does that in order.
 
-    if !nul_in.is_null() {
-        unsafe { CloseHandle(nul_in) };
+    if let Some(h) = nul_in {
+        unsafe { CloseHandle(h) };
     }
-    if !nul_out.is_null() {
-        unsafe { CloseHandle(nul_out) };
+    if let Some(h) = nul_out {
+        unsafe { CloseHandle(h) };
     }
     // Close the write end in the parent immediately: the child holds its own
     // copy, and once the child exits the read end sees EOF (otherwise the read
@@ -873,7 +898,16 @@ pub fn poll_process(handle: HANDLE) -> Option<u32> {
 /// The handle is marked inheritable so it can be listed in the spawn handle
 /// list (only listed handles reach the child, but listed handles must also
 /// carry the INHERIT flag for the child to actually receive them).
-fn open_nul(read: bool) -> HANDLE {
+///
+/// Returns `None` on failure. `CreateFileW` signals failure with
+/// `INVALID_HANDLE_VALUE` (i.e. `(HANDLE)-1`), **not** null — so callers cannot
+/// test success with `.is_null()` (that's always true for `-1`). Encoding the
+/// failure in `Option` makes the success/failure branch unmissable and keeps
+/// every consumer honest without re-deriving the `== INVALID_HANDLE_VALUE`
+/// check at each site. NUL almost never fails to open, so this is defensive,
+/// but the old `is_null` check was wrong for any future failure. (F12)
+fn open_nul(read: bool) -> Option<HANDLE> {
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
     use windows_sys::Win32::Storage::FileSystem::{
         CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE,
     };
@@ -882,7 +916,7 @@ fn open_nul(read: bool) -> HANDLE {
     sa.bInheritHandle = 1;
     let access = if read { 0x8000_0000 } else { 0x4000_0000 }; // GENERIC_READ / WRITE
     let nul_w = widen("NUL");
-    unsafe {
+    let handle = unsafe {
         CreateFileW(
             nul_w.as_ptr(),
             access,
@@ -892,5 +926,10 @@ fn open_nul(read: bool) -> HANDLE {
             FILE_ATTRIBUTE_NORMAL,
             std::ptr::null_mut(),
         )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        None
+    } else {
+        Some(handle)
     }
 }
