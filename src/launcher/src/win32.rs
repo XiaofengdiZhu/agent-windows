@@ -203,7 +203,7 @@ fn pipe_error(err: u32) -> String {
 mod tests {
     use super::{
         build_daemon_args, create_inheritable_pipe, filetime_to_u64, open_nul, pipe_error,
-        read_stderr_to_string, truncate_for_error_msg,
+        quote_arg_windows, read_stderr_to_string, truncate_for_error_msg,
     };
     use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
 
@@ -383,6 +383,57 @@ mod tests {
             "-m agent_windows --daemon --config \"C:\\a\\b\\\\\\\\\""
         );
     }
+
+    #[test]
+    fn quote_arg_wraps_in_double_quotes() {
+        // A plain path with no spaces is still quoted (uniform shape, and spaces
+        // are handled when present).
+        assert_eq!(quote_arg_windows("python.exe"), "\"python.exe\"");
+        // Spaces are fine because the value is quoted.
+        assert_eq!(
+            quote_arg_windows("C:\\Program Files\\python.exe"),
+            "\"C:\\Program Files\\python.exe\""
+        );
+    }
+
+    #[test]
+    fn quote_arg_doubles_trailing_backslash() {
+        // F13: a tab-completed directory like C:\Python311\ must double the
+        // trailing backslash, else CommandLineToArgvW reads the closing `\"` as
+        // an escaped quote and the arg never terminates — CreateProcessW fails
+        // and every command silently falls back to the Python spawner.
+        assert_eq!(quote_arg_windows("C:\\Python311\\"), "\"C:\\Python311\\\\\"");
+        // Two trailing backslashes -> four.
+        assert_eq!(quote_arg_windows("C:\\a\\b\\\\"), "\"C:\\a\\b\\\\\\\\\"");
+    }
+
+    #[test]
+    fn quote_arg_strips_embedded_double_quotes() {
+        // A pathological path containing a `"` would prematurely close the
+        // outer quote; strip it as a defensive simplification.
+        assert_eq!(quote_arg_windows("a\"b"), "\"ab\"");
+        // Embedded quotes stripped AND trailing backslash doubled, in order.
+        assert_eq!(quote_arg_windows("a\"b\\"), "\"ab\\\\\"");
+    }
+
+    #[test]
+    fn quote_arg_internal_backslashes_untouched() {
+        // Only a TRAILING run is doubled; backslashes in the middle stay single.
+        assert_eq!(quote_arg_windows("C:\\dir\\python.exe"), "\"C:\\dir\\python.exe\"");
+    }
+
+    #[test]
+    fn python_exe_trailing_backslash_produces_closed_quote() {
+        // End-to-end: a trailing-`\` interpreter path must yield a command line
+        // whose first arg is properly quoted (ends in `\\"`, not `\"`), so
+        // CreateProcessW (called with lpApplicationName=NULL) re-parses it
+        // correctly. This is the regression for the silent-Python-fallback bug.
+        let quoted = quote_arg_windows("C:\\Python311\\python.exe\\");
+        assert!(
+            quoted.ends_with("\\\\\""),
+            "trailing-\\ python_exe should end in \\\\\\\" (doubled + close), got {quoted:?}"
+        );
+    }
 }
 
 /// `WaitNamedPipeW`: true if the pipe is available within the timeout.
@@ -468,29 +519,49 @@ fn filetime_to_u64(ft: &FILETIME) -> u64 {
     ((ft.dwHighDateTime as u64) << 32) | (ft.dwLowDateTime as u64)
 }
 
+/// Quote a single argv token for a Windows command line: wrap in `"..."`,
+/// strip any embedded double-quotes as a defensive simplification (a legit path
+/// containing `"` is pathological), and double a trailing run of backslashes so
+/// it survives the closing quote.
+///
+/// Why the trailing-backslash doubling: `CommandLineToArgvW` treats a backslash
+/// as an escape only for the double-quote. A path ending in `\` (e.g. a
+/// tab-completed directory like `C:\Python311\`) plus the closing `"` reads as
+/// `\"` — an escaped quote — so the arg never terminates, the quote stays open,
+/// and `CreateProcessW` fails. Doubling the trailing backslashes (so the token
+/// ends in `\\"`) makes CommandLineToArgvW see the backslash as escaped and the
+/// `"` as the real terminator. (MSDN argv rules; see `Everybody quotes
+/// command-line arguments the wrong way`.)
+///
+/// Shared by the interpreter path (`spawn_daemon`) and the `--config` path
+/// (`build_daemon_args`) so both get identical, correct handling — the config
+/// path already had this logic inline; the interpreter path didn't, so a
+/// trailing-`\` `AGENT_WINDOWS_PYTHON` silently broke daemon launch and every
+/// command fell back to the Python spawner. (F13)
+fn quote_arg_windows(s: &str) -> String {
+    // Strip embedded quotes (pathological), then double trailing backslashes so
+    // they survive the closing quote (MSDN argv rules).
+    let cleaned = s.replace('"', "");
+    let trailing_bs = cleaned.chars().rev().take_while(|&ch| ch == '\\').count();
+    let mut value = cleaned;
+    if trailing_bs > 0 {
+        value.push_str(&"\\".repeat(trailing_bs));
+    }
+    format!("\"{value}\"")
+}
+
 /// Build the daemon's argument string (`-m agent_windows --daemon [--debug]
 /// [--config "<path>"]`). Pure/testable — `spawn_daemon` embeds it after the
-/// quoted interpreter path. The config path is double-quoted (Windows paths may
-/// contain spaces, e.g. `C:\Program Files\...`); embedded double-quotes are
-/// stripped as a defensive simplification (a legit path containing `"` is
-/// pathological). A trailing run of backslashes is doubled so CreateProcessW's
-/// CommandLineToArgvW doesn't read the final `\"` as an escaped quote (which
-/// would swallow the closing quote and mangle the argument). (TODO #21-1)
+/// quoted interpreter path. The config path is quoted via
+/// [`quote_arg_windows`] (double-quoted for paths with spaces, trailing
+/// backslashes doubled). (TODO #21-1)
 pub fn build_daemon_args(debug: bool, config: Option<&str>) -> String {
     let mut args = String::from("-m agent_windows --daemon");
     if debug {
         args.push_str(" --debug");
     }
     if let Some(c) = config {
-        // Strip embedded quotes (pathological), then double trailing
-        // backslashes so they survive the closing quote (MSDN argv rules).
-        let cleaned = c.replace('"', "");
-        let trailing_bs = cleaned.chars().rev().take_while(|&ch| ch == '\\').count();
-        let mut value = cleaned;
-        if trailing_bs > 0 {
-            value.push_str(&"\\".repeat(trailing_bs));
-        }
-        args.push_str(&format!(" --config \"{}\"", value));
+        args.push_str(&format!(" --config {}", quote_arg_windows(c)));
     }
     args
 }
@@ -520,8 +591,13 @@ pub fn spawn_daemon(
     config: Option<&str>,
 ) -> Result<(HANDLE, u32, Option<HANDLE>), String> {
     let args = build_daemon_args(debug, config);
-    // CreateProcessW wants a mutable command line; the app path is quoted.
-    let cmdline = format!("\"{}\" {}", python_exe, args);
+    // CreateProcessW wants a mutable command line. Quote the interpreter path
+    // via quote_arg_windows (not a bare format!) so a trailing-`\` path like a
+    // tab-completed `C:\Python311\` doesn't leave the quote open via `\"` and
+    // fail CreateProcessW. We pass lpApplicationName=NULL, so the whole line is
+    // re-parsed by CommandLineToArgvW — argv[0] correctness rests on this.
+    // (F13)
+    let cmdline = format!("{} {}", quote_arg_windows(python_exe), args);
     let mut cmdline_w: Vec<u16> = cmdline.encode_utf16().chain(std::iter::once(0)).collect();
 
     // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
