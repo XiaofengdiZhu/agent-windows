@@ -161,6 +161,16 @@ def _wait(params: dict) -> dict[str, Any]:
         time.sleep(seconds)
         return {"output": f"## Wait\nSlept {seconds}s"}
 
+    # G14: bound the poll interval the same way ``wait_for`` (this module) does.
+    # The polling modes below hammer ``get_tree_snapshot`` (a full UIA tree
+    # traversal) on each iteration, so a bad config poll_interval (or an explicit
+    # ``interval=0``) busy-loops it ~tens of thousands of times for a 300s wait —
+    # a single-call DoS on the STA worker. wait_for already guards this; wait
+    # didn't. Placed AFTER the sleep-mode return so plain-sleep calls (which
+    # never poll) are unaffected. Mirrors the sibling's message verbatim.
+    if poll_interval <= 0 or poll_interval > 5:
+        raise ValueError("interval must be greater than 0 and at most 5 seconds")
+
     start = time.time()
     cfg = load_config().get("tree", {})
 

@@ -441,6 +441,16 @@ def send_to_daemon(
             resp_data += chunk
             if b"\n" in resp_data or not chunk:
                 break
+        # G11: a clean EOF (the daemon closed the pipe) without a
+        # newline-terminated message means we never got a complete response.
+        # Treat it like the winerror 109/232 mid-response disconnect below — a
+        # ConnectionError — instead of letting the empty/partial buffer reach
+        # JSONRPCResponse.from_json(""), which raises an uncaught JSONDecodeError
+        # that escapes the CLI's error boundary and the error-code mapping.
+        if b"\n" not in resp_data:
+            raise ConnectionError(
+                "Daemon closed the connection without responding"
+            )
         response = resp_data.decode("utf-8").strip()
         logger.debug("Daemon response: %s", response[:200])
         return response

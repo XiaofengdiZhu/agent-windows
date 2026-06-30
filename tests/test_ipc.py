@@ -337,6 +337,34 @@ class TestSendToDaemonTimeout:
         assert isinstance(outcome.get("err"), ConnectionError), \
             f"expected ConnectionError, got {outcome.get('err')!r}"
 
+    def test_partial_then_eof_raises_connection_error(self, monkeypatch):
+        """G11: a daemon that writes a partial response then closes the pipe
+        (no newline terminator) must make send_to_daemon raise ConnectionError —
+        mirroring the _PIPE_CLOSED_ERRORS arm in the SAME function (a winerror
+        109/232 mid-response disconnect maps to ConnectionError). Without this,
+        the empty/partial resp_data flows on and JSONRPCResponse.from_json("")
+        raises an uncaught json.JSONDecodeError that escapes the CLI's error
+        boundary (callers' except ConnectionError / the error-code mapping never
+        see it). The EOF (`not chunk`) is the only loop exit, so this exercises
+        the exact path."""
+        import win32file
+        import agent_windows.ipc.pipe as pipe_mod
+
+        monkeypatch.setattr(win32file, "CreateFile",
+                            lambda *a, **k: "sentinel-pipe-handle")
+        monkeypatch.setattr(pipe_mod, "_overlapped_write_all", lambda *a, **k: None)
+        monkeypatch.setattr(win32file, "CloseHandle", lambda h: None)
+
+        # First chunk: partial JSON, no newline. Second: empty (EOF → `not chunk`
+        # breaks the loop). The current code then decode()s b"" and returns "",
+        # which call_daemon feeds to from_json → JSONDecodeError.
+        chunks = iter([b'{"jsonrpc":"2.0","id":1}', b""])
+        monkeypatch.setattr(pipe_mod, "_overlapped_read_chunk",
+                            lambda pipe, timeout_ms: next(chunks))
+
+        with pytest.raises(ConnectionError):
+            send_to_daemon("ping", pipe_name="\\\\.\\pipe\\unused", timeout=1.0)
+
 
 class TestServerReadTimeout:
     """SEC3-06: server-side read_pipe must be bounded — a client that connects

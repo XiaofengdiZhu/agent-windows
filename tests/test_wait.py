@@ -243,6 +243,53 @@ def test_wait_seconds_at_cap_allowed():
         HANDLERS["wait"]({"seconds": tree_mod.MAX_WAIT_SECONDS})
 
 
+# ── wait: interval DoS bound (G14) ─────────────────────────────────
+
+
+@patch("agent_windows.utils.config.load_config")
+def test_wait_interval_zero_from_config_rejected(mock_config):
+    """G14: when the resolved poll_interval is 0 (here: a bad config
+    ``poll_interval=0`` with no explicit interval param), the polling modes must
+    reject — mirroring the sibling ``wait_for`` handler (same file). Otherwise
+    wait busy-loops ``get_tree_snapshot`` (full UIA traversal) ~tens of
+    thousands of times for a 300s timeout — a single-call DoS on the STA worker.
+    wait_for already guards this; wait didn't.
+
+    The parse is ``interval or config_default``, so an explicit interval=0 (or a
+    config value of 0) yields poll_interval=0 → the guard's <= 0 arm fires."""
+    from agent_windows.daemon.router import HANDLERS
+
+    mock_config.return_value = {"wait": {"poll_interval": 0}, "tree": {}}
+    with pytest.raises(ValueError, match="interval"):
+        HANDLERS["wait"]({"selector": "@e1", "timeout": 5})
+
+
+@patch("agent_windows.utils.config.load_config")
+def test_wait_interval_over_5_rejected(mock_config):
+    """G14: an explicit interval over 5 seconds is rejected, mirroring wait_for."""
+    from agent_windows.daemon.router import HANDLERS
+
+    mock_config.return_value = {"wait": {"poll_interval": 0.5}, "tree": {}}
+    with pytest.raises(ValueError, match="interval"):
+        HANDLERS["wait"]({"selector": "@e1", "timeout": 30, "interval": 6.0})
+
+
+@patch("agent_windows.utils.config.load_config")
+def test_wait_interval_in_range_allowed(mock_config, make_element):
+    """G14 boundary: an in-range interval (e.g. 1.0) is accepted and the wait
+    proceeds normally. Pin that the new guard doesn't over-reject."""
+    from agent_windows.daemon.router import HANDLERS
+
+    mock_config.return_value = {"wait": {"poll_interval": 0.5}, "tree": {}}
+    handler = HANDLERS["wait"]
+    with patch("agent_windows.core.tree.resolve_element") as mock_resolve, \
+         patch("agent_windows.daemon.handlers.tree.time") as mock_time:
+        mock_resolve.return_value = make_element(name="OK")
+        mock_time.time.side_effect = [0.0, 0.0]
+        result = handler({"selector": "@e1", "timeout": 5, "interval": 1.0})
+    assert "appeared" in result["output"]
+
+
 # ── CLI wait: client-side polling (M-28) ──────────────────────────────
 
 

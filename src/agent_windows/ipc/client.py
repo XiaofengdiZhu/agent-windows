@@ -84,6 +84,18 @@ def unwrap_response(response: JSONRPCResponse) -> dict:
             code,
             response.error.get("message", ""),
         )
+    # G12: JSON-RPC 2.0 requires exactly one of result/error. A response with
+    # NEITHER (e.g. {"jsonrpc":"2.0","id":1}) would otherwise return None, and
+    # the daemon path does None["status"] → an opaque TypeError that escapes
+    # the DaemonError type boundary and the CLI error-code mapping. No handler
+    # returns None as its result, so a present-None result is always malformed.
+    # Keep it inside the type boundary with DAEMON_INTERNAL_ERROR, mirroring the
+    # non-dict-error arm above (F7).
+    if response.result is None:
+        raise DaemonError(
+            DAEMON_INTERNAL_ERROR,
+            "malformed response: neither 'result' nor 'error' is present",
+        )
     return response.result
 
 

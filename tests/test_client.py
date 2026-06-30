@@ -82,6 +82,22 @@ class TestUnwrapResponse:
         assert exc_info.value.code == DAEMON_INTERNAL_ERROR
         assert isinstance(exc_info.value, RuntimeError)  # type boundary held
 
+    def test_neither_result_nor_error_raises_daemon_error(self):
+        """G12: a JSON-RPC 2.0 response that carries NEITHER result nor error
+        (e.g. ``{"jsonrpc":"2.0","id":1}``) must not silently return None — the
+        daemon path (call_daemon) then does ``None["status"]`` and surfaces an
+        opaque TypeError that escapes the DaemonError type boundary and the CLI
+        error-code mapping. JSON-RPC 2.0 requires exactly one of result/error,
+        and no handler returns None as a result, so rejecting is unambiguous.
+        Keep it inside the type boundary with DAEMON_INTERNAL_ERROR, mirroring
+        F7 (the non-dict error arm)."""
+        from agent_windows.ipc.protocol import DAEMON_INTERNAL_ERROR
+        resp = JSONRPCResponse(id=1)  # result=None, error=None
+        with pytest.raises(DaemonError) as exc_info:
+            unwrap_response(resp)
+        assert exc_info.value.code == DAEMON_INTERNAL_ERROR
+        assert isinstance(exc_info.value, RuntimeError)
+
 
 class TestEnsureDaemonRunning:
     """M-31: ensure_daemon_running fails fast when the spawned daemon exits
