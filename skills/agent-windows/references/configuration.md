@@ -184,7 +184,7 @@ Execution policy for the `shell` command.
 |-----|------|---------|-------------|
 | `blacklist` | str \| list[str] | `[]` | Case-insensitive regex pattern(s). A `shell` command matching any pattern is rejected with `PERMISSION_DENIED` (-1004) before execution. Empty disables filtering. A single string or a list of strings. Best-effort (PowerShell aliases/encodings can bypass). |
 | `timeout` | int | `30` | Execution timeout in seconds. Used when a `shell` call omits an explicit `--timeout`/`timeout`. A timeout raises `WAIT_TIMEOUT` (-1003), not a generic internal error. |
-| `max_output_bytes` | int | `0` | Cap on combined stdout+stderr in UTF-8 bytes. `0` = no cap (legacy). When exceeded, output is truncated (stdout gets priority) and an `[output truncated: N bytes, limit M]` marker is appended so a runaway command (e.g. `Get-Process \| Format-Table` over a huge session) can't flood the agent's context. The audit log is unaffected (it records commands, not output). |
+| `max_output_bytes` | int | `1048576` (1 MiB) | Cap on combined stdout+stderr in raw bytes. stdout/stderr are drained incrementally and the subprocess is TERMINATED once the running byte total crosses the cap — bounding daemon memory (so a `1..1e6 \| %{ Write-Output ("X"*1000) }` runaway can't OOM the single-threaded daemon within the timeout) AND freeing the worker as soon as the cap is hit (instead of holding it for the full timeout). Output up to the cap is returned with stdout priority and an `[output truncated: command terminated after exceeding M bytes (produced N)]` marker. `0` = explicit opt-out (no bound, no terminate — legacy behavior; memory unbounded by choice). The audit log is unaffected (it records commands, not output). |
 | `output_encoding` | str | `""` | Output decode encoding. Empty (default) = UTF-8: the command is prefixed with a UTF-8 setup snippet so PowerShell 5.1 emits UTF-8 (not the system codepage) and CJK/other non-ASCII output decodes cleanly. Set to e.g. `'gbk'`/`'cp1252'` only if a native exe ignores the UTF-8 request and emits its legacy codepage — in that case the prefix is skipped and Python decodes the raw codepage. |
 
 Every `shell` execution attempt — allowed or blocked — is recorded with the full, untruncated command in `~/.agent-windows/logs/shell_audit.log`. The `logs/` directory is owner-only via an inheritable ACL, so these records (which may contain secrets passed inline) are not readable by other users.
@@ -322,7 +322,7 @@ poll_interval = 0.5
 [shell]
 blacklist = []                        # regex patterns to block before execution
 timeout = 30                          # seconds (overridable per-call via --timeout)
-max_output_bytes = 0                  # 0 = no cap; else truncate stdout+stderr
+max_output_bytes = 1048576            # 1 MiB default; 0 = no cap. Command is terminated past the cap
 output_encoding = ""                  # "" = UTF-8 (auto); else e.g. "gbk"
 
 [daemon]

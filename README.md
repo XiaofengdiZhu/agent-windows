@@ -258,7 +258,10 @@ method = "system"      # "system" (PowerShell API) or "keyboard" (simulate Ctrl+
 
 [shell]
 timeout = 30             # execution timeout, seconds (overridable per-call via --timeout)
-max_output_bytes = 0     # cap stdout+stderr size; 0 = no cap
+max_output_bytes = 1048576  # cap stdout+stderr (1 MiB default); 0 = no cap. Output is read
+                          # incrementally and the command is TERMINATED once it exceeds the cap
+                          # (bounds daemon memory and frees the worker instead of running a
+                          # runaway command for the full timeout)
 output_encoding = ""     # "" = UTF-8 (auto); else e.g. "gbk" for legacy-codepage exes
 ```
 

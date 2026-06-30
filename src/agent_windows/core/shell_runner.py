@@ -1,8 +1,11 @@
 """PowerShell command execution."""
 
+import codecs
 import logging
 import re
 import subprocess
+import threading
+import time
 from typing import Any
 
 from agent_windows.utils.config import load_config, get_log_dir
@@ -43,6 +46,171 @@ _UTF8_PREFIX = (
 def _shell_config() -> dict:
     """Return the ``shell`` config section (empty dict if absent)."""
     return load_config().get("shell", {}) or {}
+
+
+# G5: run_shell reads stdout/stderr incrementally and terminates the subprocess
+# once the combined byte total crosses the cap — bounding BOTH daemon memory
+# (the old ``subprocess.run(capture_output=True)`` materialized the whole output
+# before _truncate_streams ran, so a ``1..1e6 | %{ Write-Output ("X"*1000) }``
+# runaway could OOM the single-threaded daemon within the timeout window) AND
+# wall-clock (the runaway is killed as soon as it exceeds the cap, freeing the
+# STA worker instead of holding it for the full timeout). cap=0 (explicit) keeps
+# the legacy "no cap" semantics — operator opt-out.
+_DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024  # 1 MiB; mirrors telemetry._MAX_BYTES
+# Incremental read chunk: a bit larger than the typical pipe buffer to cut the
+# syscall count, small enough that the per-stream tail-overrun past the cap is
+# bounded (~16 KiB per stream → peak ≈ cap + 2×_READ_CHUNK).
+_READ_CHUNK = 16384
+
+
+def _run_bounded(
+    argv: list[str],
+    timeout: float,
+    encoding: str,
+    cap: int,
+) -> tuple[str, str, int, bool, int]:
+    """Run *argv*, draining stdout/stderr incrementally and terminating once the
+    combined decoded-bytes-before-decode total crosses *cap*.
+
+    Returns ``(stdout, stderr, returncode, truncated, total_bytes)``. When
+    *cap* > 0 and the running byte total reaches it, both reader threads stop,
+    the subprocess is terminated, and ``truncated`` is True. When *cap* == 0 the
+    readers drain to EOF (no bound — legacy opt-out).
+
+    Uses a binary-mode Popen + an incremental codec decoder so a multi-byte char
+    split across two ``read1`` chunks reassembles correctly (no lone U+FFFD),
+    and so the configured ``encoding`` (e.g. a non-UTF-8 legacy override) is
+    honored on the decode rather than baked into the Popen call.
+
+    Raises TimeoutError if the process outlives *timeout*.
+
+    Concurrency: the main thread can't just ``proc.wait(timeout)`` — a cap-fire
+    happens WHILE the subprocess is still producing (it hasn't exited), so a
+    blocking wait would deadlock against the reader threads' stop_event. So a
+    reaper thread performs the wait and signals a ``done_event`` on natural
+    exit; the main thread races that against the cap's ``stop_event`` and the
+    total ``timeout``. Whichever fires first wins (cap→terminate, done→collect,
+    timeout→terminate+raise).
+    """
+    proc = subprocess.Popen(
+        argv,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    # Shared accumulator. total_bytes counts RAW (pre-decode) bytes so the budget
+    # matches _truncate_streams' UTF-8-byte semantics; cap is in those bytes. The
+    # lock makes the read-add-check-set critical region atomic across the two
+    # reader threads (a plain += can lose counts under the GIL's two-step
+    # load/store, slightly delaying the cap-crossing and inflating peak).
+    state = {"total": 0}
+    total_lock = threading.Lock()
+    stop_event = threading.Event()   # set by a reader when the cap is crossed
+    done_event = threading.Event()   # set by the reaper on natural exit
+
+    def _drain(stream, out_list) -> None:
+        if stream is None:
+            return
+        decoder = codecs.getincrementaldecoder(encoding)("replace")
+        while not stop_event.is_set():
+            chunk = stream.read1(_READ_CHUNK)
+            if not chunk:
+                # Flush any trailing multibyte tail before EOF.
+                out_list.append(decoder.decode(b"", final=True))
+                break
+            out_list.append(decoder.decode(chunk, final=False))
+            crossed = False
+            with total_lock:
+                state["total"] += len(chunk)
+                if cap > 0 and state["total"] >= cap:
+                    crossed = True
+            if crossed:
+                stop_event.set()
+                break
+
+    stdout_parts: list[str] = []
+    stderr_parts: list[str] = []
+    t_out = threading.Thread(
+        target=_drain, args=(proc.stdout, stdout_parts), daemon=True
+    )
+    t_err = threading.Thread(
+        target=_drain, args=(proc.stderr, stderr_parts), daemon=True
+    )
+    t_out.start()
+    t_err.start()
+
+    def _reaper() -> None:
+        proc.wait()
+        done_event.set()
+
+    reaper = threading.Thread(target=_reaper, daemon=True)
+    reaper.start()
+
+    deadline = None
+    try:
+        # Wait for the first of: cap crossed (stop), natural exit (done), or
+        # the total timeout. Poll at a small interval so all three are checked.
+        deadline = time.monotonic() + timeout
+        while True:
+            if stop_event.is_set():
+                # Cap crossed — terminate the runaway and collect what we have.
+                _terminate(proc)
+                break
+            if done_event.wait(0.05):
+                # Process exited naturally; the readers will finish on EOF.
+                break
+            if time.monotonic() >= deadline:
+                _terminate(proc)
+                stop_event.set()
+                t_out.join(timeout=2.0)
+                t_err.join(timeout=2.0)
+                raise TimeoutError(
+                    f"Shell command timed out after {timeout}s: {argv}"
+                )
+    except BaseException:
+        # On any exit path make sure the readers aren't stuck on a read.
+        stop_event.set()
+        t_out.join(timeout=2.0)
+        t_err.join(timeout=2.0)
+        raise
+
+    # Reader threads exit on EOF (natural) — or on stop_event (cap/timeout).
+    # Do NOT set stop_event here on the natural path: it would cancel readers
+    # mid-drain before they hit EOF, dropping buffered output. Join waits for
+    # their natural EOF completion; the join timeout caps a wedged pipe.
+    if stop_event.is_set():
+        t_out.join(timeout=2.0)
+        t_err.join(timeout=2.0)
+    else:
+        t_out.join(timeout=30.0)
+        t_err.join(timeout=30.0)
+
+    total = state["total"]
+    return (
+        "".join(stdout_parts),
+        "".join(stderr_parts),
+        proc.returncode,
+        stop_event.is_set(),
+        total,
+    )
+
+
+def _terminate(proc: subprocess.Popen) -> None:
+    """Best-effort graceful-then-forceful shutdown of *proc*.
+
+    Always reaps (waits) so ``proc.returncode`` is populated on return —
+    _run_bounded reads it for the result dict, and a kill() without a follow-up
+    wait() would race the reaper thread and could surface ``returncode is None``
+    (→ "Exit code: None")."""
+    try:
+        proc.terminate()
+        try:
+            proc.wait(timeout=2.0)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=2.0)
+    except Exception:
+        logger.debug("Failed to terminate shell subprocess", exc_info=True)
 
 
 def _truncate_stream(text: str, budget: int) -> tuple[str, int]:
@@ -197,7 +365,11 @@ def run_shell(command: str, timeout: float | None = None) -> dict[str, Any]:
     cfg = _shell_config()
     if timeout is None:
         timeout = float(cfg.get("timeout", 30.0))
-    max_output_bytes = int(cfg.get("max_output_bytes", 0) or 0)
+    # G5: default is now bounded (_DEFAULT_MAX_OUTPUT_BYTES); 0 = explicit
+    # legacy opt-out (no cap, no terminate — memory unbounded by choice).
+    max_output_bytes = int(
+        cfg.get("max_output_bytes", _DEFAULT_MAX_OUTPUT_BYTES) or 0
+    )
     # Empty/absent → UTF-8. The UTF-8 prefix below makes PS emit UTF-8, so the
     # two match and non-ASCII (CJK) output decodes cleanly. A NON-utf-8 override
     # (e.g. 'gbk') means a native exe ignores our UTF-8 request and emits its
@@ -213,44 +385,35 @@ def run_shell(command: str, timeout: float | None = None) -> dict[str, Any]:
     full_command = (_UTF8_PREFIX + command) if use_utf8_prefix else command
 
     try:
-        result = subprocess.run(
+        # G5: drain stdout/stderr incrementally and terminate the subprocess once
+        # the combined byte total crosses max_output_bytes — bounding memory
+        # (vs the old capture_output=True whole-output materialization) AND
+        # wall-clock (the runaway is killed at the cap, freeing the STA worker).
+        # orig_bytes is the RAW byte total read; truncated means the cap fired
+        # (subprocess was terminated). A trailing _truncate_streams pass keeps
+        # the returned stdout/stderr at the exact byte budget with stdout
+        # priority (the incremental read may stop just past the cap per stream).
+        stdout, stderr, returncode, truncated, orig_bytes = _run_bounded(
             ["powershell", "-NoProfile", "-NonInteractive", "-Command", full_command],
-            capture_output=True,
-            text=True,
             timeout=timeout,
             encoding=out_encoding,
-            errors="replace",
+            cap=max_output_bytes,
         )
 
-        stdout = result.stdout or ""
-        stderr = result.stderr or ""
-
-        # TODO #13: cap combined output so a runaway command can't flood the
-        # agent's context. Measured on the decoded text's UTF-8 byte length so
-        # the budget is encoding-stable. Applies to the returned stdout/stderr
-        # and thus the formatted `output`; the audit log is unaffected (it
-        # records commands, never output). stdout gets budget priority (the
-        # common case is a huge stdout with little/no stderr).
-        truncated = False
-        orig_bytes = 0
-        if max_output_bytes > 0:
-            orig_bytes = len((stdout + stderr).encode("utf-8", "replace"))
-            if orig_bytes > max_output_bytes:
-                stdout, stderr = _truncate_streams(
-                    stdout, stderr, max_output_bytes
-                )
-                truncated = True
+        if truncated:
+            stdout, stderr = _truncate_streams(stdout, stderr, max_output_bytes)
 
         output_parts = [f"## Shell\nCommand: {command}"]
         if stdout.strip():
             output_parts.append(stdout.strip())
         if stderr.strip():
             output_parts.append(f"[stderr]\n{stderr.strip()}")
-        output_parts.append(f"Exit code: {result.returncode}")
+        output_parts.append(f"Exit code: {returncode}")
 
         if truncated:
             output_parts.append(
-                f"\n[output truncated: {orig_bytes} bytes, limit {max_output_bytes}]"
+                f"\n[output truncated: command terminated after exceeding "
+                f"{max_output_bytes} bytes (produced {orig_bytes})]"
             )
 
         # "Access is denied" is the canonical opaque ACL failure; when the
@@ -261,7 +424,7 @@ def run_shell(command: str, timeout: float | None = None) -> dict[str, Any]:
         # acceptable trade-off for bounding context, and ACL failures rarely
         # produce multi-KB stdout.
         hint = None
-        if result.returncode != 0:
+        if returncode != 0:
             combined = f"{stdout}\n{stderr}".lower()
             if "access is denied" in combined:
                 hint = elevation_hint()
@@ -271,13 +434,12 @@ def run_shell(command: str, timeout: float | None = None) -> dict[str, Any]:
 
         return {
             "output": "\n".join(output_parts),
-            "exit_code": result.returncode,
+            "exit_code": returncode,
             "stdout": stdout,
             "stderr": stderr,
         }
-    except subprocess.TimeoutExpired:
-        raise TimeoutError(
-            f"Shell command timed out after {timeout}s: {command}"
-        )
     except FileNotFoundError:
+        # PowerShell missing — environment failure, not a wait condition.
+        # (TimeoutExpired is handled inside _run_bounded, which raises
+        # TimeoutError directly.)
         raise RuntimeError("PowerShell not found")

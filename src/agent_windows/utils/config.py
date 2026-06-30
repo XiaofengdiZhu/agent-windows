@@ -205,13 +205,16 @@ DEFAULT_CONFIG: dict[str, Any] = {
         # the CLI/MCP tool). A timeout now raises TimeoutError → WAIT_TIMEOUT
         # (-1003), not a generic internal error.
         "timeout": 30,
-        # TODO #13: cap on combined stdout+stderr size in BYTES. 0 = no cap
-        # (legacy behavior). When exceeded, output is truncated and a
-        # "[output truncated: ...]" marker is appended so a runaway command
-        # (e.g. `Get-Process | Format-Table` over a huge session) can't drown
-        # the agent's context. The audit log is unaffected (it records
-        # commands, not output).
-        "max_output_bytes": 0,
+        # G5: default cap on combined stdout+stderr in BYTES. run_shell now
+        # drains the subprocess incrementally and TERMINATES it once the running
+        # byte total crosses this cap — bounding daemon memory (the old
+        # capture_output=True materialized the whole output before any
+        # truncation) AND wall-clock (the runaway is killed at the cap). 1 MiB
+        # covers normal command output while stopping a `1..1e6 | %{...}`
+        # runaway from OOMing the single-threaded daemon within the timeout.
+        # Mirrors telemetry._MAX_BYTES. 0 = explicit legacy opt-out (no bound,
+        # no terminate — operator-acknowledged unbounded).
+        "max_output_bytes": 1024 * 1024,
         # TODO #13: override the output decode encoding. Empty (default) uses
         # UTF-8 — the run_shell command prefix forces PowerShell 5.1 to emit
         # UTF-8, so the two match and non-ASCII (CJK) output decodes cleanly.
