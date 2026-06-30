@@ -411,8 +411,12 @@ def run_shell(command: str, timeout: float | None = None) -> dict[str, Any]:
         output_parts.append(f"Exit code: {returncode}")
 
         if truncated:
+            # "reached" (not "exceeded"): the cap check is `>= cap`, so a total
+            # landing exactly on the cap also fires. 16 KiB chunk granularity
+            # makes an exact-cap landing near-impossible, but the wording stays
+            # honest with the code.
             output_parts.append(
-                f"\n[output truncated: command terminated after exceeding "
+                f"\n[output truncated: command terminated after reaching "
                 f"{max_output_bytes} bytes (produced {orig_bytes})]"
             )
 

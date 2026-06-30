@@ -639,6 +639,25 @@ class TestRunBoundedG5:
         assert "\ufffd" not in result["stdout"]
         assert len(result["stdout"].encode("utf-8")) <= 400
 
+    def test_concurrent_dual_stream_cap_aggregates(self):
+        """Both stdout and stderr produce concurrently and the cap is checked on
+        the COMBINED total — so the run terminates once stdout+stderr together
+        cross the cap, not when either alone does. This is the scenario
+        ``total_lock`` exists for: two reader threads incrementing the shared
+        counter under contention. The aggregated final output stays within the
+        byte budget (via _truncate_streams' stdout-priority split)."""
+        cap = 2000
+        # Each stream alone is under the cap, but together they exceed it — so
+        # the cap must fire on the SUM, proving the lock-aggregated count.
+        proc = _fake_proc(stdout=b"A" * 1500, stderr=b"B" * 1500)
+        with _shell_cfg(max_output_bytes=cap), \
+                patch("subprocess.Popen", return_value=proc):
+            result = run_shell("Get-Process")
+        proc.terminate.assert_called()  # combined crossed the cap → terminated
+        assert "[output truncated:" in result["output"]
+        combined = (result["stdout"] + result["stderr"]).encode("utf-8", "replace")
+        assert len(combined) <= cap
+
     def test_timeout_terminates_process(self):
         """A process that outlives the wall-clock deadline is terminated and
         raises TimeoutError (already covered by TestTimeout, restated here to

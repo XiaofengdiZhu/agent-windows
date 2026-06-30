@@ -560,7 +560,7 @@ agent-windows app resize "Notepad" --width 800 --height 600 --x 100 --y 100
 
 ### shell
 
-Run a PowerShell command. Output is forced to UTF-8 on the PowerShell side (so CJK and other non-ASCII output decodes cleanly), and is read incrementally; a command whose combined stdout+stderr exceeds `shell.max_output_bytes` (default 1 MiB) is TERMINATED at the cap with an `[output truncated: command terminated after exceeding M bytes]` marker. This bounds daemon memory (a runaway like `1..1e6 | %{ Write-Output ("X"*1000) }` can't OOM the single-threaded daemon within the timeout) and frees the worker instead of running the runaway for the full timeout. `max_output_bytes = 0` is an explicit opt-out (no cap, no terminate).
+Run a PowerShell command. Output is forced to UTF-8 on the PowerShell side (so CJK and other non-ASCII output decodes cleanly), and is read incrementally; a command whose combined stdout+stderr exceeds `shell.max_output_bytes` (default 1 MiB) is TERMINATED at the cap with an `[output truncated: command terminated after reaching M bytes]` marker. This bounds daemon memory (a runaway like `1..1e6 | %{ Write-Output ("X"*1000) }` can't OOM the single-threaded daemon within the timeout) and frees the worker instead of running the runaway for the full timeout. `max_output_bytes = 0` is an explicit opt-out (no cap, no terminate).
 
 ```bash
 agent-windows shell "Get-Process | Select-Object -First 5"
