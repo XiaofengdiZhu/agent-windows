@@ -46,7 +46,28 @@ def get_process_name(pid: int) -> str:
     """Get process executable name from PID via Win32 API."""
     PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
     ERROR_INSUFFICIENT_BUFFER = 122
-    handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    k32 = ctypes.windll.kernel32
+    # Declare the prototypes so a 64-bit HANDLE round-trips untruncated. ctypes
+    # otherwise defaults OpenProcess's return to c_int (32-bit), truncating a
+    # handle with the high bit set — then CloseHandle runs on the truncated
+    # pointer and silently leaks. (G4)
+    k32.OpenProcess.restype = ctypes.wintypes.HANDLE
+    k32.OpenProcess.argtypes = [
+        ctypes.wintypes.DWORD, ctypes.wintypes.BOOL, ctypes.wintypes.DWORD,
+    ]
+    k32.QueryFullProcessImageNameW.restype = ctypes.wintypes.BOOL
+    k32.QueryFullProcessImageNameW.argtypes = [
+        ctypes.wintypes.HANDLE, ctypes.wintypes.DWORD,
+        ctypes.wintypes.LPWSTR, ctypes.POINTER(ctypes.wintypes.DWORD),
+    ]
+    # CloseHandle's argtype must be HANDLE too: now that OpenProcess returns a
+    # real 64-bit HANDLE (restype above), passing it to a function whose
+    # argtype defaults to c_int raises ``ctypes.ArgumentError: OverflowError``
+    # for any handle value > 2**32 — out of the ``finally`` block here, which
+    # would mask the real result. (G4)
+    k32.CloseHandle.restype = ctypes.wintypes.BOOL
+    k32.CloseHandle.argtypes = [ctypes.wintypes.HANDLE]
+    handle = k32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
     if not handle:
         return ""
     try:
@@ -57,15 +78,15 @@ def get_process_name(pid: int) -> str:
         capacity = 260
         buf = ctypes.create_unicode_buffer(capacity)
         size = ctypes.wintypes.DWORD(capacity)
-        ok = ctypes.windll.kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size))
-        if not ok and ctypes.windll.kernel32.GetLastError() == ERROR_INSUFFICIENT_BUFFER:
+        ok = k32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size))
+        if not ok and k32.GetLastError() == ERROR_INSUFFICIENT_BUFFER:
             capacity = max(size.value + 1, capacity * 2)
             buf = ctypes.create_unicode_buffer(capacity)
             size = ctypes.wintypes.DWORD(capacity)
-            ok = ctypes.windll.kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size))
+            ok = k32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size))
         return os.path.basename(buf.value)
     except Exception:
         logger.debug("Failed to get process name for pid %d", pid, exc_info=True)
         return ""
     finally:
-        ctypes.windll.kernel32.CloseHandle(handle)
+        k32.CloseHandle(handle)

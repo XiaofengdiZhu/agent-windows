@@ -126,6 +126,13 @@ def _encode_value(value: Any, reg_type: str) -> str:
         if not isinstance(value, str):
             raise ValueError("value for Binary must be a hex string")
         hexstr = value.strip()
+        # Strip an optional ``0x``/``0X`` prefix. int(hexstr, 16) accepts it, so
+        # without stripping a value like "0xdeadbeef" passes validation but the
+        # render loop below re-slices the prefix as a byte → "0x0x,de,ad,...".
+        # DWord/QWord already normalize via int(value, 0); Binary is the str
+        # path and must normalize the same way. (G2)
+        if hexstr[:2].lower() == "0x":
+            hexstr = hexstr[2:]
         if len(hexstr) % 2 != 0:
             raise ValueError("Binary value must have an even number of hex digits")
         try:

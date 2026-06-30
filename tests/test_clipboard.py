@@ -27,16 +27,33 @@ def _win32clip():
 class TestGetClipboard:
     @patch("agent_windows.core.clipboard._open_clipboard")
     def test_returns_unicode_text(self, mock_open):
-        """CF_UNICODETEXT available → returns the text, stripped."""
+        """CF_UNICODETEXT available → returns the raw text (unmutated), preview stripped."""
         w32c = _win32clip()
         w32c.IsClipboardFormatAvailable.return_value = True
         w32c.GetClipboardData.return_value = "hello world\n"
         mock_open.return_value = w32c
         result = cb.get_clipboard()
-        assert result["text"] == "hello world"  # stripped
+        # The ``text`` field carries the EXACT clipboard contents — not stripped.
+        # Stripping would silently drop code indentation / passwords / tokens.
+        assert result["text"] == "hello world\n"
+        # The human-facing preview is stripped for readability.
         assert "hello world" in result["output"]
         w32c.GetClipboardData.assert_called_once_with(w32c.CF_UNICODETEXT)
         w32c.CloseClipboard.assert_called_once()
+
+    @patch("agent_windows.core.clipboard._open_clipboard")
+    def test_returns_text_with_significant_whitespace_intact(self, mock_open):
+        """G3: leading/trailing whitespace that carries meaning (code indent,
+        a trailing newline, surrounding spaces on a token) must survive in the
+        ``text`` field. Only the empty-check and the preview are stripped."""
+        w32c = _win32clip()
+        w32c.IsClipboardFormatAvailable.return_value = True
+        # e.g. a copied code line with 4-space indent.
+        w32c.GetClipboardData.return_value = "    return x\n"
+        mock_open.return_value = w32c
+        result = cb.get_clipboard()
+        assert result["text"] == "    return x\n"  # raw, unmutated
+        assert "return x" in result["output"]
 
     @patch("agent_windows.core.clipboard._open_clipboard")
     def test_non_text_clipboard_reports_non_text(self, mock_open):

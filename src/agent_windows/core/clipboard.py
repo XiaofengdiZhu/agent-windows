@@ -78,10 +78,13 @@ def get_clipboard(keyboard: bool = False) -> dict[str, Any]:
             if not w32c.IsClipboardFormatAvailable(w32c.CF_UNICODETEXT):
                 return {"output": "## Clipboard\n(Empty or non-text content)"}
             text = w32c.GetClipboardData(w32c.CF_UNICODETEXT) or ""
-            text = text.strip()
-            if not text:
+            # Only the empty-check and the human-facing preview are stripped.
+            # The returned ``text`` carries the EXACT clipboard contents:
+            # stripping would silently drop code indentation, passwords, and
+            # tokens whose significant whitespace sits at the edges. (G3)
+            if not text.strip():
                 return {"output": "## Clipboard\n(Empty)"}
-            return {"output": f"## Clipboard\n---\n{text}", "text": text}
+            return {"output": f"## Clipboard\n---\n{text.strip()}", "text": text}
         finally:
             w32c.CloseClipboard()
     except RuntimeError:

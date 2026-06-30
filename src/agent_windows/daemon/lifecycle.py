@@ -37,16 +37,33 @@ def is_process_alive(pid: int) -> bool:
     import ctypes.wintypes
 
     PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-    handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    k32 = ctypes.windll.kernel32
+    # Declare prototypes so a 64-bit HANDLE round-trips untruncated in BOTH
+    # directions. OpenProcess returns HANDLE (not the c_int default), and every
+    # handle-taking call (GetExitCodeProcess, CloseHandle) must accept HANDLE —
+    # otherwise passing a handle value > 2**32 raises
+    # ``ctypes.ArgumentError: OverflowError``, here out of the ``finally``.
+    # Mirrors utils/win32.get_process_name. (G4)
+    k32.OpenProcess.restype = ctypes.wintypes.HANDLE
+    k32.OpenProcess.argtypes = [
+        ctypes.wintypes.DWORD, ctypes.wintypes.BOOL, ctypes.wintypes.DWORD,
+    ]
+    k32.GetExitCodeProcess.restype = ctypes.wintypes.BOOL
+    k32.GetExitCodeProcess.argtypes = [
+        ctypes.wintypes.HANDLE, ctypes.POINTER(ctypes.wintypes.DWORD),
+    ]
+    k32.CloseHandle.restype = ctypes.wintypes.BOOL
+    k32.CloseHandle.argtypes = [ctypes.wintypes.HANDLE]
+    handle = k32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
     if not handle:
         return False
     try:
         exit_code = ctypes.wintypes.DWORD()
-        ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
+        k32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
         # STILL_ACTIVE = 259
         return exit_code.value == 259
     finally:
-        ctypes.windll.kernel32.CloseHandle(handle)
+        k32.CloseHandle(handle)
 
 
 def process_create_time_secs(pid: int) -> float | None:
@@ -75,6 +92,21 @@ def process_create_time_secs(pid: int) -> float | None:
                     ("dwHighDateTime", ctypes.wintypes.DWORD)]
 
     kernel32 = ctypes.windll.kernel32
+    # Declare prototypes so a 64-bit HANDLE round-trips untruncated in BOTH
+    # directions (OpenProcess returns HANDLE; GetProcessTimes/CloseHandle take
+    # HANDLE). See is_process_alive / utils/win32.get_process_name. (G4)
+    kernel32.OpenProcess.restype = ctypes.wintypes.HANDLE
+    kernel32.OpenProcess.argtypes = [
+        ctypes.wintypes.DWORD, ctypes.wintypes.BOOL, ctypes.wintypes.DWORD,
+    ]
+    kernel32.GetProcessTimes.restype = ctypes.wintypes.BOOL
+    kernel32.GetProcessTimes.argtypes = [
+        ctypes.wintypes.HANDLE,
+        ctypes.POINTER(FILETIME), ctypes.POINTER(FILETIME),
+        ctypes.POINTER(FILETIME), ctypes.POINTER(FILETIME),
+    ]
+    kernel32.CloseHandle.restype = ctypes.wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [ctypes.wintypes.HANDLE]
     handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
     if not handle:
         return None

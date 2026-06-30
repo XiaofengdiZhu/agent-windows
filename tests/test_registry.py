@@ -160,6 +160,20 @@ class TestEncodeValue:
     def test_binary_uppercase(self):
         assert _encode_value("DEADBEEF", "Binary") == "([byte[]](0xde,0xad,0xbe,0xef))"
 
+    def test_binary_strips_0x_prefix(self):
+        # G2: a ``0x`` prefix passes validation (int(hexstr, 16) accepts it) but
+        # used to render as ``0x0x,de,ad`` (the prefix re-sliced as a byte). It
+        # must render identically to the unprefixed form.
+        assert (
+            _encode_value("0xdeadbeef", "Binary")
+            == "([byte[]](0xde,0xad,0xbe,0xef))"
+        )
+        # Capitalized prefix too.
+        assert (
+            _encode_value("0XDEADBEEF", "Binary")
+            == "([byte[]](0xde,0xad,0xbe,0xef))"
+        )
+
     def test_binary_rejects_odd_length(self):
         with pytest.raises(ValueError, match="even number"):
             _encode_value("abc", "Binary")

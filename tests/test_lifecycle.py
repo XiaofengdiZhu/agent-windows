@@ -168,6 +168,63 @@ class TestProcessIdentity:
         # process as alive so the layered design isn't accidentally broken.
         assert is_process_alive(os.getpid()) is True
 
+    def test_open_process_declares_handle_restype(self):
+        # G4: OpenProcess must declare restype=wintypes.HANDLE so a 64-bit
+        # handle (high bit set) round-trips untruncated. Without it ctypes
+        # defaults to c_int and truncates the handle, making CloseHandle run on
+        # a wrong pointer (silent leak on a long-lived daemon). Both liveness
+        # primitives call OpenProcess, so the prototype must be set after either.
+        import ctypes
+        import ctypes.wintypes
+        from agent_windows.daemon import lifecycle
+
+        # Touch a path that exercises OpenProcess (the current process).
+        is_process_alive(os.getpid())
+        k32 = ctypes.windll.kernel32
+        assert k32.OpenProcess.restype is ctypes.wintypes.HANDLE, (
+            "OpenProcess.restype must be wintypes.HANDLE (not c_int default) "
+            "— else 64-bit handles are truncated and CloseHandle leaks"
+        )
+        assert k32.OpenProcess.argtypes == [
+            ctypes.wintypes.DWORD, ctypes.wintypes.BOOL, ctypes.wintypes.DWORD,
+        ]
+        # The handle-consuming calls must accept HANDLE too: passing a real
+        # 64-bit handle value (>2**32) to a function whose argtype defaults to
+        # c_int raises ctypes.ArgumentError instead of closing/querying — out
+        # of a finally block here, which would mask the real result.
+        for fn in ("GetExitCodeProcess", "CloseHandle"):
+            f = getattr(k32, fn)
+            assert f.argtypes and f.argtypes[0] is ctypes.wintypes.HANDLE, (
+                f"{fn}.argtypes[0] must be wintypes.HANDLE — else a wide "
+                "(>2**32) process handle overflows the c_int default and raises"
+            )
+
+    def test_wide_handle_does_not_overflow_close(self):
+        # G4 regression: with OpenProcess.restype=HANDLE but CloseHandle's
+        # argtype left at the c_int default, a genuine 64-bit handle value
+        # (>2**32) raises ctypes.ArgumentError when handed to CloseHandle. On a
+        # long-lived daemon such handles are common. Exercise the full path
+        # against a closed/wide handle value and assert no ArgumentError leaks.
+        import ctypes
+        import ctypes.wintypes
+
+        # is_process_alive opens the current process then CloseHandles it in a
+        # finally — this runs both prototypes end to end. If CloseHandle lacks
+        # the HANDLE argtype this would raise ArgumentError out of the finally
+        # rather than returning cleanly.
+        is_process_alive(os.getpid())
+        # Directly exercise the wide-value path: a value just above 2**32.
+        k32 = ctypes.windll.kernel32
+        wide = 0x1_0000_0000
+        try:
+            k32.CloseHandle(wide)  # argtypes must already be [HANDLE]
+        except ctypes.ArgumentError:
+            pytest.fail(
+                "CloseHandle raised ArgumentError on a wide (>2**32) handle — "
+                "argtypes was not set to [wintypes.HANDLE], so a real 64-bit "
+                "process handle would overflow in the finally and mask the result"
+            )
+
 
 class TestCleanupStaleDaemon:
     """cleanup_stale_daemon must distinguish 'confirmed dead' from 'can't tell'.

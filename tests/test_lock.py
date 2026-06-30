@@ -78,3 +78,54 @@ class TestDaemonSpawnLock:
                 "lock should fail-open (acquired=False) when the file can't be "
                 "opened, not pretend it holds the lock"
             )
+
+    def test_close_runs_even_if_unlock_raises(self, tmp_path, monkeypatch):
+        """G1: __exit__ must close the handle even when UnlockFileEx raises.
+
+        LockFileEx byte ranges are only released on handle close / process
+        death (no abandon), so a failing unlock that also skipped CloseHandle
+        would orphan the handle for the process's lifetime AND wedge every
+        subsequent CLI spawner in LockFileEx. The fix closes the handle
+        unconditionally and attempts unlock independently of close.
+        """
+        import win32file
+
+        lock_file = tmp_path / "daemon.lock"
+        lock = DaemonSpawnLock(lock_file)
+        lock.__enter__()
+        recorded_handle = lock._handle
+        assert recorded_handle is not None
+
+        # Force the unlock to raise during __exit__. CloseHandle must still run.
+        closed_handles = []
+        real_close = win32file.CloseHandle
+
+        def spy_close(h):
+            closed_handles.append(h)
+            return real_close(h)
+
+        monkeypatch.setattr(
+            win32file, "UnlockFileEx",
+            lambda *a, **k: (_ for _ in ()).throw(OSError("unlock boom")),
+        )
+        monkeypatch.setattr(win32file, "CloseHandle", spy_close)
+
+        lock.__exit__(None, None, None)
+
+        # The handle recorded at __enter__ must have been closed despite the
+        # UnlockFileEx failure (the bug: CloseHandle sat after the raise).
+        assert recorded_handle in closed_handles, (
+            "CloseHandle was skipped when UnlockFileEx raised — handle + lock "
+            "byte range leaked"
+        )
+
+        # And the byte range was actually released (close happened), so a fresh
+        # acquirer is NOT blocked. Restore CloseHandle for this check.
+        monkeypatch.setattr(win32file, "CloseHandle", real_close)
+        start = time.monotonic()
+        with DaemonSpawnLock(lock_file):
+            elapsed = time.monotonic() - start
+        assert elapsed < 0.5, (
+            "lock byte range was not released after the unlock failure — "
+            "subsequent CLI spawners would wedge in LockFileEx"
+        )

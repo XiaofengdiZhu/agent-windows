@@ -98,19 +98,34 @@ class DaemonSpawnLock:
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         if not self._acquired:
             return
-        try:
-            import win32file
+        # Release the byte range and the handle independently. A LockFileEx
+        # range is only released on handle close / process death (there is no
+        # abandon), so if UnlockFileEx raised and CloseHandle sat after it in
+        # the same try-block, BOTH would be skipped — orphaning the handle for
+        # the process's lifetime AND wedging every subsequent CLI spawner in
+        # LockFileEx (the byte range never frees). Close the handle
+        # unconditionally (in finally) so the range is always released, and
+        # attempt the unlock separately (best-effort — a failed unlock is
+        # non-fatal once the handle closes). (G1)
+        import win32file
 
+        try:
             win32file.UnlockFileEx(
                 self._handle, 0, 0xFFFF0000, self._overlapped
             )
-            win32file.CloseHandle(self._handle)
             logger.debug("Released daemon spawn lock: %s", self._lock_path)
         except Exception:
             logger.warning(
-                "Failed to release daemon spawn lock", exc_info=True
+                "Failed to unlock daemon spawn lock; closing the handle "
+                "anyway so the byte range is released", exc_info=True
             )
         finally:
+            try:
+                win32file.CloseHandle(self._handle)
+            except Exception:
+                logger.debug(
+                    "CloseHandle failed for daemon spawn lock", exc_info=True
+                )
             self._handle = None
             self._overlapped = None
             self._acquired = False

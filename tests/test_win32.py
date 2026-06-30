@@ -129,6 +129,50 @@ def test_non_insufficient_failure_returns_empty(monkeypatch):
     kernel.CloseHandle.assert_called_once_with(42)
 
 
+def test_open_process_declares_handle_restype(monkeypatch):
+    """G4: OpenProcess must declare restype=wintypes.HANDLE.
+
+    Without it ctypes defaults the return to a 32-bit ``c_int``, truncating a
+    64-bit HANDLE whose high bit is set — so a process handle that is "alive"
+    (nonzero) but lives above 2^31 reads back as a wrong/negative value, and
+    the subsequent CloseHandle runs on the truncated pointer (silent leak on a
+    long-lived daemon). Declaring the prototype is the documented ctypes fix.
+    """
+    import ctypes
+    import ctypes.wintypes
+
+    kernel = MagicMock()
+    kernel.OpenProcess.return_value = 12345
+
+    def _fill(handle, flags, buf, size_ref):
+        buf.value = "x.exe"
+        size_ref._obj.value = 5
+        return True
+
+    kernel.QueryFullProcessImageNameW.side_effect = _fill
+    monkeypatch.setattr(win32.ctypes.windll, "kernel32", kernel)
+
+    win32.get_process_name(123)
+    # The prototype MUST be set so a 64-bit HANDLE round-trips untruncated.
+    assert kernel.OpenProcess.restype is ctypes.wintypes.HANDLE, (
+        "OpenProcess.restype must be wintypes.HANDLE, not the c_int default — "
+        "else 64-bit handles are truncated and CloseHandle leaks"
+    )
+    # And argtypes so ctypes marshals the args correctly (BOOL/DWORD/PID).
+    assert kernel.OpenProcess.argtypes == [
+        ctypes.wintypes.DWORD, ctypes.wintypes.BOOL, ctypes.wintypes.DWORD,
+    ]
+    # CloseHandle must accept HANDLE too: once OpenProcess returns a real 64-bit
+    # HANDLE, passing it to a function whose argtype defaults to c_int raises
+    # ctypes.ArgumentError (a value > 2**32 overflows), out of the finally in
+    # get_process_name. (G4 — the wide-handle half of the fix.)
+    ch = getattr(win32.ctypes.windll.kernel32, "CloseHandle")
+    assert ch.argtypes and ch.argtypes[0] is ctypes.wintypes.HANDLE, (
+        "CloseHandle.argtypes[0] must be wintypes.HANDLE — else a wide "
+        "(>2**32) process handle overflows the c_int default and raises"
+    )
+
+
 # ── is_elevated: Win32 IsUserAnAdmin wrapper ───────────────────────────
 
 
