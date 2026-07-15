@@ -40,6 +40,76 @@ class TestHighlightImageBlacklist:
         mock_hr.assert_called_once()
 
 
+class TestHighlightRegionsValidation:
+    """G15: the highlight handler's list path must cap the region count (a
+    multi-thousand-region call forces an image.copy() + per-region draw on the
+    single STA worker — a CPU sink) and validate each region's coordinates
+    (the single-region shortcut calls validate_coordinates, but the list path
+    passed regions straight through unchecked)."""
+
+    def test_too_many_regions_rejected_before_draw(self, tmp_path):
+        """A region list over MAX_HIGHLIGHT_REGIONS is rejected (INVALID_PARAMS)
+        before highlight_region runs — no image.copy()/draw CPU sink."""
+        from agent_windows.daemon.router import HANDLERS
+        from agent_windows.daemon.handlers.screenshot import MAX_HIGHLIGHT_REGIONS
+
+        img = _tmp_image(tmp_path)
+        too_many = [
+            {"x1": 0, "y1": 0, "x2": 1, "y2": 1}
+            for _ in range(MAX_HIGHLIGHT_REGIONS + 1)
+        ]
+        with patch("agent_windows.core.screenshot.highlight_region") as mock_hr:
+            with pytest.raises(ValueError, match="regions"):
+                HANDLERS["highlight"]({"image": str(img), "regions": too_many})
+            mock_hr.assert_not_called()  # rejected before any draw work
+
+    def test_exactly_cap_regions_accepted(self, tmp_path):
+        """The cap is inclusive — exactly MAX_HIGHLIGHT_REGIONS is allowed."""
+        from agent_windows.daemon.router import HANDLERS
+        from agent_windows.daemon.handlers.screenshot import MAX_HIGHLIGHT_REGIONS
+
+        img = _tmp_image(tmp_path)
+        at_cap = [
+            {"x1": 0, "y1": 0, "x2": 1, "y2": 1}
+            for _ in range(MAX_HIGHLIGHT_REGIONS)
+        ]
+        with patch("agent_windows.core.screenshot.highlight_region") as mock_hr:
+            mock_hr.return_value = "/fake/out.png"
+            HANDLERS["highlight"]({"image": str(img), "regions": at_cap})
+        mock_hr.assert_called_once()
+
+    def test_list_path_validates_each_region_coords(self, tmp_path):
+        """The list path must validate each region's coordinates, mirroring the
+        single-region shortcut. An out-of-virtual-screen coordinate in a region
+        is rejected (CoordinateRangeError → COORDINATE_OUT_OF_RANGE) before
+        highlight_region runs."""
+        from agent_windows.daemon.router import HANDLERS
+
+        img = _tmp_image(tmp_path)
+        regions = [
+            {"x1": 0, "y1": 0, "x2": 1, "y2": 1},       # valid
+            {"x1": -99999, "y1": -99999,                 # wildly out of range
+             "x2": -99998, "y2": -99998},
+        ]
+        with patch("agent_windows.core.screenshot.highlight_region") as mock_hr:
+            with pytest.raises(ValueError):
+                HANDLERS["highlight"]({"image": str(img), "regions": regions})
+            mock_hr.assert_not_called()
+
+    def test_non_numeric_region_coord_rejected(self, tmp_path):
+        """A non-numeric coordinate in a region is rejected (the single-region
+        path does this via validate_coordinates; the list path must too)."""
+        from agent_windows.daemon.router import HANDLERS
+
+        img = _tmp_image(tmp_path)
+        regions = [{"x1": "abc", "y1": 0, "x2": 1, "y2": 1}]
+        with patch("agent_windows.core.screenshot.highlight_region") as mock_hr:
+            with pytest.raises(ValueError):
+                HANDLERS["highlight"]({"image": str(img), "regions": regions})
+            mock_hr.assert_not_called()
+
+
+
 class TestDiffImageBlacklist:
     def test_rejects_blacklisted_baseline(self):
         from agent_windows.daemon.router import HANDLERS

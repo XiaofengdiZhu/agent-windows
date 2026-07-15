@@ -9,6 +9,11 @@ from agent_windows.utils.debug import is_debug
 
 logger = logging.getLogger(__name__)
 
+# Upper bound on the number of highlight regions in one call. Each region is
+# drawn onto an image.copy() of the whole screen, so a multi-thousand-region
+# call pins the single STA worker in a CPU sink. (G15)
+MAX_HIGHLIGHT_REGIONS = 100
+
 
 @handler("screenshot")
 def _screenshot(params: dict) -> dict[str, Any]:
@@ -224,10 +229,11 @@ def _highlight(params: dict) -> dict[str, Any]:
     """Highlight regions on a screenshot."""
     from agent_windows.core.screenshot import capture_screenshot, highlight_region
 
+    from agent_windows.core.input_controller import validate_coordinates
+
     regions = params.get("regions", [])
     # Single-region shortcut: x1,y1,x2,y2 + label
     if not regions and "x1" in params:
-        from agent_windows.core.input_controller import validate_coordinates
         x1, y1 = validate_coordinates(require(params, "x1"), require(params, "y1"))
         x2, y2 = validate_coordinates(require(params, "x2"), require(params, "y2"))
         regions = [{
@@ -235,6 +241,19 @@ def _highlight(params: dict) -> dict[str, Any]:
             "label": params.get("label", ""),
             "color": params.get("color", "red"),
         }]
+
+    # G15: cap the region count (each region draws onto an image.copy() of the
+    # whole screen — thousands pin the single STA worker in a CPU sink) and
+    # validate every region's coordinates before any image work. The list path
+    # used to pass regions straight through unchecked (only the single-region
+    # shortcut above ran validate_coordinates).
+    if len(regions) > MAX_HIGHLIGHT_REGIONS:
+        raise ValueError(
+            f"Too many highlight regions: {len(regions)} (max {MAX_HIGHLIGHT_REGIONS})"
+        )
+    for r in regions:
+        validate_coordinates(r.get("x1"), r.get("y1"))
+        validate_coordinates(r.get("x2"), r.get("y2"))
 
     output = params.get("output", "")
     # L-05-W1: blacklist-check a user-supplied output path before any image work.
