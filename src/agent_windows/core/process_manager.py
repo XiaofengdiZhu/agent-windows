@@ -35,22 +35,22 @@ _TRUSTED_TASKKILL = True
 _SORT_KEYS = ("memory", "cpu", "name")
 
 
-def _image_name_for_pid(pid: int) -> str | None:
-    """Resolve the image name (e.g. ``"lsass.exe"``) for a live PID.
+def _query_image_name(handle: int) -> str | None:
+    """Resolve the image name (e.g. ``"lsass.exe"``) for an OPEN process handle.
 
     Uses :c:func:`QueryFullProcessImageNameW` (Windows Vista+, no module
-    snapshot needed) under ``PROCESS_QUERY_LIMITED_INFORMATION`` — the least
-    privilege that still works against protected processes a bare
-    ``OpenProcess`` would be denied. Returns the basename, lower-cased, with a
-    trailing ``.exe`` preserved (matching how :func:`kill_process` normalizes
-    the name path). Returns ``None`` when the PID is gone or can't be queried
-    (access denied / race). Callers must treat ``None`` as fail-closed, since a
-    PID whose image we can't confirm could be a recycled critical-process PID.
+    snapshot needed). Returns the basename, lower-cased, with a trailing
+    ``.exe`` preserved (matching how :func:`kill_process` normalizes the name
+    path). Returns ``None`` when the query fails (access denied / race). The
+    caller owns ``handle`` and must close it (:func:`_close_process_handle`).
+
+    Split out of :func:`_image_name_for_pid` so :func:`kill_process` can hold
+    the handle open across taskkill — Windows won't free/reuse a PID while any
+    handle to it remains, which closes the verify→kill TOCTOU window (G7).
     """
     import ctypes
     from ctypes import wintypes
 
-    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
     kernel32 = ctypes.windll.kernel32
     # QueryFullProcessImageNameW signature:
     #   BOOL QueryFullProcessImageNameW(HANDLE, DWORD flags, LPWSTR buf, PDWORD)
@@ -59,19 +59,82 @@ def _image_name_for_pid(pid: int) -> str | None:
         wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
         ctypes.POINTER(wintypes.DWORD),
     )
+    buf = ctypes.create_unicode_buffer(1024)
+    size = wintypes.DWORD(len(buf))
+    # flags=0 → return the image path with a drive letter (not device path).
+    if not kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+        return None
+    return os.path.basename(buf.value).lower()
 
+
+def _close_process_handle(handle: int) -> None:
+    """Best-effort :c:func:`CloseHandle` on a process handle opened by
+    :func:`_open_process_handle`. Never raises — a leaked handle is preferable
+    to masking the real error (kill result, raise) that the caller is surfacing.
+    Module-level seam so tests can assert close ordering (G7)."""
+    if not handle:
+        return
+    try:
+        import ctypes
+        ctypes.windll.kernel32.CloseHandle(handle)
+    except Exception:
+        logger.debug("CloseHandle failed for process handle %r", handle, exc_info=True)
+
+
+def _open_process_handle(pid: int) -> int:
+    """Open the process for query+terminate under the least privilege that
+    still works against protected processes a bare ``OpenProcess`` would be
+    denied. Returns the handle, or ``0`` on failure (gone / access denied).
+    The caller MUST close the returned handle via :func:`_close_process_handle`."""
+    import ctypes
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    kernel32 = ctypes.windll.kernel32
     handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    return handle or 0
+
+
+def _image_name_for_pid(pid: int) -> str | None:
+    """Resolve the image name (e.g. ``"lsass.exe"``) for a live PID.
+
+    Thin convenience wrapper: open → query → close. For callers that need the
+    handle held (e.g. :func:`kill_process` closing the verify→kill TOCTOU
+    window, G7), use :func:`_open_process_handle` + :func:`_query_image_name`
+    directly so the handle stays open across the kill.
+
+    Returns ``None`` when the PID is gone or can't be queried (access denied /
+    race). Callers must treat ``None`` as fail-closed, since a PID whose image
+    we can't confirm could be a recycled critical-process PID.
+    """
+    handle = _open_process_handle(pid)
     if not handle:
         return None
     try:
-        buf = ctypes.create_unicode_buffer(1024)
-        size = wintypes.DWORD(len(buf))
-        # flags=0 → return the image path with a drive letter (not device path).
-        if not kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
-            return None
-        return os.path.basename(buf.value).lower()
+        return _query_image_name(handle)
     finally:
-        kernel32.CloseHandle(handle)
+        _close_process_handle(handle)
+
+
+def _open_and_verify_pid(pid: int) -> tuple[str | None, int]:
+    """Open ``pid`` and resolve its image name WITHOUT closing the handle.
+
+    Returns ``(image_name, handle)`` where ``handle`` is an open process handle
+    the caller must close via :func:`_close_process_handle`, or ``(None, 0)``
+    if the PID is gone / access-denied (the handle is already closed in that
+    case — nothing for the caller to release).
+
+    Holding the handle across the subsequent taskkill is the G7 TOCTOU fix:
+    Windows will not free or reuse a PID while any handle to the process object
+    remains, so the identity verified here is the identity taskkill will act on.
+    """
+    handle = _open_process_handle(pid)
+    if not handle:
+        return (None, 0)
+    name = _query_image_name(handle)
+    if name is None:
+        # Query failed but the handle is open — close before reporting failure.
+        _close_process_handle(handle)
+        return (None, 0)
+    return (name, handle)
 
 
 def _num(value: Any, default: float = 0.0) -> float:
@@ -205,6 +268,10 @@ def kill_process(pid_or_name: str | int, force: bool = False) -> dict[str, Any]:
         pid = None
 
     # ── Critical-process protection (runs before any taskkill) ──────────
+    # verify_handle stays open across taskkill below (closed in finally) so the
+    # PID can't be freed/reused between identity verification and the kill — the
+    # G7 TOCTOU fix. None for the name path (no PID to pin).
+    verify_handle = 0
     if pid is not None:
         if pid in _CRITICAL_PIDS:
             raise ValueError(f"Refusing to kill system-critical PID {pid}")
@@ -217,7 +284,9 @@ def kill_process(pid_or_name: str | int, force: bool = False) -> dict[str, Any]:
         # the PID's image name and run the SAME critical-name check. If the name
         # can't be resolved (gone/access-denied/race) fail closed: a recycled
         # critical PID is exactly what we can't confirm safe. (SEC3-04)
-        image_name = _image_name_for_pid(pid)
+        # _open_and_verify_pid returns the handle OPEN — held until taskkill
+        # returns so the verified identity can't be swapped under us (G7).
+        image_name, verify_handle = _open_and_verify_pid(pid)
         if image_name is None:
             raise ValueError(
                 f"Refusing to kill PID {pid}: image name could not be verified "
@@ -225,6 +294,7 @@ def kill_process(pid_or_name: str | int, force: bool = False) -> dict[str, Any]:
             )
         check_name = image_name[:-4] if image_name.endswith(".exe") else image_name
         if check_name in _CRITICAL_NAMES:
+            _close_process_handle(verify_handle)
             raise ValueError(
                 f"Refusing to kill system-critical process '{image_name}' (PID {pid})"
             )
@@ -246,53 +316,65 @@ def kill_process(pid_or_name: str | int, force: bool = False) -> dict[str, Any]:
     # Run as an argv list: the name/PID is a literal element, so there is no
     # shell/PowerShell injection surface (SEC-06) and no quote escaping needed.
     # /F = 强杀 (TerminateProcess); without it taskkill posts WM_CLOSE (graceful).
-    if pid is not None:
-        argv = ["taskkill", "/PID", str(pid)]
-        label = f"PID {pid}"
-    else:
-        # name_str was set in the critical-name check above; reuse it.
-        # taskkill /IM wants the image name with extension; our API takes bare
-        # names (matching the old Stop-Process path). Append .exe if absent.
-        image = name_str if name_str.lower().endswith(".exe") else f"{name_str}.exe"
-        argv = ["taskkill", "/IM", image]
-        label = f"name '{name_str}'"
-
-    if force:
-        argv.append("/F")
-
+    # The whole block runs under finally so the G7 verify handle is released on
+    # every path (success, not-found raise, access-denied return, generic fail).
     try:
-        result = subprocess.run(
-            argv, capture_output=True, text=True, timeout=10,
-            encoding="utf-8", errors="replace",
-        )
-    except Exception as e:
-        raise RuntimeError(f"Failed to kill process {label}: {e}") from e
+        if pid is not None:
+            argv = ["taskkill", "/PID", str(pid)]
+            label = f"PID {pid}"
+        else:
+            # name_str was set in the critical-name check above; reuse it.
+            # taskkill /IM wants the image name with extension; our API takes
+            # bare names (matching the old Stop-Process path). Append .exe if
+            # absent.
+            image = name_str if name_str.lower().endswith(".exe") else f"{name_str}.exe"
+            argv = ["taskkill", "/IM", image]
+            label = f"name '{name_str}'"
 
-    rc = result.returncode
-    combined = f"{result.stdout}\n{result.stderr}".lower()
+        if force:
+            argv.append("/F")
 
-    # rc == 0 is the authoritative success signal for taskkill (ERROR_SUCCESS),
-    # independent of locale — taskkill emits localized text via MUI resources, so
-    # matching "success" would misreport a kill as failed on German/Japanese/…
-    # Windows. Treat rc 0 as success unconditionally.
-    if rc == 0:
-        mode = "force-killed" if force else "terminated"
-        return {"output": f"## Process Kill\n{label}\nStatus: {mode}"}
+        try:
+            result = subprocess.run(
+                argv, capture_output=True, text=True, timeout=10,
+                encoding="utf-8", errors="replace",
+            )
+        except Exception as e:
+            raise RuntimeError(f"Failed to kill process {label}: {e}") from e
 
-    # No such process (covers both "not found" and "no running instance of…").
-    # These English markers are best-effort sub-classification on the failure
-    # path; a non-English message simply degrades to the generic "failed" tail,
-    # which is safe (we never claim success we didn't get).
-    not_found_markers = ("not found", "no running instance", "not a valid")
-    if any(m in combined for m in not_found_markers):
-        raise ValueError(f"No such process with {label}")
+        rc = result.returncode
+        combined = f"{result.stdout}\n{result.stderr}".lower()
 
-    # Access denied → the process exists but we lack rights (often needs admin).
-    if "access" in combined and "denied" in combined:
-        return {"output": f"## Process Kill\n{label}\nStatus: failed (access denied)"}
+        # rc == 0 is the authoritative success signal for taskkill
+        # (ERROR_SUCCESS), independent of locale — taskkill emits localized text
+        # via MUI resources, so matching "success" would misreport a kill as
+        # failed on German/Japanese/… Windows. Treat rc 0 as success
+        # unconditionally.
+        if rc == 0:
+            mode = "force-killed" if force else "terminated"
+            return {"output": f"## Process Kill\n{label}\nStatus: {mode}"}
 
-    # Anything else (e.g. a graceful close refused, child still spawning) →
-    # failed, surfacing taskkill's own wording for the agent to act on.
-    detail = (result.stderr or result.stdout or "").strip().splitlines()
-    tail = detail[-1] if detail else f"exit code {rc}"
-    return {"output": f"## Process Kill\n{label}\nStatus: failed ({tail})"}
+        # No such process (covers both "not found" and "no running instance
+        # of…"). These English markers are best-effort sub-classification on the
+        # failure path; a non-English message simply degrades to the generic
+        # "failed" tail, which is safe (we never claim success we didn't get).
+        not_found_markers = ("not found", "no running instance", "not a valid")
+        if any(m in combined for m in not_found_markers):
+            raise ValueError(f"No such process with {label}")
+
+        # Access denied → the process exists but we lack rights (needs admin).
+        if "access" in combined and "denied" in combined:
+            return {"output": f"## Process Kill\n{label}\nStatus: failed (access denied)"}
+
+        # Anything else (e.g. a graceful close refused, child still spawning) →
+        # failed, surfacing taskkill's own wording for the agent to act on.
+        detail = (result.stderr or result.stdout or "").strip().splitlines()
+        tail = detail[-1] if detail else f"exit code {rc}"
+        return {"output": f"## Process Kill\n{label}\nStatus: failed ({tail})"}
+    finally:
+        # G7: release the verify handle now that taskkill has resolved+acted on
+        # the PID. Held across taskkill above so the PID couldn't be freed/reused
+        # between identity verification and the kill. No-op on the name path
+        # (verify_handle == 0) and on the verify-failed/critical-name path
+        # (already closed before the raise).
+        _close_process_handle(verify_handle)

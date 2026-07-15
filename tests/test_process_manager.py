@@ -284,8 +284,8 @@ class TestKillByPid:
     def test_terminates_pid_graceful(self, mock_run):
         """Graceful PID kill → taskkill /PID <pid>, no /F."""
         mock_run.return_value = _completed("SUCCESS: signal sent", 0)
-        with patch("agent_windows.core.process_manager._image_name_for_pid",
-                   return_value="notepad.exe"):
+        with patch("agent_windows.core.process_manager._open_and_verify_pid",
+                   return_value=("notepad.exe", 0xDEADBEEF)):
             result = pm.kill_process(1234)
         argv = mock_run.call_args.args[0]
         assert argv == ["taskkill", "/PID", "1234"]
@@ -296,8 +296,8 @@ class TestKillByPid:
     def test_force_pid_adds_F(self, mock_run):
         """force PID kill → taskkill /PID <pid> /F."""
         mock_run.return_value = _completed("SUCCESS: forcibly", 0)
-        with patch("agent_windows.core.process_manager._image_name_for_pid",
-                   return_value="notepad.exe"):
+        with patch("agent_windows.core.process_manager._open_and_verify_pid",
+                   return_value=("notepad.exe", 0xDEADBEEF)):
             result = pm.kill_process(1234, force=True)
         argv = mock_run.call_args.args[0]
         assert argv == ["taskkill", "/PID", "1234", "/F"]
@@ -307,11 +307,11 @@ class TestKillByPid:
     def test_unknown_pid_raises_not_silent(self, mock_run):
         """taskkill 'not found' for a PID → raise (not silent success).
 
-        _image_name_for_pid is patched to a benign name so the PID passes the
+        _open_and_verify_pid is patched to a benign name so the PID passes the
         critical-name gate and reaches taskkill, which reports 'not found'."""
         mock_run.return_value = _completed("", 128, stderr="not found")
-        with patch("agent_windows.core.process_manager._image_name_for_pid",
-                   return_value="notepad.exe"):
+        with patch("agent_windows.core.process_manager._open_and_verify_pid",
+                   return_value=("notepad.exe", 0xDEADBEEF)):
             with pytest.raises(ValueError, match="No such process with PID 9999"):
                 pm.kill_process("9999")
 
@@ -319,8 +319,8 @@ class TestKillByPid:
     def test_pid_accepts_string_int(self, mock_run):
         """A numeric string is parsed as a PID (CLI/MCP pass-through)."""
         mock_run.return_value = _completed("SUCCESS: ok", 0)
-        with patch("agent_windows.core.process_manager._image_name_for_pid",
-                   return_value="notepad.exe"):
+        with patch("agent_windows.core.process_manager._open_and_verify_pid",
+                   return_value=("notepad.exe", 0xDEADBEEF)):
             pm.kill_process("4321")
         argv = mock_run.call_args.args[0]
         assert argv == ["taskkill", "/PID", "4321"]
@@ -332,14 +332,17 @@ class TestKillByPidImageNameGate:
     and calls kill_process(<pid>) — the old code only checked _CRITICAL_PIDS
     {0,4}+self for PIDs, so any other critical process (lsass → reboot,
     csrss → BSOD) was reachable. Now the PID's image name is resolved and
-    checked; if it can't be resolved, kill fails closed."""
+    checked; if it can't be resolved, kill fails closed.
+
+    (G7: kill_process now resolves via _open_and_verify_pid, which returns
+    (name, handle) — handle held across taskkill. Tests patch that seam.)"""
 
     @pytest.mark.parametrize("image", ["lsass.exe", "csrss.exe", "wininit.exe"])
     def test_pid_resolving_to_critical_name_is_refused(self, image):
         """A PID whose image name is critical (resolved via win32) is refused
         before taskkill — closing the read-the-PID-from-the-listing bypass."""
-        with patch("agent_windows.core.process_manager._image_name_for_pid",
-                   return_value=image):
+        with patch("agent_windows.core.process_manager._open_and_verify_pid",
+                   return_value=(image, 0xDEADBEEF)):
             with patch("agent_windows.core.process_manager.subprocess.run") as mock_run:
                 with pytest.raises(ValueError, match="system-critical"):
                     pm.kill_process(9876)
@@ -347,8 +350,8 @@ class TestKillByPidImageNameGate:
 
     def test_pid_resolving_to_critical_name_reports_pid(self):
         """The refusal message names the PID so the operator can trace it."""
-        with patch("agent_windows.core.process_manager._image_name_for_pid",
-                   return_value="lsass.exe"):
+        with patch("agent_windows.core.process_manager._open_and_verify_pid",
+                   return_value=("lsass.exe", 0xDEADBEEF)):
             with pytest.raises(ValueError, match=r"PID 9876"):
                 pm.kill_process(9876)
 
@@ -356,8 +359,8 @@ class TestKillByPidImageNameGate:
         """If the image name can't be resolved (gone / access denied / race)
         we must NOT proceed to taskkill — a recycled critical PID is exactly
         the case we can't confirm safe. Fail closed."""
-        with patch("agent_windows.core.process_manager._image_name_for_pid",
-                   return_value=None):
+        with patch("agent_windows.core.process_manager._open_and_verify_pid",
+                   return_value=(None, 0)):
             with patch("agent_windows.core.process_manager.subprocess.run") as mock_run:
                 with pytest.raises(ValueError, match="could not be verified"):
                     pm.kill_process(9876)
@@ -367,12 +370,94 @@ class TestKillByPidImageNameGate:
         """A PID resolving to a normal app still reaches taskkill (not
         over-blocked)."""
         mock_run = _completed("SUCCESS: ok", 0)
-        with patch("agent_windows.core.process_manager._image_name_for_pid",
-                   return_value="notepad.exe"):
+        with patch("agent_windows.core.process_manager._open_and_verify_pid",
+                   return_value=("notepad.exe", 0xDEADBEEF)):
             with patch("agent_windows.core.process_manager.subprocess.run",
                        return_value=mock_run):
                 result = pm.kill_process(5555)
         assert "Status: terminated" in result["output"]
+
+
+class TestKillByPidHoldsHandleAcrossTaskkill:
+    """G7 (TOCTOU): the OpenProcess handle resolved during verification must
+    stay open UNTIL taskkill returns — not be closed right after the image-name
+    query. Windows rule: a PID can't be freed/reused while ANY handle to the
+    process object remains. Closing the handle before taskkill reopens the
+    verify→kill window where the PID may exit and be reused (e.g. recycled to
+    lsass), and taskkill /PID then kills the wrong process.
+
+    kill_process now resolves the image via _open_and_verify_pid (returns
+    (name, handle)) and closes the handle through _close_process_handle in a
+    finally. We patch both module-level seam functions and assert CloseHandle
+    is called AFTER subprocess.run (taskkill) — ordering is the TOCTOU fix."""
+
+    @patch("agent_windows.core.process_manager.subprocess.run")
+    def test_handle_closed_after_taskkill_graceful(self, mock_run):
+        """Graceful path: the verify handle must outlive taskkill. The close
+        seam records 'after' only if subprocess.run ran first."""
+        seq = {"taskkill_done": False, "closed_at": None}
+
+        def fake_open_and_verify(pid):
+            return ("notepad.exe", 0xDEADBEEF)
+
+        def fake_close(handle):
+            seq["closed_at"] = "after" if seq["taskkill_done"] else "before"
+
+        def run_spy(*a, **k):
+            seq["taskkill_done"] = True
+            return _completed("SUCCESS: signal sent", 0)
+
+        mock_run.side_effect = run_spy
+        with patch("agent_windows.core.process_manager._open_and_verify_pid",
+                   side_effect=fake_open_and_verify), \
+                patch("agent_windows.core.process_manager._close_process_handle",
+                      side_effect=fake_close):
+            result = pm.kill_process(1234)
+        assert "Status: terminated" in result["output"]
+        assert seq["closed_at"] == "after", (
+            f"handle closed {seq['closed_at']} taskkill — TOCTOU window open "
+            "(handle must be held until taskkill returns so the PID can't be "
+            "freed/reused between verify and kill)"
+        )
+
+    @patch("agent_windows.core.process_manager.subprocess.run")
+    def test_handle_closed_even_when_taskkill_fails(self, mock_run):
+        """The handle must be closed in a finally — even on the failure path
+        (taskkill 'not found'), so we never leak the OpenProcess handle."""
+        seq = {"taskkill_done": False, "closed_at": None}
+
+        def fake_open_and_verify(pid):
+            return ("notepad.exe", 0xDEADBEEF)
+
+        def fake_close(handle):
+            seq["closed_at"] = "after" if seq["taskkill_done"] else "before"
+
+        def run_spy(*a, **k):
+            seq["taskkill_done"] = True
+            return _completed("", 128, stderr="not found")
+
+        mock_run.side_effect = run_spy
+        with patch("agent_windows.core.process_manager._open_and_verify_pid",
+                   side_effect=fake_open_and_verify), \
+                patch("agent_windows.core.process_manager._close_process_handle",
+                      side_effect=fake_close):
+            with pytest.raises(ValueError, match="No such process"):
+                pm.kill_process(1234)
+        assert seq["closed_at"] == "after", (
+            "handle not closed on the taskkill-failure path — leaked OpenProcess"
+        )
+
+    def test_unresolvable_pid_releases_no_handle(self):
+        """If _open_and_verify_pid fails closed (returns handle 0 / name None),
+        kill must refuse BEFORE taskkill and never call the close seam."""
+        with patch("agent_windows.core.process_manager._open_and_verify_pid",
+                   return_value=(None, 0)), \
+                patch("agent_windows.core.process_manager._close_process_handle") as mock_close, \
+                patch("agent_windows.core.process_manager.subprocess.run") as mock_run:
+            with pytest.raises(ValueError, match="could not be verified"):
+                pm.kill_process(9876)
+            mock_run.assert_not_called()
+            mock_close.assert_not_called()
 
 
 class TestImageNameForPid:
