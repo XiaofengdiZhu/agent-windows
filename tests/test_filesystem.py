@@ -106,6 +106,38 @@ class TestReadFileEncoding:
         result = read_file(str(f), offset=1, limit=1, encoding="gbk")
         assert result["content"] == "行一\n"
 
+    def test_default_strips_utf8_bom_whole_file(self, tmp_path):
+        """G9: the default UTF-8 read must strip a leading BOM (EF BB BF).
+        Reading with plain utf-8 leaves it as U+FEFF in content, corrupting
+        the first line and breaking Unix tool interop. utf-8-sig strips it."""
+        from agent_windows.core.filesystem import read_file
+        f = tmp_path / "bom.txt"
+        f.write_bytes(b"\xef\xbb\xbfhello\n")
+        result = read_file(str(f))
+        assert result["content"] == "hello\n"
+        assert "\ufeff" not in result["content"]
+
+    def test_default_strips_utf8_bom_line_range(self, tmp_path):
+        """G9: BOM stripping also applies in line-range (offset/limit) mode.
+        A small file takes the readlines branch (not the streaming branch),
+        but both read via read_enc so the BOM is stripped either way."""
+        from agent_windows.core.filesystem import read_file
+        f = tmp_path / "bom.txt"
+        f.write_bytes(b"\xef\xbb\xbffirst\nsecond\n")
+        result = read_file(str(f), offset=1, limit=1)
+        assert result["content"] == "first\n"
+        assert "\ufeff" not in result["content"]
+
+    def test_explicit_encoding_does_not_strip_bom(self, tmp_path):
+        """G9 scope guard: an EXPLICIT encoding must not gain BOM stripping
+        (utf-8-sig is only the default path). Passing encoding='utf-8'
+        explicitly keeps the BOM — the caller chose plain utf-8."""
+        from agent_windows.core.filesystem import read_file
+        f = tmp_path / "bom.txt"
+        f.write_bytes(b"\xef\xbb\xbfhello\n")
+        result = read_file(str(f), encoding="utf-8")
+        assert result["content"].startswith("\ufeff")
+
 
 class TestWriteFile:
     def test_write_creates_file(self, tmp_path):

@@ -496,6 +496,13 @@ def read_file(path: str, offset: int | None = None, limit: int | None = None,
         except LookupError as e:
             raise ValueError(str(e)) from None
     enc = encoding or "utf-8"
+    # The default read uses utf-8-sig so a leading UTF-8 BOM (EF BB BF) is
+    # stripped instead of leaking into content as U+FEFF (G9). An explicit
+    # encoding keeps BOM handling whatever that codec does — utf-8-sig only
+    # applies when the caller did NOT choose an encoding. enc stays plain so
+    # byte-budget counting (len(line.encode(enc))) isn't skewed by a re-added
+    # BOM (utf-8-sig ENCODE prepends one).
+    read_enc = "utf-8-sig" if not encoding else enc
     # An explicitly-chosen encoding should fail loudly on a wrong codepage
     # (strict) — returning mojibake with no signal defeats the purpose. The
     # default UTF-8 path keeps errors="replace" for legacy robustness.
@@ -552,7 +559,7 @@ def read_file(path: str, offset: int | None = None, limit: int | None = None,
             # so a multi-GB file (or a file with multi-MB lines) can't force the
             # daemon to hold more than ~MAX_READ_BYTES in memory.
             if size <= MAX_READ_BYTES:
-                with p.open("r", encoding=enc, errors=errors) as f:
+                with p.open("r", encoding=read_enc, errors=errors) as f:
                     lines = f.readlines()
                 total = len(lines)
                 selected = lines[start:start + line_window]
@@ -575,7 +582,7 @@ def read_file(path: str, offset: int | None = None, limit: int | None = None,
                 nlines = 0
                 byte_truncated = False
                 reached_eof = False
-                with p.open("r", encoding=enc, errors=errors) as f:
+                with p.open("r", encoding=read_enc, errors=errors) as f:
                     for line in itertools.islice(f, start, start + line_window):
                         nbytes += len(line.encode(enc, errors="replace"))
                         if nbytes > MAX_READ_BYTES:
@@ -670,9 +677,9 @@ def read_file(path: str, offset: int | None = None, limit: int | None = None,
             # codepage raises UnicodeDecodeError → binary fallback below.
             with p.open("rb") as f:
                 raw = f.read(MAX_READ_BYTES)
-            content = raw.decode(enc, errors=errors)
+            content = raw.decode(read_enc, errors=errors)
         else:
-            content = p.read_text(encoding=enc, errors=errors)
+            content = p.read_text(encoding=read_enc, errors=errors)
     except UnicodeDecodeError:
         # The file isn't decodable in `enc`. Report it as binary using the
         # already-known stat size rather than read_bytes() — that would load
