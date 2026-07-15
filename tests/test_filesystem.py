@@ -1,4 +1,6 @@
 """Tests for filesystem operations: read, write, list, and path validation."""
+import os
+
 import pytest
 from pathlib import Path
 
@@ -977,6 +979,27 @@ class TestCopyPath:
             copy_path(str(src), str(dst), overwrite=True)
         assert (dst / "keep.txt").exists()
 
+    def test_copy_overwrite_junction_dst_clears_link_not_target(self, tmp_path):
+        """G8: overwriting a directory-junction DESTINATION replaces the junction
+        with the copied tree and leaves the junction's target intact. The old
+        code resolved dst, so the overwrite rmtree'd the junction's real
+        target."""
+        from agent_windows.core.filesystem import copy_path
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "f.txt").write_text("x", encoding="utf-8")
+        target = tmp_path / "real_dst"
+        target.mkdir()
+        (target / "keep.txt").write_text("precious", encoding="utf-8")
+        dst_link = tmp_path / "dst_link"
+        TestReparsePointEvasion._make_junction(dst_link, target)
+        copy_path(str(src), str(dst_link), overwrite=True)
+        # dst_link is now a REAL directory holding the copy, not a junction.
+        assert (dst_link / "f.txt").exists()
+        assert not dst_link.is_junction()
+        assert target.exists()                 # the real target survived
+        assert (target / "keep.txt").exists()  # and its contents
+
 
 class TestMovePath:
     def test_move_file(self, tmp_path):
@@ -1046,6 +1069,23 @@ class TestMovePath:
             move_path(str(src), str(dst), overwrite=True)
         assert dst.read_text(encoding="utf-8") == "old"  # file untouched
 
+    def test_move_junction_moves_link_not_target(self, tmp_path):
+        """G8: move_path on a directory junction must move the JUNCTION, leaving
+        the target tree in place. The old code resolved both paths, so
+        shutil.move relocated the real target dir out from under the junction."""
+        from agent_windows.core.filesystem import move_path
+        target = tmp_path / "real"
+        target.mkdir()
+        (target / "keep.txt").write_text("precious", encoding="utf-8")
+        link = tmp_path / "link"
+        TestReparsePointEvasion._make_junction(link, target)
+        dst = tmp_path / "moved"
+        move_path(str(link), str(dst))
+        assert not link.exists()           # the junction is gone from its spot
+        assert dst.exists()                # something now lives at the dst path
+        assert target.exists()             # the real target dir was NOT moved
+        assert (target / "keep.txt").exists()
+
 
 class TestDeletePath:
     def test_delete_file(self, tmp_path):
@@ -1092,6 +1132,41 @@ class TestDeletePath:
         target = Path.home() / ".agent-windows" / "evil_delete.txt"
         with pytest.raises(ValueError, match="install tree"):
             delete_path(str(target))
+
+    def test_delete_junction_removes_link_not_target(self, tmp_path):
+        """G8: delete_path on a directory junction must remove the JUNCTION,
+        leaving the target tree intact. The old code resolved the path before
+        operating, so shutil.rmtree walked into the target dir and deleted the
+        real contents — destroying data the caller never pointed at.
+
+        Uses recursive=True (the only way to clear a non-empty junction's
+        apparent contents) to reach the rmtree path that used to destroy the
+        target."""
+        from agent_windows.core.filesystem import delete_path
+        target = tmp_path / "real"
+        target.mkdir()
+        (target / "keep.txt").write_text("precious", encoding="utf-8")
+        link = tmp_path / "link"
+        TestReparsePointEvasion._make_junction(link, target)
+        delete_path(str(link), recursive=True)
+        assert not link.exists()           # the junction is gone
+        assert target.exists()             # the target dir survives
+        assert (target / "keep.txt").exists()  # and its contents
+
+    def test_delete_file_symlink_removes_link_not_target(self, tmp_path):
+        """G8: delete_path on a file symlink removes the link, not the target."""
+        from agent_windows.core.filesystem import delete_path
+        target = tmp_path / "real.txt"
+        target.write_text("precious", encoding="utf-8")
+        link = tmp_path / "link.txt"
+        try:
+            os.symlink(target, link)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks unavailable on this host")
+        delete_path(str(link))
+        assert not link.exists()
+        assert target.exists()
+        assert target.read_text(encoding="utf-8") == "precious"
 
 
 class TestSearchFiles:

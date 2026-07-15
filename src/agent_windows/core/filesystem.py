@@ -304,6 +304,19 @@ def validate_write_path(path: str) -> Path:
     return _validate_write_path(path)
 
 
+def _literal_path(path: str) -> Path:
+    """The user's path WITHOUT ``.resolve()`` — expands ``~`` and anchors a
+    relative path against the Desktop, but does NOT follow reparse points.
+
+    Used by delete/move/copy so they act on the path the caller named (a
+    symlink or junction itself), not the target it points to. The resolved path
+    is still computed first by ``_validate_path``/``_validate_write_path`` for
+    the blacklist + install-tree safety check (M-03) — only the OPERATION
+    target is re-derived literally here, separating the safety check (resolved)
+    from the acted-on path (literal). (G8)"""
+    return Path(_resolve_user_path(path)).expanduser()
+
+
 def validate_executable_path(path: str) -> None:
     """Refuse to launch a binary from a sensitive location (L-03).
 
@@ -786,6 +799,22 @@ def _check_overwrite_shape(src: Path, dst: Path) -> None:
         raise ValueError(f"Cannot overwrite a file with a directory: {dst}")
 
 
+def _remove_path(p: Path) -> None:
+    """Remove a literal path, junction/symlink-aware.
+
+    A symlink or junction is detached as a LINK (unlink for a file symlink,
+    os.rmdir for a directory junction — shutil.rmtree refuses reparse points
+    and would need the target's contents). A plain dir uses rmtree; a plain
+    file uses unlink. Used by copy/move overwrite to clear the named path
+    without destroying a linked target. (G8)"""
+    if p.is_symlink() or p.is_junction():
+        os.rmdir(p) if p.is_dir() else p.unlink()
+    elif p.is_dir():
+        shutil.rmtree(p)
+    else:
+        p.unlink()
+
+
 @_with_elevation_hint
 def copy_path(source: str, destination: str, overwrite: bool = False) -> dict[str, Any]:
     """Copy a file or directory to ``destination`` (TODO #4).
@@ -793,10 +822,20 @@ def copy_path(source: str, destination: str, overwrite: bool = False) -> dict[st
     Source is read-validated, destination write-validated (so a copy can't
     land inside the agent's install/data tree or a blacklisted dir). Refuses
     to overwrite an existing destination unless ``overwrite=True``.
+
+    The DESTINATION is operated on literally: overwriting a junction
+    destination removes the junction, not its target tree (G8 — matches
+    ``cp``/destructive ops acting on the named path). The source stays
+    resolved so a symlink/junction source copies its contents (cp's default
+    follow-link behavior); copy is non-destructive at the source.
     """
     overwrite = _as_bool(overwrite)
+    # Safety checks on resolved paths. Source stays resolved (read its contents);
+    # destination is literal so an overwrite clears the named path, not a linked
+    # target (G8).
     src = _validate_path(_resolve_user_path(source))
-    dst = _validate_write_path(_resolve_user_path(destination))
+    _validate_write_path(_resolve_user_path(destination))
+    dst = _literal_path(destination)
     if not src.exists():
         raise FileNotFoundError(f"Source not found: {source}")
     if dst.exists() and not overwrite:
@@ -805,13 +844,13 @@ def copy_path(source: str, destination: str, overwrite: bool = False) -> dict[st
     if src.is_file():
         if dst.exists() and overwrite:
             _check_overwrite_shape(src, dst)
-            shutil.rmtree(dst) if dst.is_dir() else dst.unlink()
+            _remove_path(dst)  # junction/symlink-aware (G8)
         shutil.copy2(src, dst)
         kind = "file"
     elif src.is_dir():
         if dst.exists() and overwrite:
             _check_overwrite_shape(src, dst)
-            shutil.rmtree(dst)
+            _remove_path(dst)  # junction/symlink-aware (G8)
         shutil.copytree(src, dst)
         kind = "directory"
     else:
@@ -827,18 +866,25 @@ def move_path(source: str, destination: str, overwrite: bool = False) -> dict[st
     REMOVES the file from the source path, so it's a write to that location —
     the agent's install/data tree and blacklist must protect it, exactly as
     they do for delete_path. (review B2)
+
+    Operates on the LITERAL paths: moving a symlink or junction relocates the
+    link itself, not its target (G8 — matches ``mv``). Resolved paths are still
+    checked above for blacklist/install-tree safety.
     """
     overwrite = _as_bool(overwrite)
-    src = _validate_write_path(_resolve_user_path(source))
-    dst = _validate_write_path(_resolve_user_path(destination))
-    if not src.exists():
+    # Safety checks on resolved paths; operations on literal paths (G8).
+    _validate_write_path(_resolve_user_path(source))
+    _validate_write_path(_resolve_user_path(destination))
+    src = _literal_path(source)
+    dst = _literal_path(destination)
+    if not src.exists() and not src.is_symlink() and not src.is_junction():
         raise FileNotFoundError(f"Source not found: {source}")
     if dst.exists() and not overwrite:
         raise ValueError(f"Destination already exists: {destination}. Set overwrite=True to replace.")
     dst.parent.mkdir(parents=True, exist_ok=True)
     if dst.exists() and overwrite:
         _check_overwrite_shape(src, dst)
-        shutil.rmtree(dst) if dst.is_dir() else dst.unlink()
+        _remove_path(dst)  # junction/symlink-aware (G8)
     shutil.move(src, dst)
     return {"output": f"## File Move\nMoved: {src} -> {dst}"}
 
@@ -851,12 +897,23 @@ def delete_path(path: str, recursive: bool = False) -> dict[str, Any]:
     the agent's install/data-tree protection both apply: a prompt-injected
     delete can't remove the agent's own source, config, or blacklisted files).
     A non-empty directory requires ``recursive=True``; otherwise it's refused.
+
+    Operates on the LITERAL path: deleting a symlink or junction removes the
+    link itself, not its target (G8 — matches ``rm``/``Remove-Item``). The
+    resolved path is still checked above for blacklist/install-tree safety.
     """
     recursive = _as_bool(recursive)
-    p = _validate_write_path(_resolve_user_path(path))
-    if not p.exists():
+    # Safety check on the resolved path; operation on the literal path (G8).
+    _validate_write_path(_resolve_user_path(path))
+    p = _literal_path(path)
+    if not p.exists() and not p.is_symlink() and not p.is_junction():
         raise FileNotFoundError(f"Path not found: {path}")
-    if p.is_file() or p.is_symlink():
+    # A symlink/junction is reported distinctly; _remove_path detaches the link
+    # without touching its target (G8).
+    if p.is_symlink() or p.is_junction():
+        _remove_path(p)
+        return {"output": f"## File Delete\nDeleted link: {p}"}
+    if p.is_file():
         p.unlink()
         return {"output": f"## File Delete\nDeleted file: {p}"}
     if p.is_dir():
