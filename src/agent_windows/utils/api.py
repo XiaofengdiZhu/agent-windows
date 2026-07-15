@@ -33,6 +33,30 @@ def encode_image(image: Image.Image, format: str = "JPEG", max_size: int = 0, qu
     Returns:
         Base64-encoded string of the image.
     """
+    return base64.b64encode(
+        encode_image_bytes(image, format=format, max_size=max_size, quality=quality)
+    ).decode("utf-8")
+
+
+def encode_image_bytes(image: Image.Image, format: str = "JPEG", max_size: int = 0, quality: int = 85) -> bytes:
+    """Encode a PIL Image to RAW (un-base64'd) bytes.
+
+    Shares the exact resize/flatten/save logic with :func:`encode_image`; the only
+    difference is the final base64 step is skipped. Needed by the Gemini backend,
+    which sends image bytes via ``types.Part.from_bytes`` (inline_data) rather than
+    a base64 data URL — so Gemini benefits from the same JPEG compression / user
+    ``image_format`` & ``jpeg_quality`` config as the OpenAI/Anthropic backends.
+    (G19a — previously Gemini sent the uncompressed PIL image directly.)
+
+    Args:
+        image: PIL Image to encode.
+        format: Image format ("JPEG" or "PNG"). Defaults to "JPEG".
+        max_size: Optional max dimension for resizing before encoding.
+        quality: JPEG quality (1-95). Ignored for PNG.
+
+    Returns:
+        Raw image bytes (e.g. a JPEG byte string starting with ``\\xff\\xd8``).
+    """
     if max_size > 0 and (image.width > max_size or image.height > max_size):
         scale = min(max_size / image.width, max_size / image.height)
         new_size = (int(image.width * scale), int(image.height * scale))
@@ -52,7 +76,7 @@ def encode_image(image: Image.Image, format: str = "JPEG", max_size: int = 0, qu
         image.save(buf, format="JPEG", quality=quality, optimize=True)
     else:
         image.save(buf, format="PNG", optimize=True)
-    return base64.b64encode(buf.getvalue()).decode("utf-8")
+    return buf.getvalue()
 
 
 def _resolve_image_format(config: dict[str, Any]) -> tuple[str, int]:
@@ -87,6 +111,16 @@ def _extract_text(text: str | None, empty_message: str) -> str:
     if not content:
         raise RuntimeError(empty_message)
     return content
+
+
+def _resolve_timeout(config: dict[str, Any]) -> float:
+    """Resolve the vision-model client timeout (seconds), floored at 1s.
+
+    The config default is 30s. A 0/negative value would be a misconfiguration
+    that, on Gemini, becomes ``HttpOptions(timeout=0)`` (0 ms → every request
+    times out instantly), so floor it. (G19b)
+    """
+    return max(float(config.get("timeout", 30)), 1.0)
 
 
 def call_vision_model(
@@ -132,14 +166,20 @@ def call_vision_model(
 def _call_openai_compatible(image: Image.Image, prompt: str, config: dict[str, Any], api_key: str, max_tokens: int = 100) -> str:
     """Call an OpenAI-compatible vision API."""
     api_base = config.get("api_base", "https://api.openai.com/v1")
-    cache_key = f"openai:{api_base}:{api_key}"
+    timeout = _resolve_timeout(config)
+    # timeout is baked into the cached OpenAI client, so it must be part of the
+    # cache key — otherwise `config set vlm.timeout` is swallowed by a stale
+    # cached client on a long-running daemon. Use int(seconds) so the key is a
+    # stable identifier (30, not 30.0) regardless of how the user wrote the value.
+    # (G19b)
+    cache_key = f"openai:{api_base}:{api_key}:{int(timeout)}"
     with _client_lock:
         if cache_key not in _client_cache:
             from openai import OpenAI
             _client_cache[cache_key] = OpenAI(
                 api_key=api_key,
                 base_url=api_base,
-                timeout=float(config.get("timeout", 30)),
+                timeout=timeout,
             )
         client = _client_cache[cache_key]
 
@@ -182,11 +222,15 @@ def _call_openai_compatible(image: Image.Image, prompt: str, config: dict[str, A
 
 def _call_anthropic(image: Image.Image, prompt: str, config: dict[str, Any], api_key: str, max_tokens: int = 100) -> str:
     """Call Anthropic Claude vision API."""
-    cache_key = f"anthropic:{api_key}"
+    timeout = _resolve_timeout(config)
+    # timeout is baked into the cached Anthropic client — include it in the key
+    # so a config change isn't swallowed by the stale cached client. int() keeps
+    # the key stable (30, not 30.0). (G19b)
+    cache_key = f"anthropic:{api_key}:{int(timeout)}"
     with _client_lock:
         if cache_key not in _client_cache:
             import anthropic
-            _client_cache[cache_key] = anthropic.Anthropic(api_key=api_key, timeout=float(config.get("timeout", 30)))
+            _client_cache[cache_key] = anthropic.Anthropic(api_key=api_key, timeout=timeout)
         client = _client_cache[cache_key]
 
     image_format, jpeg_quality = _resolve_image_format(config)
@@ -241,19 +285,41 @@ def _call_gemini(image: Image.Image, prompt: str, config: dict[str, Any], api_ke
     from google import genai
     from google.genai import types
 
-    # Cache key is api_key only: the Client is not bound to a model (unlike the
-    # old GenerativeModel), so changing vlm.model reuses the same client and just
-    # passes the new name to generate_content. Mirrors openai/anthropic keying.
-    cache_key = f"gemini:{api_key}"
+    # Cache key is api_key + timeout: the Client is not bound to a model (unlike
+    # the old GenerativeModel), so changing vlm.model reuses the same client and
+    # just passes the new name to generate_content. timeout IS bound into the
+    # client (via http_options below), so it must be in the key too — otherwise a
+    # `config set vlm.timeout` is swallowed by the stale cached client. int()
+    # keeps the key stable (30, not 30.0). (G19b)
+    timeout = _resolve_timeout(config)
+    cache_key = f"gemini:{api_key}:{int(timeout)}"
     with _client_lock:
         if cache_key not in _client_cache:
-            _client_cache[cache_key] = genai.Client(api_key=api_key)
+            # genai.Client has no top-level timeout kwarg; the client-side request
+            # timeout is set via HttpOptions. Unlike OpenAI/Anthropic (seconds),
+            # HttpOptions.timeout is MILLISECONDS, so convert the project's
+            # seconds-based vlm.timeout. Without this a hung Gemini call has no
+            # client timeout and can only be saved by the IPC read_timeout. (G19b)
+            _client_cache[cache_key] = genai.Client(
+                api_key=api_key,
+                http_options=types.HttpOptions(timeout=int(timeout * 1000)),
+            )
         client = _client_cache[cache_key]
+
+    # Encode the image the same way the other backends do (JPEG compression +
+    # user image_format/quality) and send it as inline bytes via Part.from_bytes.
+    # Previously the raw PIL image was passed straight to generate_content, so
+    # H-05/H-08 (resize/JPEG) were lost and the user's quality setting ignored.
+    # (G19a)
+    image_format, jpeg_quality = _resolve_image_format(config)
+    image_bytes = encode_image_bytes(image, format=image_format, quality=jpeg_quality)
+    image_part = types.Part.from_bytes(
+        data=image_bytes, mime_type=f"image/{image_format.lower()}")
 
     model_name = config.get("model", "gemini-2.0-flash")
     response = client.models.generate_content(
         model=model_name,
-        contents=[prompt, image],
+        contents=[prompt, image_part],
         config=types.GenerateContentConfig(
             temperature=0,
             max_output_tokens=max_tokens,

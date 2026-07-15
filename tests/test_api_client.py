@@ -19,6 +19,7 @@ from PIL import Image
 import agent_windows.utils.api as api
 from agent_windows.utils.api import (
     encode_image,
+    encode_image_bytes,
     call_vision_model,
 )
 
@@ -182,8 +183,8 @@ class TestClientCache:
             r2 = call_vision_model(Image.new("RGB", (4, 4)), "p", cfg)
         assert mock_openai.call_count == 1  # client built once
         assert r1 == "reply" and r2 == "reply"
-        # cache now holds the client under the openai key
-        assert "openai:http://x:k" in api._client_cache
+        # cache now holds the client under the openai key (includes timeout, G19b)
+        assert "openai:http://x:k:30" in api._client_cache
 
     def test_different_api_base_creates_new_client(self):
         fake_client = MagicMock()
@@ -217,8 +218,8 @@ class TestClientCache:
         with patch("agent_windows.utils.api.encode_image", return_value="b64"), \
              patch("openai.OpenAI", return_value=fake_client) as mock_openai:
             call_vision_model(Image.new("RGB", (4, 4)), "p", {"api_base": "http://x"})  # no api_key
-        # the cached client's key reflects the env fallback
-        assert "openai:http://x:env-key" in api._client_cache
+        # the cached client's key reflects the env fallback (+ timeout, G19b)
+        assert "openai:http://x:env-key:30" in api._client_cache
         mock_openai.assert_called_once()
         # and the KEY actually reaches the OpenAI constructor (not "" / None)
         assert mock_openai.call_args.kwargs["api_key"] == "env-key"
@@ -265,7 +266,7 @@ class TestClientCache:
                 r2 = call_vision_model(Image.new("RGB", (4, 4)), "p", cfg)
             assert fake_module.Anthropic.call_count == 1  # client built once
             assert r1 == "ok" and r2 == "ok"
-            assert "anthropic:ck" in api._client_cache
+            assert "anthropic:ck:30" in api._client_cache  # + timeout (G19b)
         finally:
             sys.modules.pop("anthropic", None)
 
@@ -293,10 +294,11 @@ class TestClientCache:
                 cfg = {"engine": "gemini", "api_key": "gk", "model": "gemini-x"}
                 r1 = call_vision_model(Image.new("RGB", (4, 4)), "p", cfg)
                 r2 = call_vision_model(Image.new("RGB", (4, 4)), "p", cfg)
-            # Client built once (cached), keyed by api_key only — model is per-call.
+            # Client built once (cached), keyed by api_key + timeout — model is
+            # per-call (G19b added timeout to the key).
             assert fake_genai.Client.call_count == 1
             assert r1 == "g" and r2 == "g"
-            assert "gemini:gk" in api._client_cache
+            assert "gemini:gk:30" in api._client_cache
             # The model is passed per-call, not baked into the cached object, so
             # switching vlm.model does NOT rebuild the client.
             assert fake_genai.Client.call_args.kwargs["api_key"] == "gk"
@@ -331,8 +333,8 @@ class TestClientCache:
                                        {"engine": "gemini", "api_key": "keyB", "model": "m"})
             assert ra == "a" and rb == "b"
             assert fake_genai.Client.call_count == 2  # two distinct clients
-            assert "gemini:keyA" in api._client_cache
-            assert "gemini:keyB" in api._client_cache
+            assert "gemini:keyA:30" in api._client_cache  # + timeout (G19b)
+            assert "gemini:keyB:30" in api._client_cache
             # Each key's call carried its own api_key into Client construction.
             keys_used = [c.kwargs["api_key"] for c in fake_genai.Client.call_args_list]
             assert keys_used == ["keyA", "keyB"]
@@ -465,4 +467,316 @@ class TestEmptyResponseGuard:
         finally:
             sys.modules.pop("google", None)
             sys.modules.pop("google.genai", None)
+
+
+# ── G19: Gemini image encoding + client timeout ─────────────────────
+
+
+class TestEncodeImageBytes:
+    """G19(a): encode_image_bytes returns RAW bytes (not base64) so Gemini can
+    feed them to types.Part.from_bytes. It must apply the same resize/flatten/
+    quality logic as encode_image — only the final base64 step is skipped."""
+
+    def test_returns_raw_jpeg_bytes(self):
+        img = Image.new("RGB", (10, 10), (0, 0, 0))
+        raw = encode_image_bytes(img)
+        assert isinstance(raw, bytes)
+        # The bytes are a valid JPEG (not base64): PIL can reopen them and the
+        # format is JPEG. base64 of a JPEG would NOT start with the JPEG SOI magic.
+        assert raw[:2] == b"\xff\xd8"  # JPEG SOI marker
+
+    def test_same_quality_as_encode_image(self):
+        """encode_image_bytes and encode_image must produce identical underlying
+        bytes for the same image/format/quality (encode_image just base64s them)."""
+        img = Image.new("RGB", (20, 20), (10, 20, 30))
+        raw = encode_image_bytes(img, format="JPEG", quality=85)
+        b64 = encode_image(img, format="JPEG", quality=85)
+        assert base64.b64decode(b64) == raw
+
+    def test_respects_format_and_quality(self):
+        """PNG format and a different quality are honored (parity with encode_image)."""
+        img = Image.new("RGB", (30, 30))
+        for x in range(30):
+            for y in range(30):
+                img.putpixel((x, y), (x * 8 % 256, y * 8 % 256, (x + y) % 256))
+        # PNG is lossless; two identical inputs → identical bytes
+        png1 = encode_image_bytes(img, format="PNG")
+        png2 = encode_image_bytes(img, format="PNG")
+        assert png1 == png2
+        assert png1[:8] == b"\x89PNG\r\n\x1a\n"  # PNG signature
+
+    def test_downscales_max_size(self):
+        """max_size resize logic is shared with encode_image."""
+        img = Image.new("RGB", (1000, 500), (10, 20, 30))
+        raw = encode_image_bytes(img, max_size=200)
+        decoded = Image.open(io.BytesIO(raw))
+        decoded.load()
+        assert decoded.width == 200 and decoded.height == 100
+
+
+class TestGeminiImageEncoding:
+    """G19(a): Gemini must run the image through encode_image_bytes (JPEG
+    compression + user image_format/quality) and send it via
+    types.Part.from_bytes — NOT the raw PIL image. Before the fix, Gemini passed
+    the PIL image straight to generate_content, so H-05/H-08 were lost."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_cache(self):
+        api._client_cache.clear()
+        yield
+        api._client_cache.clear()
+
+    def test_gemini_uses_part_from_bytes_not_raw_image(self):
+        """The image reaching generate_content must be a Part built from encoded
+        bytes, not the PIL image. We capture the contents list and assert."""
+        import sys
+        captured = {}
+
+        fake_client = MagicMock()
+        fake_client.models.generate_content.return_value = MagicMock(text="ok")
+
+        def _fake_from_bytes(data, mime_type=None):
+            part = MagicMock(name=f"Part<{mime_type}>")
+            captured["data"] = data
+            captured["mime_type"] = mime_type
+            return part
+
+        fake_types = MagicMock()
+        fake_types.Part.from_bytes.side_effect = _fake_from_bytes
+        fake_types.GenerateContentConfig = MagicMock()
+        # a real-ish HttpOptions (just needs to accept kwargs)
+        fake_types.HttpOptions = MagicMock()
+        fake_genai = MagicMock()
+        fake_genai.Client.return_value = fake_client
+        fake_genai.types = fake_types
+        fake_google = MagicMock()
+        fake_google.genai = fake_genai
+        # `from google.genai import types` must resolve to fake_types
+        sys.modules["google"] = fake_google
+        sys.modules["google.genai"] = fake_genai
+        sys.modules["google.genai.types"] = fake_types
+        try:
+            with patch("agent_windows.utils.api.encode_image_bytes",
+                       return_value=b"\xff\xd8rawjpeg") as mock_enc:
+                call_vision_model(
+                    Image.new("RGB", (4, 4)), "p",
+                    {"engine": "gemini", "api_key": "gk", "model": "m"})
+            # encode_image_bytes WAS called (not skipped)...
+            mock_enc.assert_called_once()
+            # ...and its bytes reached Part.from_bytes with a jpeg mime type
+            assert captured["data"] == b"\xff\xd8rawjpeg"
+            assert captured["mime_type"] == "image/jpeg"
+        finally:
+            sys.modules.pop("google", None)
+            sys.modules.pop("google.genai", None)
+            sys.modules.pop("google.genai.types", None)
+
+    def test_gemini_respects_user_image_format(self):
+        """A user config of image_format=PNG must reach Part.from_bytes as
+        image/png, not the JPEG default."""
+        import sys
+        captured = {}
+
+        fake_client = MagicMock()
+        fake_client.models.generate_content.return_value = MagicMock(text="ok")
+
+        def _fake_from_bytes(data, mime_type=None):
+            captured["mime_type"] = mime_type
+            return MagicMock()
+
+        fake_types = MagicMock()
+        fake_types.Part.from_bytes.side_effect = _fake_from_bytes
+        fake_types.GenerateContentConfig = MagicMock()
+        fake_types.HttpOptions = MagicMock()
+        fake_genai = MagicMock()
+        fake_genai.Client.return_value = fake_client
+        fake_genai.types = fake_types
+        fake_google = MagicMock()
+        fake_google.genai = fake_genai
+        sys.modules["google"] = fake_google
+        sys.modules["google.genai"] = fake_genai
+        sys.modules["google.genai.types"] = fake_types
+        try:
+            with patch("agent_windows.utils.api.encode_image_bytes",
+                       return_value=b"\x89PNG"):
+                call_vision_model(
+                    Image.new("RGB", (4, 4)), "p",
+                    {"engine": "gemini", "api_key": "gk", "model": "m",
+                     "image_format": "PNG"})
+            assert captured["mime_type"] == "image/png"
+        finally:
+            sys.modules.pop("google", None)
+            sys.modules.pop("google.genai", None)
+            sys.modules.pop("google.genai.types", None)
+
+
+class TestGeminiClientTimeout:
+    """G19(b): Gemini genai.Client must receive http_options=HttpOptions(timeout=MS)
+    so a hung call fails at the client instead of only the IPC read_timeout.
+    Project config vlm.timeout is in SECONDS; HttpOptions.timeout is MILLISECONDS."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_cache(self):
+        api._client_cache.clear()
+        yield
+        api._client_cache.clear()
+
+    def test_gemini_client_receives_http_options_timeout(self):
+        import sys
+        fake_client = MagicMock()
+        fake_client.models.generate_content.return_value = MagicMock(text="g")
+        captured = {}
+        fake_types = MagicMock()
+        fake_types.Part.from_bytes.return_value = MagicMock()
+
+        def _http_options(**kwargs):
+            captured.update(kwargs)
+            return MagicMock(name="HttpOptions")
+
+        fake_types.HttpOptions.side_effect = _http_options
+        fake_types.GenerateContentConfig = MagicMock()
+        fake_genai = MagicMock()
+        fake_genai.Client.return_value = fake_client
+        fake_genai.types = fake_types
+        fake_google = MagicMock()
+        fake_google.genai = fake_genai
+        sys.modules["google"] = fake_google
+        sys.modules["google.genai"] = fake_genai
+        sys.modules["google.genai.types"] = fake_types
+        try:
+            with patch("agent_windows.utils.api.encode_image_bytes",
+                       return_value=b"\xff\xd8jpg"):
+                call_vision_model(
+                    Image.new("RGB", (4, 4)), "p",
+                    {"engine": "gemini", "api_key": "gk", "model": "m",
+                     "timeout": 45})
+            # 45 seconds → 45000 milliseconds
+            assert captured.get("timeout") == 45000
+            # and it was actually passed to Client as http_options
+            assert "http_options" in fake_genai.Client.call_args.kwargs
+        finally:
+            sys.modules.pop("google", None)
+            sys.modules.pop("google.genai", None)
+            sys.modules.pop("google.genai.types", None)
+
+    def test_gemini_default_timeout_is_30_seconds(self):
+        """No timeout in config → default 30s → 30000ms."""
+        import sys
+        captured = {}
+        fake_types = MagicMock()
+        fake_types.Part.from_bytes.return_value = MagicMock()
+
+        def _http_options(**kwargs):
+            captured.update(kwargs)
+            return MagicMock()
+
+        fake_types.HttpOptions.side_effect = _http_options
+        fake_types.GenerateContentConfig = MagicMock()
+        fake_client = MagicMock()
+        fake_client.models.generate_content.return_value = MagicMock(text="g")
+        fake_genai = MagicMock()
+        fake_genai.Client.return_value = fake_client
+        fake_genai.types = fake_types
+        fake_google = MagicMock()
+        fake_google.genai = fake_genai
+        sys.modules["google"] = fake_google
+        sys.modules["google.genai"] = fake_genai
+        sys.modules["google.genai.types"] = fake_types
+        try:
+            with patch("agent_windows.utils.api.encode_image_bytes",
+                       return_value=b"\xff\xd8jpg"):
+                call_vision_model(
+                    Image.new("RGB", (4, 4)), "p",
+                    {"engine": "gemini", "api_key": "gk", "model": "m"})
+            assert captured.get("timeout") == 30000
+        finally:
+            sys.modules.pop("google", None)
+            sys.modules.pop("google.genai", None)
+            sys.modules.pop("google.genai.types", None)
+
+
+class TestCacheKeyIncludesTimeout:
+    """G19(b): the three backends bake timeout into the cached client (OpenAI/
+    Anthropic via constructor, Gemini via HttpOptions). But the cache KEY omitted
+    timeout, so `config set vlm.timeout` on a long-running daemon was swallowed
+    by the stale cached client. timeout must be part of the key so changing it
+    builds a fresh client."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_cache(self):
+        api._client_cache.clear()
+        yield
+        api._client_cache.clear()
+
+    def test_timeout_zero_floored_to_one_second(self):
+        """A misconfigured vlm.timeout of 0 would become HttpOptions(timeout=0)
+        (0 ms → instant timeout on every Gemini request). The resolver floors it
+        at 1s; the cache key then carries :1, and HttpOptions gets 1000ms."""
+        from agent_windows.utils.api import _resolve_timeout
+        assert _resolve_timeout({"timeout": 0}) == 1.0
+        assert _resolve_timeout({"timeout": -5}) == 1.0
+        # normal values pass through
+        assert _resolve_timeout({"timeout": 45}) == 45.0
+        assert _resolve_timeout({}) == 30.0  # default
+
+    def test_openai_different_timeout_builds_new_client(self):
+        fake_client = MagicMock()
+        fake_client.chat.completions.create.return_value = MagicMock(
+            choices=[MagicMock(message=MagicMock(content="r"))]
+        )
+        with patch("agent_windows.utils.api.encode_image", return_value="b64"), \
+             patch("openai.OpenAI", return_value=fake_client) as mock_openai:
+            call_vision_model(Image.new("RGB", (4, 4)), "p",
+                              {"api_key": "k", "api_base": "http://x", "timeout": 30})
+            call_vision_model(Image.new("RGB", (4, 4)), "p",
+                              {"api_key": "k", "api_base": "http://x", "timeout": 60})
+        # two distinct timeouts → two clients (config change took effect)
+        assert mock_openai.call_count == 2
+        assert "openai:http://x:k:30" in api._client_cache
+        assert "openai:http://x:k:60" in api._client_cache
+
+    def test_openai_same_timeout_reuses_client(self):
+        fake_client = MagicMock()
+        fake_client.chat.completions.create.return_value = MagicMock(
+            choices=[MagicMock(message=MagicMock(content="r"))]
+        )
+        with patch("agent_windows.utils.api.encode_image", return_value="b64"), \
+             patch("openai.OpenAI", return_value=fake_client) as mock_openai:
+            call_vision_model(Image.new("RGB", (4, 4)), "p",
+                              {"api_key": "k", "api_base": "http://x", "timeout": 30})
+            call_vision_model(Image.new("RGB", (4, 4)), "p",
+                              {"api_key": "k", "api_base": "http://x", "timeout": 30})
+        assert mock_openai.call_count == 1  # same timeout → reused
+
+    def test_gemini_different_timeout_builds_new_client(self):
+        import sys
+        fake_client = MagicMock()
+        fake_client.models.generate_content.return_value = MagicMock(text="g")
+        fake_types = MagicMock()
+        fake_types.Part.from_bytes.return_value = MagicMock()
+        fake_types.HttpOptions.return_value = MagicMock()
+        fake_types.GenerateContentConfig = MagicMock()
+        fake_genai = MagicMock()
+        fake_genai.Client.return_value = fake_client
+        fake_genai.types = fake_types
+        fake_google = MagicMock()
+        fake_google.genai = fake_genai
+        sys.modules["google"] = fake_google
+        sys.modules["google.genai"] = fake_genai
+        sys.modules["google.genai.types"] = fake_types
+        try:
+            with patch("agent_windows.utils.api.encode_image_bytes",
+                       return_value=b"\xff\xd8jpg"):
+                call_vision_model(Image.new("RGB", (4, 4)), "p",
+                                  {"engine": "gemini", "api_key": "k", "timeout": 30})
+                call_vision_model(Image.new("RGB", (4, 4)), "p",
+                                  {"engine": "gemini", "api_key": "k", "timeout": 60})
+            assert fake_genai.Client.call_count == 2  # timeout change → new client
+            assert "gemini:k:30" in api._client_cache
+            assert "gemini:k:60" in api._client_cache
+        finally:
+            sys.modules.pop("google", None)
+            sys.modules.pop("google.genai", None)
+            sys.modules.pop("google.genai.types", None)
+
 
