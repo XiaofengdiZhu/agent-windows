@@ -851,3 +851,96 @@ class TestPipeServerSecurity:
                     assert "duplicate" in str(exc_info.value).lower(), (
                         f"winerror {winerror}: message should say this is a duplicate"
                     )
+
+
+class TestOverlappedTimeoutDrainsCompletion:
+    """G10: when WaitForSingleObject returns WAIT_TIMEOUT, CancelIo only
+    SCHEDULES cancellation — the kernel still completes the I/O (writing the
+    OVERLAPPED's Internal/InternalHigh) asynchronously. MSDN forbids freeing
+    an OVERLAPPED before the operation completes. The fix: after CancelIo,
+    call GetOverlappedResult(handle, overlapped, bWait=True) to block until
+    the cancel completes, THEN raise. Without the drain, the local OVERLAPPED
+    can be GC'd while the kernel still holds its address (UAF).
+
+    These tests wire a timeout branch and assert GetOverlappedResult is called
+    (with bWait=True) BETWEEN CancelIo and the raise — locking the drain."""
+
+    def _patch_win32_timeout(self, monkeypatch):
+        """Patch win32 so ReadFile/WriteFile return ERROR_IO_PENDING,
+        WaitForSingleObject returns WAIT_TIMEOUT, and CancelIo /
+        GetOverlappedResult are spied. Returns a recorder dict."""
+        import win32event
+        import win32file
+        import pywintypes
+
+        rec = {
+            "cancel_calls": 0,
+            "result_calls": [],     # list of bWait args
+            "cancel_before_result": None,
+        }
+
+        def fake_write(pipe, data, overlapped):
+            raise pywintypes.error(997, "WriteFile", "pending")
+
+        def fake_read(pipe, n, overlapped):
+            raise pywintypes.error(997, "ReadFile", "pending")
+
+        def fake_wait(event, timeout_ms):
+            return win32event.WAIT_TIMEOUT
+
+        def fake_cancel(pipe):
+            rec["cancel_calls"] += 1
+
+        def fake_result(pipe, overlapped, wait):
+            rec["result_calls"].append(wait)
+            # Record ordering: CancelIo must have run first.
+            rec["cancel_before_result"] = rec["cancel_calls"] > 0
+            return 0
+
+        monkeypatch.setattr(win32file, "WriteFile", fake_write)
+        monkeypatch.setattr(win32file, "ReadFile", fake_read)
+        monkeypatch.setattr(win32file, "CancelIo", fake_cancel)
+        monkeypatch.setattr(win32file, "GetOverlappedResult", fake_result)
+        monkeypatch.setattr(win32event, "WaitForSingleObject", fake_wait)
+        # CreateEvent + CloseHandle must not touch real handles. CreateEvent
+        # must return a PyHANDLE-compatible object (OVERLAPPED.hEvent requires
+        # it); pywintypes.HANDLE(1) satisfies that without opening a real event.
+        import win32api
+        import pywintypes as _pwt
+        monkeypatch.setattr(win32event, "CreateEvent", lambda *a, **k: _pwt.HANDLE(1))
+        monkeypatch.setattr(win32api, "CloseHandle", lambda h: None)
+        return rec
+
+    def test_write_timeout_drains_completion_before_raise(self, monkeypatch):
+        """G10: _overlapped_write_all on WAIT_TIMEOUT must call
+        GetOverlappedResult(pipe, overlapped, True) AFTER CancelIo and BEFORE
+        raising ConnectionError. The drain blocks until the cancel actually
+        completes, so the OVERLAPPED isn't freed under the kernel."""
+        import agent_windows.ipc.pipe as pipe_mod
+        rec = self._patch_win32_timeout(monkeypatch)
+        with pytest.raises(ConnectionError, match="Timed out"):
+            pipe_mod._overlapped_write_all("fake-pipe", b"data", timeout_ms=50)
+        assert rec["cancel_calls"] == 1, "CancelIo must be called once"
+        assert rec["result_calls"] == [True], (
+            f"GetOverlappedResult must be called once with bWait=True to drain "
+            f"the cancel; got bWait={rec['result_calls']!r}"
+        )
+        assert rec["cancel_before_result"] is True, (
+            "GetOverlappedResult must be called AFTER CancelIo"
+        )
+
+    def test_read_timeout_drains_completion_before_raise(self, monkeypatch):
+        """G10: same drain requirement on the read path."""
+        import agent_windows.ipc.pipe as pipe_mod
+        rec = self._patch_win32_timeout(monkeypatch)
+        with pytest.raises(ConnectionError, match="Timed out"):
+            pipe_mod._overlapped_read_chunk("fake-pipe", timeout_ms=50)
+        assert rec["cancel_calls"] == 1, "CancelIo must be called once"
+        assert rec["result_calls"] == [True], (
+            f"GetOverlappedResult must be called once with bWait=True to drain "
+            f"the cancel; got bWait={rec['result_calls']!r}"
+        )
+        assert rec["cancel_before_result"] is True, (
+            "GetOverlappedResult must be called AFTER CancelIo"
+        )
+

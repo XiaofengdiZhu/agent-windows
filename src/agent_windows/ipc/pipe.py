@@ -299,6 +299,18 @@ def _overlapped_write_all(pipe, data: bytes, timeout_ms: int) -> None:
             rc = win32event.WaitForSingleObject(event, timeout_ms)
             if rc == win32event.WAIT_TIMEOUT:
                 win32file.CancelIo(pipe)
+                # G10: CancelIo only SCHEDULES cancellation — the kernel still
+                # completes the transfer asynchronously and writes the result
+                # into the OVERLAPPED struct. MSDN forbids freeing OVERLAPPED
+                # before the operation completes. GetOverlappedResult(bWait=True)
+                # blocks until the cancel finishes, so the struct isn't freed
+                # (local GC + CloseHandle(event) in finally) while the kernel
+                # still holds its address. The completed-but-cancelled result is
+                # irrelevant here; we raise regardless.
+                try:
+                    win32file.GetOverlappedResult(pipe, overlapped, True)
+                except pywintypes.error:
+                    pass  # cancel completed with an error code; still drained
                 raise ConnectionError(
                     f"Timed out sending request to daemon after {timeout_ms}ms"
                 )
@@ -333,6 +345,13 @@ def _overlapped_read_chunk(pipe, timeout_ms: int, buffer_size: int = BUFFER_SIZE
             rc = win32event.WaitForSingleObject(event, timeout_ms)
             if rc == win32event.WAIT_TIMEOUT:
                 win32file.CancelIo(pipe)
+                # G10: drain the cancel before raising — see
+                # _overlapped_write_all for the rationale. The OVERLAPPED must
+                # outlive the kernel's completion write.
+                try:
+                    win32file.GetOverlappedResult(pipe, overlapped, True)
+                except pywintypes.error:
+                    pass  # cancel completed with an error code; still drained
                 raise ConnectionError(
                     f"Timed out waiting {timeout_ms}ms for daemon response"
                 )
