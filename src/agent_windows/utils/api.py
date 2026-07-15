@@ -70,6 +70,25 @@ def _resolve_image_format(config: dict[str, Any]) -> tuple[str, int]:
     return image_format, quality
 
 
+def _extract_text(text: str | None, empty_message: str) -> str:
+    """Strip a vision-model response, raising RuntimeError on empty/None.
+
+    The project supports small models that can emit empty or content-filtered
+    responses. Each backend used to index/strip the raw response with no guard,
+    so a None/empty content crashed with the SDK's native exception
+    (AttributeError / IndexError / ValueError) instead of the docstring-promised
+    ``RuntimeError``. On the daemon side that also mis-mapped the error code (a
+    Gemini ValueError / Anthropic IndexError landed in the INVALID_PARAMS clause
+    rather than the generic internal error). Centralizing the guard keeps the
+    three backends consistent and guarantees ``call_vision_model`` honors its
+    "Raises: RuntimeError" contract. (G18)
+    """
+    content = (text or "").strip()
+    if not content:
+        raise RuntimeError(empty_message)
+    return content
+
+
 def call_vision_model(
     image: Image.Image,
     prompt: str,
@@ -148,7 +167,17 @@ def _call_openai_compatible(image: Image.Image, prompt: str, config: dict[str, A
         temperature=0.0,
     )
 
-    return response.choices[0].message.content.strip()
+    # choices can be [] when an OpenAI-compatible provider filters the response
+    # or returns only a usage record — guard the index so a missing choice is the
+    # same RuntimeError class as a missing message, not an IndexError. (G18)
+    choices = response.choices or []
+    content = choices[0].message.content if choices else None
+    return _extract_text(
+        content,
+        "OpenAI-compatible model returned an empty response"
+        " (content may have been filtered, the model emitted only a tool call,"
+        " or the provider returned no choices)",
+    )
 
 
 def _call_anthropic(image: Image.Image, prompt: str, config: dict[str, Any], api_key: str, max_tokens: int = 100) -> str:
@@ -186,7 +215,15 @@ def _call_anthropic(image: Image.Image, prompt: str, config: dict[str, Any], api
         ],
     )
 
-    return response.content[0].text.strip()
+    # content can be [] when the response is filtered (finish_reason "content_
+    # filter"); guard the index + extract. (G18)
+    parts = response.content or []
+    text = parts[0].text if parts else None
+    return _extract_text(
+        text,
+        "Anthropic model returned an empty response"
+        " (content may have been filtered or is non-text)",
+    )
 
 
 def _call_gemini(image: Image.Image, prompt: str, config: dict[str, Any], api_key: str, max_tokens: int = 100) -> str:
@@ -222,4 +259,15 @@ def _call_gemini(image: Image.Image, prompt: str, config: dict[str, Any], api_ke
             max_output_tokens=max_tokens,
         ),
     )
-    return response.text.strip()
+    # response.text raises ValueError when there are no text parts (e.g. all
+    # candidates blocked by safety filters); translate that and an empty result
+    # into the docstring-promised RuntimeError. (G18)
+    try:
+        text = response.text
+    except ValueError:
+        text = None
+    return _extract_text(
+        text,
+        "Gemini model returned an empty response"
+        " (the response may have been blocked by safety filters)",
+    )

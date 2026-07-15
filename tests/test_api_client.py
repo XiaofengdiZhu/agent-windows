@@ -339,3 +339,130 @@ class TestClientCache:
         finally:
             sys.modules.pop("google", None)
             sys.modules.pop("google.genai", None)
+
+
+# ── G18: empty / filtered model response → RuntimeError ─────────────
+
+
+class TestEmptyResponseGuard:
+    """G18: the project supports small models that emit empty or content-filtered
+    responses (e.g. xopqwen36v35b). The three backends each indexed/strip'd the
+    response with no guard, so a None/empty content crashed with the SDK's native
+    exception (AttributeError / IndexError / ValueError) instead of the
+    docstring-promised RuntimeError. On the daemon side that AttributeError leaked
+    to the generic ``except Exception`` (DAEMON_INTERNAL_ERROR) while a Gemini
+    ``ValueError``/Anthropic ``IndexError`` was mis-mapped to INVALID_PARAMS — so
+    wrapping each as RuntimeError also stops the wrong-code mapping. (G18)
+
+    Each test injects a fake client whose ``create``/``generate_content`` returns
+    an empty/filtered response, and asserts ``call_vision_model`` raises
+    ``RuntimeError`` (not the native crash).
+    """
+
+    def test_openai_none_content_raises_runtime_error(self):
+        """OpenAI content can be None when the model returns only a tool call or
+        a content-filter finish. ``content.strip()`` → AttributeError without a
+        guard."""
+        fake_client = MagicMock()
+        fake_client.chat.completions.create.return_value = MagicMock(
+            choices=[MagicMock(message=MagicMock(content=None))]
+        )
+        with patch("agent_windows.utils.api.encode_image", return_value="b64"), \
+             patch("openai.OpenAI", return_value=fake_client):
+            with pytest.raises(RuntimeError, match="(?i)empty|response"):
+                call_vision_model(
+                    Image.new("RGB", (4, 4)), "p",
+                    {"api_key": "k", "api_base": "http://x", "model": "m"})
+
+    def test_openai_empty_content_raises_runtime_error(self):
+        """An empty-string content (whitespace-only after strip) is also empty."""
+        fake_client = MagicMock()
+        fake_client.chat.completions.create.return_value = MagicMock(
+            choices=[MagicMock(message=MagicMock(content="   "))]
+        )
+        with patch("agent_windows.utils.api.encode_image", return_value="b64"), \
+             patch("openai.OpenAI", return_value=fake_client):
+            with pytest.raises(RuntimeError):
+                call_vision_model(
+                    Image.new("RGB", (4, 4)), "p",
+                    {"api_key": "k", "api_base": "http://x", "model": "m"})
+
+    def test_openai_empty_choices_raises_runtime_error(self):
+        """Some OpenAI-compatible providers return choices=[] (e.g. a filtered
+        finish). choices[0] → IndexError without a guard; must be RuntimeError."""
+        fake_client = MagicMock()
+        fake_client.chat.completions.create.return_value = MagicMock(choices=[])
+        with patch("agent_windows.utils.api.encode_image", return_value="b64"), \
+             patch("openai.OpenAI", return_value=fake_client):
+            with pytest.raises(RuntimeError, match="(?i)empty|response"):
+                call_vision_model(
+                    Image.new("RGB", (4, 4)), "p",
+                    {"api_key": "k", "api_base": "http://x", "model": "m"})
+
+    def test_anthropic_empty_content_raises_runtime_error(self):
+        """Anthropic content can be [] when the response is filtered. ``content[0]``
+        → IndexError without a guard."""
+        import sys
+        fake_module = MagicMock()
+        fake_client = MagicMock()
+        fake_client.messages.create.return_value = MagicMock(content=[])
+        fake_module.Anthropic.return_value = fake_client
+        sys.modules["anthropic"] = fake_module
+        try:
+            with patch("agent_windows.utils.api.encode_image", return_value="b64"):
+                with pytest.raises(RuntimeError, match="(?i)empty|response"):
+                    call_vision_model(
+                        Image.new("RGB", (4, 4)), "p",
+                        {"engine": "anthropic", "api_key": "ck", "model": "claude-x"})
+        finally:
+            sys.modules.pop("anthropic", None)
+
+    def test_gemini_no_text_raises_runtime_error(self):
+        """Gemini ``response.text`` raises ValueError when there are no text parts
+        (e.g. blocked by safety). Without a guard that ValueError mis-maps to
+        INVALID_PARAMS on the daemon side. Must become RuntimeError."""
+        import sys
+        fake_client = MagicMock()
+        # .text is a property on the real type; emulate the SDK's ValueError.
+        type(fake_client.models.generate_content.return_value).text = (
+            property(lambda self: (_ for _ in ()).throw(
+                ValueError("response.text quick accessor is only available "
+                           "when a single part is present."))))
+        fake_genai = MagicMock()
+        fake_genai.Client.return_value = fake_client
+        fake_google = MagicMock()
+        fake_google.genai = fake_genai
+        sys.modules["google"] = fake_google
+        sys.modules["google.genai"] = fake_genai
+        try:
+            with patch("agent_windows.utils.api.encode_image", return_value="b64"):
+                with pytest.raises(RuntimeError, match="(?i)empty|response"):
+                    call_vision_model(
+                        Image.new("RGB", (4, 4)), "p",
+                        {"engine": "gemini", "api_key": "gk", "model": "gemini-x"})
+        finally:
+            sys.modules.pop("google", None)
+            sys.modules.pop("google.genai", None)
+
+    def test_gemini_empty_text_raises_runtime_error(self):
+        """Gemini ``response.text`` can also return an empty string (no text parts
+        synthesized). Must raise RuntimeError, not return empty silently."""
+        import sys
+        fake_client = MagicMock()
+        fake_client.models.generate_content.return_value = MagicMock(text="   ")
+        fake_genai = MagicMock()
+        fake_genai.Client.return_value = fake_client
+        fake_google = MagicMock()
+        fake_google.genai = fake_genai
+        sys.modules["google"] = fake_google
+        sys.modules["google.genai"] = fake_genai
+        try:
+            with patch("agent_windows.utils.api.encode_image", return_value="b64"):
+                with pytest.raises(RuntimeError):
+                    call_vision_model(
+                        Image.new("RGB", (4, 4)), "p",
+                        {"engine": "gemini", "api_key": "gk", "model": "gemini-x"})
+        finally:
+            sys.modules.pop("google", None)
+            sys.modules.pop("google.genai", None)
+
