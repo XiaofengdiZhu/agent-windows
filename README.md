@@ -3,10 +3,11 @@
 Windows Computer-Use CLI for AI Agents. Provides desktop screenshot, UIA accessibility tree traversal, visual coordinate grounding, and mouse/keyboard automation through a fast Client-Daemon architecture.
 
 ## Highlights
-
-- **Bring-your-own vision model.** Configure any cheap multimodal model (GPT-4o-mini, Claude, Gemini, etc.) and the tool uses it to locate elements that aren't in the accessibility tree — icon-only buttons, canvas, custom-drawn UI.
-- **Works without a multimodal agent.** Even if your driving LLM has no vision capability, `ground`/`detect` return ready-to-click coordinates by offloading the image work to a dedicated small model — saving context tokens and cost.
-- **Pixel-precise by default.** The UIA accessibility tree gives exact coordinates for standard controls; vision is the fallback for the rest.
+- **Vision for non-vision agents.** Built for agents whose driving model (DeepSeek, GLM, …) has no multimodal capability, or whose host can't configure a per-tool vision model — all screen reading is offloaded to a separate model you configure.
+- **Accessibility tree + visual grounding.** Two ways to locate element coordinates/ranges, pixel-precise; the former needs no vision model.
+- **Bring your own vision model.** Configure any cheap/free/local multimodal model and the tool uses it to visually ground elements that aren't in the accessibility tree — icon-only buttons, custom-drawn UI, canvas.
+- **Save tokens + cut cost.** Just locating an element needs no expensive multimodal LLM, and the whole screenshot shouldn't be stuffed into context either — all it needs is a coordinate.
+- **Fast Rust CLI.** ~10x faster than a traditional Python CLI.
 
 ## Install
 
@@ -16,21 +17,19 @@ Requires [uv](https://docs.astral.sh/uv/) (the Python package runner used below)
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
 
-Then install agent-windows (recommended — adds it to your PATH as a persistent command):
+Then install agent-windows:
 
 ```bash
 uv tool install agent-windows
 ```
 
-This installs the **native Rust launcher** (`agent-windows.exe`, ~12ms cold start) plus the Python CLI as `agent-windows-python` (fallback for `--no-daemon`; the launcher also delegates `config` to it).
-
-One-off trial (runs without installing):
+Or a one-off trial (runs without installing):
 
 ```bash
 uvx agent-windows observe
 ```
 
-> **`uv tool install` is recommended over `uvx` for regular use.** The daemon is long-lived and auto-restarts when its version no longer matches the CLI's; `uv tool install` pins both versions together, while `uvx` runs from a cache that can be silently refreshed (new release, cache expiry, `uvx -U`), triggering unwanted daemon restarts. See [Troubleshooting](#) for details.
+> **`uv tool install` is recommended over `uvx` for regular use.** The daemon is long-lived and auto-restarts when its version no longer matches the CLI's; `uv tool install` pins both versions together, while `uvx` runs from a cache that can be silently refreshed (new release, cache expiry, `uvx -U`), triggering unwanted daemon restarts. See the [troubleshooting guide](skills/agent-windows/references/troubleshooting.md#daemon-keeps-restarting-uvx-version-drift) for details.
 
 From source (a checkout of this repo):
 
@@ -106,6 +105,8 @@ Python daemon (persistent, COM STA worker)
 
 ## Commands
 
+Most commands have more flags than shown — run `agent-windows --help` or see the [Agent Skill](skills/agent-windows/SKILL.md) for full usage.
+
 ### Observation
 | Command | Description |
 |---------|-------------|
@@ -131,6 +132,8 @@ Python daemon (persistent, COM STA worker)
 | `move X Y \| -s @eN` | Move mouse |
 | `drag X1 Y1 X2 Y2 [--right]` | Drag |
 | `shortcut KEYS` | Keyboard shortcut (e.g. `ctrl+c`) |
+| `key-down KEYS [--hold N]` | Press key(s) (raw key-down); `--hold N` auto-releases after N s, else stays pressed (pair with `key-up`) |
+| `key-up KEYS` | Release key(s) (raw key-up) |
 | `expand SELECTOR` | Expand an element (@eN) — ComboBox/TreeItem/Menu |
 | `collapse SELECTOR` | Collapse an element (@eN) |
 
@@ -194,6 +197,21 @@ agent-windows mcp serve          # auto-starts the daemon on the first tool call
 
 > Requires the `mcp` extra: `uv tool install agent-windows` installs it by default; from source run `uv sync --extra mcp`.
 
+## Agent Skill
+
+The repo ships a ready-made agent skill at [`skills/agent-windows/SKILL.md`](skills/agent-windows/SKILL.md) (with `references/`). It's the usage guide for any agent driving the CLI: the `observe → find @eN → act → verify` core loop, the `@eN` selector system and its staleness rules, the snapshot/ground/ask-vision decision matrix, per-error-code recovery, and ready-to-run workflows.
+
+**Install it for any CLI-driven agent.** Without it the agent only has `--help` and must rediscover the loop, selector lifecycle, and error handling on its own. **Skip it if the agent uses the [MCP server](#mcp-server)** — MCP clients get the tools directly and never run the CLI.
+
+```bash
+# Claude Code (macOS / Linux / Git Bash):
+cp -r skills/agent-windows ~/.claude/skills/
+# Claude Code (PowerShell, Windows):
+Copy-Item -Recurse skills/agent-windows $HOME/.claude/skills/
+```
+
+Project-scoped instead of user-wide: copy into `.claude/skills/`. For other agent runtimes, point the agent at `skills/agent-windows/SKILL.md` as a skill or system-prompt include.
+
 ## Configure a Vision Model (optional, recommended)
 
 `ground`, `detect`, and `ask-vision` need a multimodal model to read the screen. Configure one with `config set`:
@@ -208,18 +226,15 @@ agent-windows config set vlm.engine openai
 # 3. Model (a cheap multimodal model is enough)
 agent-windows config set vlm.model gpt-4o-mini
 
-# 4. (Non-OpenAI endpoints only) API base
-# agent-windows config set vlm.api_base https://api.openai.com/v1
-
-# 5. Verify
+# 4. Verify
 agent-windows config doctor
 ```
+
+> For non-OpenAI endpoints, also set `vlm.api_base` (e.g. `agent-windows config set vlm.api_base https://your-endpoint/v1`).
 
 > The `config` command is handled by the launcher: it forwards transparently
 > to the bundled Python CLI (`agent-windows-python`), which owns the config
 > schema and DPAPI encryption. No separate command name needed.
-
-> **Why configure one even if your agent model is multimodal?** Screenshots consume a lot of context tokens. Routing the image work to a dedicated cheap model via `ground`/`detect` returns ready-to-click coordinates in one short call, cutting both context usage and cost. `ground`'s two-pass coarse-to-fine strategy also lands clicks more precisely than a single whole-screenshot guess, and `detect` returns structured bounding boxes for every match.
 
 ## Configuration
 
@@ -290,36 +305,6 @@ Every option below can be set as an env var instead of (or in addition to) the c
 > debug flag as a parameter; the spawned daemon inherits it automatically. You
 > can also export `AGENT_WINDOWS_DEBUG=1` directly.
 
-## Desktop Automation Tips
-
-### 1. Always switch window before input
-
-Use `app switch` before any keyboard or mouse operation. Otherwise shortcuts may be sent to the wrong window — with unpredictable results (e.g. ESC in a terminal can kill the running process).
-
-```bash
-agent-windows app switch "WPS"
-# now safe to click / type / shortcut
-```
-
-### 2. Prefer UIA tree over vision for element location
-
-`snapshot` returns precise bounding rectangles for named UI elements. `ground` / `detect` use a vision model whose coordinates can be off by ~100 px (typically biased toward the left edge of text). Use vision tools as a supplement when UIA can't see an element.
-
-| Tool | Precision | Best for |
-|------|-----------|----------|
-| `snapshot` | Pixel-exact | Named controls, dialogs, menus |
-| `ground` / `detect` | ±~100 px | Custom-drawn UI that UIA can't capture |
-| `ask-vision` | Descriptive only | Understanding icons, reading screen state |
-
-### 3. Navigating deep menus with mixed tools
-
-Some actions are buried in 2nd- or 3rd-level menus. Buttons may show only icons with no text. A practical approach:
-
-1. Use `ask-vision` to describe what each icon does in the current panel.
-2. Use `ground` / `detect` to get approximate coordinates for candidate buttons.
-3. Cross-reference with `snapshot` (UIA tree) for any named elements in the same area.
-4. Click and verify the result before proceeding to the next step.
-
 ## Requirements
 
 - Windows 8.1 / 10 / 11
@@ -334,3 +319,7 @@ Some actions are buried in 2nd- or 3rd-level menus. Buttons may show only icons 
 agent-windows is licensed under the **MIT License** (see the root `LICENSE`).
 
 The vendored `uia` module under `src/agent_windows/uia/` is derived from [yinkaisheng/Python-UIAutomation-for-Windows](https://github.com/yinkaisheng/Python-UIAutomation-for-Windows), which is **Apache License 2.0** — see `src/agent_windows/uia/LICENSE-APACHE.txt` and `NOTICE` in that directory. Original copyright notices are retained in each derived file. Some other patterns are adapted from [Windows-MCP](https://github.com/CursorTouch/Windows-MCP) (MIT).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Report security issues via [SECURITY.md](SECURITY.md).
