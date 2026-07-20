@@ -188,3 +188,31 @@ class TestTypeTextLength:
         from agent_windows.daemon.handlers import input as input_mod
         with pytest.raises(ValueError, match="exceeds the"):
             HANDLERS["type"]({"text": "x" * (input_mod.MAX_TYPE_TEXT_LEN + 1)})
+
+
+# ── key_down --hold cap (F11) ─────────────────────────────────────────
+
+
+class TestKeyHoldRange:
+    """key_down --hold sleeps for the duration on the single STA worker, so a
+    runaway hold would tie the daemon up. Bounded by MAX_KEY_HOLD_SECONDS. (F11)"""
+
+    def test_hold_at_cap_passes(self):
+        """hold == MAX_KEY_HOLD_SECONDS (the inclusive upper bound) is accepted."""
+        from agent_windows.daemon.handlers import input as input_mod
+        with patch("agent_windows.core.input_controller.key_down") as m:
+            HANDLERS["key_down"]({"keys": "a",
+                                  "hold": input_mod.MAX_KEY_HOLD_SECONDS})
+        assert m.call_args.kwargs["hold"] == float(input_mod.MAX_KEY_HOLD_SECONDS)
+
+    def test_hold_just_over_cap_rejected(self):
+        from agent_windows.daemon.handlers import input as input_mod
+        with pytest.raises(ValueError, match="hold must be in"):
+            HANDLERS["key_down"]({"keys": "a",
+                                  "hold": input_mod.MAX_KEY_HOLD_SECONDS + 0.1})
+
+    def test_hold_none_skips_validation(self):
+        """No hold → no bound check, keys stay pressed (pair with key_up)."""
+        with patch("agent_windows.core.input_controller.key_down") as m:
+            HANDLERS["key_down"]({"keys": "a"})
+        m.assert_called_once_with("a", hold=None)

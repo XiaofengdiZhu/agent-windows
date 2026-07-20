@@ -84,6 +84,17 @@ def shortcut_fn(keys: str) -> str:
     return str(_call("shortcut", keys=keys).get("output", ""))
 
 
+def key_down_fn(keys: str, hold: float | None = None) -> str:
+    params: dict = {"keys": keys}
+    if hold is not None:
+        params["hold"] = hold
+    return str(_call("key_down", **params).get("output", ""))
+
+
+def key_up_fn(keys: str) -> str:
+    return str(_call("key_up", keys=keys).get("output", ""))
+
+
 def expand_fn(selector: str) -> str:
     """Expand an expandable element. (TODO #12)"""
     return str(_call("expand", selector=selector).get("output", ""))
@@ -194,6 +205,24 @@ def register(mcp) -> None:
                                    destructiveHint=True, idempotentHint=False, openWorldHint=False))
     def _shortcut(keys: str) -> str:
         return shortcut_fn(keys=keys)
+
+    @mcp.tool(name="key_down", description=(
+        "Press key(s) (raw key-down) — same key vocabulary as shortcut "
+        "('a', 'ctrl+shift+a', 'enter', 'f5', 'up'). Keywords: key down, press "
+        "key, hold key, press and hold, raw key. hold=N auto-releases after N "
+        "seconds; omit to keep pressed (pair with key_up)."
+    ), annotations=ToolAnnotations(title="Key Down", readOnlyHint=False,
+                                   destructiveHint=True, idempotentHint=False, openWorldHint=False))
+    def _key_down(keys: str, hold: float | None = None) -> str:
+        return key_down_fn(keys=keys, hold=hold)
+
+    @mcp.tool(name="key_up", description=(
+        "Release key(s) (raw key-up) previously pressed via key_down. "
+        "Keywords: key up, release key, let go."
+    ), annotations=ToolAnnotations(title="Key Up", readOnlyHint=False,
+                                   destructiveHint=False, idempotentHint=False, openWorldHint=False))
+    def _key_up(keys: str) -> str:
+        return key_up_fn(keys=keys)
 
     @mcp.tool(name="expand", description=(
         "Expand an expandable UI element at @eN (a ComboBox dropdown, "

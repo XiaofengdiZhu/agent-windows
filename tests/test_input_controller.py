@@ -317,6 +317,109 @@ class TestShortcutParsing:
         assert released == [ic.VK_SHIFT, ic.VK_CONTROL]
 
 
+# ── parse_key / key_down / key_up ────────────────────────────────────
+
+
+class TestParseKey:
+    """parse_key(token) → VK code, shared by shortcut, key_down, key_up."""
+
+    @pytest.mark.parametrize("token,vk", [
+        # alias → canonical VK
+        ("ctrl", ic.VK_CONTROL), ("control", ic.VK_CONTROL),
+        ("return", ic.VK_RETURN), ("enter", ic.VK_RETURN),
+        ("pgdn", ic.VK_NEXT),
+        # canonical SPECIAL_KEYS name verbatim (no alias hit)
+        ("Home", ic.VK_HOME), ("F4", 0x73),
+        # single ASCII char → uppercase ord
+        ("a", ord("A")), ("z", ord("Z")), ("5", ord("5")),
+    ])
+    def test_token_resolves_to_vk(self, token, vk):
+        assert ic.parse_key(token) == vk
+
+    def test_unknown_token_raises(self):
+        with pytest.raises(ValueError, match="Unknown key"):
+            ic.parse_key("notakey")
+
+
+class TestKeyDownKeyUp:
+    """key_down/key_up drive _press_key/_release_key directly (no _send_vk_key),
+    so they can hold keys. Mock the low-level senders to assert ordering."""
+
+    def test_key_down_presses_in_order_no_release(self):
+        """hold=None → press each in order, never release (pair with key_up)."""
+        with patch.object(ic, "_press_key") as m_press, \
+             patch.object(ic, "_release_key") as m_release, \
+             patch.object(ic.time, "sleep"):
+            ic.key_down("ctrl+shift+a")
+        assert [c.args[0] for c in m_press.call_args_list] == \
+            [ic.VK_CONTROL, ic.VK_SHIFT, ord("A")]
+        m_release.assert_not_called()
+
+    def test_key_down_with_hold_auto_releases_in_reverse(self):
+        with patch.object(ic, "_press_key"), \
+             patch.object(ic, "_release_key") as m_release, \
+             patch.object(ic.time, "sleep") as m_sleep:
+            ic.key_down("ctrl+shift+a", hold=0.5)
+        # the hold duration is slept exactly once
+        assert 0.5 in [c.args[0] for c in m_sleep.call_args_list]
+        # released in reverse press order
+        assert [c.args[0] for c in m_release.call_args_list] == \
+            [ord("A"), ic.VK_SHIFT, ic.VK_CONTROL]
+
+    def test_key_down_hold_zero_is_immediate_tap(self):
+        """hold=0 → press then immediately release (a timed tap)."""
+        with patch.object(ic, "_press_key"), \
+             patch.object(ic, "_release_key") as m_release, \
+             patch.object(ic.time, "sleep"):
+            ic.key_down("a", hold=0)
+        m_release.assert_called_once_with(ord("A"))
+
+    def test_key_up_releases_in_reverse(self):
+        with patch.object(ic, "_release_key") as m_release, \
+             patch.object(ic.time, "sleep"):
+            ic.key_up("ctrl+shift+a")
+        assert [c.args[0] for c in m_release.call_args_list] == \
+            [ord("A"), ic.VK_SHIFT, ic.VK_CONTROL]
+
+    def test_key_down_strips_whitespace(self):
+        with patch.object(ic, "_press_key") as m_press, \
+             patch.object(ic, "_release_key"), \
+             patch.object(ic.time, "sleep"):
+            ic.key_down("  ctrl + a  ")
+        assert [c.args[0] for c in m_press.call_args_list] == \
+            [ic.VK_CONTROL, ord("A")]
+
+    def test_key_down_unknown_key_raises_before_pressing(self):
+        """A bad token is rejected before any press — parse_key runs for all
+        tokens up front, so no key is left dangling."""
+        with patch.object(ic, "_press_key") as m_press, \
+             patch.object(ic, "_release_key"), \
+             patch.object(ic.time, "sleep"):
+            with pytest.raises(ValueError, match="Unknown key"):
+                ic.key_down("ctrl+notakey")
+        m_press.assert_not_called()
+
+    def test_key_down_releases_held_keys_if_press_raises(self):
+        """If a press fails mid-sequence, the already-held keys MUST still be
+        released — otherwise the desktop is left with a key stuck down,
+        corrupting every subsequent input. Same guarantee as shortcut's
+        try/finally (test_modifiers_released_even_if_final_key_raises)."""
+        n = {"i": 0}
+
+        def boom(vk):
+            n["i"] += 1
+            if n["i"] == 2:
+                raise OSError("press failed")
+
+        with patch.object(ic, "_press_key", side_effect=boom), \
+             patch.object(ic, "_release_key") as m_release, \
+             patch.object(ic.time, "sleep"):
+            with pytest.raises(OSError):
+                ic.key_down("ctrl+shift+a")
+        # ctrl (1st) was held before the 2nd press blew up → must be released
+        m_release.assert_called_with(ic.VK_CONTROL)
+
+
 # ── Low-level key senders: _send_vk_key / _press_key / _release_key ──
 
 

@@ -76,6 +76,8 @@
     { "name": "ground", "description": "Locate a UI element by natural-language description and return click-ready coordinates [x, y], confidence, and a marked screenshot." },
     { "name": "highlight", "description": "Draw a labeled rectangle over a region [x1,y1,x2,y2] on a screenshot and return the marked image." },
     { "name": "hover", "description": "Hover at [x, y] or @eN to trigger tooltips/highlights." },
+    { "name": "key_down", "description": "Press key(s) (raw key-down). With hold N, auto-release after N seconds; without, stays pressed (pair with key_up)." },
+    { "name": "key_up", "description": "Release key(s) (raw key-up). Pair with key_down." },
     { "name": "mouse_down", "description": "Press and hold a mouse button at [x, y] or @eN." },
     { "name": "mouse_up", "description": "Release a mouse button at [x, y] or @eN." },
     { "name": "move", "description": "Move the mouse cursor to [x, y] or @eN (without clicking)." },

@@ -227,9 +227,12 @@ agent-windows shortcut ctrl+c                        # Copy
 agent-windows shortcut ctrl+v                        # Paste
 agent-windows shortcut alt+f4                        # Close window
 agent-windows shortcut win+r                         # Run dialog
+agent-windows key-down a --hold 0.5                  # Hold key 0.5s then auto-release
+agent-windows key-down shift                         # Press and HOLD (stays down)
+agent-windows key-up shift                           # Release (pair with key-down)
 ```
 
-Key notation for `shortcut`: `ctrl`, `alt`, `shift`, `win` as modifiers, joined with `+`. Special keys: `enter`, `escape`, `tab`, `space`, `backspace`, `delete`, `up/down/left/right`, `home`, `end`, `pageup`, `pagedown`, `f1`–`f12`.
+Key notation for `shortcut`: `ctrl`, `alt`, `shift`, `win` as modifiers, joined with `+`. Special keys: `enter`, `escape`, `tab`, `space`, `backspace`, `delete`, `up/down/left/right`, `home`, `end`, `pageup`, `pagedown`, `f1`–`f12`. The same notation applies to `key-down`/`key-up` (raw key press/release; `--hold` on `key-down` auto-releases after N seconds, otherwise the key stays pressed until `key-up`).
 
 `type` options: `--at X,Y` or `--at-selector @eN` (click first; `--at-selector` overrides `--at`), `--enter`, `--clear` (select-all + delete first), `--caret start|idle|end` (move caret before typing — `start` presses Home, `end` presses End, `idle` leaves it; applied before `--clear`).
 

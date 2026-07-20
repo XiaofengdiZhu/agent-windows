@@ -104,6 +104,28 @@ class TestInputCommands:
         _, params = _cmd_calls(mock_cmd)[0]
         assert params == {"keys": "ctrl+c"}
 
+    @patch("agent_windows.cli.commands.input._cmd")
+    def test_key_down_with_hold(self, mock_cmd):
+        runner.invoke(app, ["key-down", "a", "--hold", "0.5"])
+        method, params = _cmd_calls(mock_cmd)[0]
+        assert method == "key_down"
+        assert params == {"keys": "a", "hold": 0.5}
+
+    @patch("agent_windows.cli.commands.input._cmd")
+    def test_key_down_without_hold_omits_it(self, mock_cmd):
+        """No --hold → hold omitted (stays pressed; pair with key-up)."""
+        runner.invoke(app, ["key-down", "ctrl+shift+a"])
+        method, params = _cmd_calls(mock_cmd)[0]
+        assert method == "key_down"
+        assert params == {"keys": "ctrl+shift+a"}
+
+    @patch("agent_windows.cli.commands.input._cmd")
+    def test_key_up(self, mock_cmd):
+        runner.invoke(app, ["key-up", "ctrl+shift+a"])
+        method, params = _cmd_calls(mock_cmd)[0]
+        assert method == "key_up"
+        assert params == {"keys": "ctrl+shift+a"}
+
     # ── --selector / -s (TODO #13) ─────────────────────────────────────
 
     @patch("agent_windows.cli.commands.input._cmd")

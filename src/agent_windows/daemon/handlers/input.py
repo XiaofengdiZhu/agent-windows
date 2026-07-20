@@ -9,6 +9,10 @@ from agent_windows.daemon.router import handler, require
 # would block the single STA worker for ~56 hours. Cap the text length. (SEC3-05)
 MAX_TYPE_TEXT_LEN = 10000
 
+# DoS bound: key_down --hold sleeps for the duration on the single STA worker.
+# 60s is well under STA_SUBMIT_TIMEOUT_S (300) and any realistic key hold. (F11)
+MAX_KEY_HOLD_SECONDS = 60
+
 
 def _coords(params: dict) -> tuple[int, int]:
     """Extract the target (x, y) coordinates from params. (TODO #13)
@@ -218,3 +222,39 @@ def _shortcut(params: dict) -> dict[str, Any]:
     keys = require(params, "keys", str)
     shortcut(keys)
     return {"output": f"## Shortcut\nKeys: {keys}"}
+
+
+@handler("key_down")
+def _key_down(params: dict) -> dict[str, Any]:
+    """Press key(s) (raw key-down).
+
+    ``hold`` (seconds, optional): when set, releases the keys automatically
+    after the hold elapses; when omitted, keys stay pressed (pair with
+    ``key_up``). Bounded by ``MAX_KEY_HOLD_SECONDS`` so a runaway hold can't
+    tie up the single STA worker. (F11)
+    """
+    from agent_windows.core.input_controller import key_down
+
+    keys = require(params, "keys", str)
+    hold = params.get("hold")
+    if hold is not None:
+        try:
+            hold = float(hold)
+        except (TypeError, ValueError):
+            raise ValueError(f"hold must be a number of seconds; got {hold!r}")
+        if not (0 <= hold <= MAX_KEY_HOLD_SECONDS):
+            raise ValueError(
+                f"hold must be in [0, {MAX_KEY_HOLD_SECONDS}] seconds; got {hold}")
+    key_down(keys, hold=hold)
+    return {"output": f"## Key Down\nKeys: {keys}"
+            + (f"\nHeld: {hold}s (auto-release)" if hold is not None else "\nHeld: until key-up")}
+
+
+@handler("key_up")
+def _key_up(params: dict) -> dict[str, Any]:
+    """Release key(s) (raw key-up)."""
+    from agent_windows.core.input_controller import key_up
+
+    keys = require(params, "keys", str)
+    key_up(keys)
+    return {"output": f"## Key Up\nKeys: {keys}"}

@@ -282,6 +282,7 @@ class TestRequire:
                     "highlight", "diff", "cleanup_screenshots",
                     "move", "drag", "hover", "dblclick",
                     "mouse_down", "mouse_up", "app_resize",
+                    "key_down", "key_up",
                     "expand", "collapse"}
         registered = set(HANDLERS.keys())
         missing = expected - registered

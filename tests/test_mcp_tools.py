@@ -306,6 +306,26 @@ def test_scroll_fn_forwards_selector():
     m.assert_called_once_with("scroll", selector="@e1", direction="up", amount=3)
 
 
+def test_key_down_fn_forwards_hold():
+    with patch.object(inp, "_call", return_value={"output": "ok"}) as m:
+        out = inp.key_down_fn(keys="a", hold=0.5)
+    m.assert_called_once_with("key_down", keys="a", hold=0.5)
+    assert out == "ok"
+
+
+def test_key_down_fn_omits_hold_when_none():
+    """hold=None → hold not forwarded (keys stay pressed; pair with key_up)."""
+    with patch.object(inp, "_call", return_value={"output": "ok"}) as m:
+        inp.key_down_fn(keys="ctrl+a")
+    m.assert_called_once_with("key_down", keys="ctrl+a")
+
+
+def test_key_up_fn_forwards_keys():
+    with patch.object(inp, "_call", return_value={"output": "ok"}) as m:
+        inp.key_up_fn(keys="ctrl+a")
+    m.assert_called_once_with("key_up", keys="ctrl+a")
+
+
 import agent_windows.mcp.tools.system as sysmod
 
 
@@ -608,7 +628,8 @@ def test_register_all_registers_every_domain_on_a_fake_mcp():
         "ground", "detect", "ask_vision",
         # input
         "click", "dblclick", "hover", "move", "mouse_down", "mouse_up",
-        "drag", "scroll", "type", "shortcut", "expand", "collapse",
+        "drag", "scroll", "type", "shortcut", "key_down", "key_up",
+        "expand", "collapse",
         # system
         "app_launch", "app_switch", "app_resize", "app_list", "shell",
         "fs_read", "fs_write", "fs_list", "fs_copy", "fs_move", "fs_delete",

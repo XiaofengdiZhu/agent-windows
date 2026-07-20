@@ -429,6 +429,27 @@ Modifiers: `ctrl`, `alt`, `shift`, `win`. Special keys: `enter`, `escape`, `tab`
 
 ---
 
+### key-down / key-up
+
+Press and hold / release keys as raw key events. Use the pair together for custom hold sequences, or pass `--hold` to `key-down` for a self-contained timed press (press → sleep → auto-release).
+
+```bash
+agent-windows key-down a --hold 0.5          # Hold 0.5s then auto-release
+agent-windows key-down ctrl+shift+a          # Press and HOLD (stays down)
+agent-windows key-up ctrl+shift+a            # Release (pair with key-down)
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `keys` | str | **required** | Key notation, e.g. `a`, `ctrl+shift+a`, `enter` (same vocabulary as `shortcut`) |
+| `--hold` | float | `None` | Hold N seconds then auto-release (max 60); omit to keep pressed (pair with `key-up`) |
+
+Same key vocabulary as `shortcut`. `key-up` takes only `keys`. Without `--hold`, keys stay pressed until a matching `key-up` — a stuck key corrupts later input, so always pair them.
+
+**Output**: `{output}`
+
+---
+
 ## Batch Interaction
 
 ### multi-select
@@ -835,7 +856,7 @@ agent-windows mcp uninstall        # stop + remove the login auto-start task
 
 `--tools`/`--exclude-tools` are enforced: removed tools cannot be invoked, including via `batch`. Each flag also has an `AGENT_WINDOWS_*` env-var equivalent (see the Global Options table below).
 
-The server exposes ~48 tools mapping 1:1 to the daemon methods (screenshot, snapshot, observe, ground, detect, ask_vision, highlight, diff, get_text, element_state, cleanup_screenshots, click, dblclick, hover, move, mouse_down, mouse_up, drag, scroll, type, shortcut, expand, collapse, app_launch/switch/resize/list, shell, fs_read/write/list/copy/move/delete/search/info, clipboard_get/set, process_list/kill, notify, registry, batch, multi_select, multi_edit, ping, wait, wait_for). Same usage tips apply: call `snapshot` first for pixel-exact coordinates, prefer it over `ground`/`detect` for named controls, and always `app switch` before input.
+The server exposes ~50 tools mapping 1:1 to the daemon methods (screenshot, snapshot, observe, ground, detect, ask_vision, highlight, diff, get_text, element_state, cleanup_screenshots, click, dblclick, hover, move, mouse_down, mouse_up, drag, scroll, type, shortcut, key_down, key_up, expand, collapse, app_launch/switch/resize/list, shell, fs_read/write/list/copy/move/delete/search/info, clipboard_get/set, process_list/kill, notify, registry, batch, multi_select, multi_edit, ping, wait, wait_for). Same usage tips apply: call `snapshot` first for pixel-exact coordinates, prefer it over `ground`/`detect` for named controls, and always `app switch` before input.
 
 ---
 

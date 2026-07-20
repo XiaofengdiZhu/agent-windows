@@ -97,7 +97,7 @@ def global_options(
 # Commands defined in individual modules, added here to the main app.
 
 from agent_windows.cli.commands.observe import observe, snapshot, screenshot, ground, ask_vision, detect, cleanup, highlight, diff_screenshot, get_text, is_cmd  # noqa: E402
-from agent_windows.cli.commands.input import click, type_text, scroll, move, dblclick, hover, mouse_down, mouse_up, drag, shortcut, expand, collapse  # noqa: E402
+from agent_windows.cli.commands.input import click, type_text, scroll, move, dblclick, hover, mouse_down, mouse_up, drag, shortcut, key_down, key_up, expand, collapse  # noqa: E402
 from agent_windows.cli.commands.system import (  # noqa: E402
     shell, batch, notify,
     app_cmd, fs_cmd, clip_cmd, proc_cmd, registry_cmd,
@@ -125,6 +125,8 @@ app.command()(mouse_down)
 app.command()(mouse_up)
 app.command()(drag)
 app.command()(shortcut)
+app.command()(key_down)
+app.command()(key_up)
 app.command()(expand)
 app.command()(collapse)
 app.command()(shell)

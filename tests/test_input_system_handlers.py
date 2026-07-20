@@ -249,6 +249,57 @@ class TestShortcutHandler:
             HANDLERS["shortcut"]({"keys": ["ctrl", "c"]})
 
 
+class TestKeyDownUpHandlers:
+    """key_down/key_up are keyboard half-events (mirror mouse_down/mouse_up).
+    hold (optional, seconds) auto-releases; omit to keep pressed (pair key_up)."""
+
+    def test_key_down_no_hold_stays_pressed(self):
+        with patch("agent_windows.core.input_controller.key_down") as m:
+            HANDLERS["key_down"]({"keys": "a"})
+        m.assert_called_once_with("a", hold=None)
+
+    def test_key_down_forwards_hold(self):
+        with patch("agent_windows.core.input_controller.key_down") as m:
+            HANDLERS["key_down"]({"keys": "ctrl+a", "hold": 0.5})
+        m.assert_called_once_with("ctrl+a", hold=0.5)
+
+    def test_key_up_forwards_keys(self):
+        with patch("agent_windows.core.input_controller.key_up") as m:
+            HANDLERS["key_up"]({"keys": "ctrl+a"})
+        m.assert_called_once_with("ctrl+a")
+
+    def test_key_down_hold_coerced_to_float(self):
+        """A JSON int hold (1) is coerced to float before forwarding."""
+        with patch("agent_windows.core.input_controller.key_down") as m:
+            HANDLERS["key_down"]({"keys": "a", "hold": 1})
+        assert m.call_args.kwargs["hold"] == 1.0
+
+    def test_key_down_output_shape(self):
+        with patch("agent_windows.core.input_controller.key_down"):
+            r = HANDLERS["key_down"]({"keys": "a"})
+        assert "Key Down" in r["output"]
+        assert "Keys: a" in r["output"]
+        assert "until key-up" in r["output"]
+
+    def test_key_down_hold_over_limit_rejected(self):
+        """hold > MAX_KEY_HOLD_SECONDS (60) → INVALID_PARAMS, not a 60s+ block."""
+        with pytest.raises(ValueError, match="hold must be in"):
+            HANDLERS["key_down"]({"keys": "a", "hold": 999})
+
+    def test_key_down_hold_negative_rejected(self):
+        with pytest.raises(ValueError, match="hold must be in"):
+            HANDLERS["key_down"]({"keys": "a", "hold": -1})
+
+    def test_key_down_hold_non_number_rejected(self):
+        """A string hold a JSON client might send → INVALID_PARAMS, not a crash."""
+        with pytest.raises(ValueError, match="hold must be a number"):
+            HANDLERS["key_down"]({"keys": "a", "hold": "soon"})
+
+    def test_key_down_keys_must_be_str(self):
+        with pytest.raises(ValueError, match="must be str"):
+            HANDLERS["key_down"]({"keys": ["a", "b"]})
+
+
 class TestExpandCollapseHandlers:
     """expand/collapse take ONLY a selector (@eN) — no coordinates — and forward
     to the core pattern-based functions. (TODO #12)"""

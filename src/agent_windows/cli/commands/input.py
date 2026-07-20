@@ -176,6 +176,30 @@ def shortcut(
     _cmd(ctx, "shortcut", keys=keys)
 
 
+@app.command(name="key-down")
+def key_down(
+    ctx: typer.Context,
+    keys: str = typer.Argument(help="Key(s) to press, e.g. 'a', 'ctrl+shift+a', 'enter'"),
+    hold: float = typer.Option(
+        None, "--hold",
+        help="Hold N seconds then auto-release; omit to keep pressed (pair with key-up)"),
+) -> None:
+    """Press key(s) (raw key-down). With --hold, releases after N seconds; without, stays pressed."""
+    params = {"keys": keys}
+    if hold is not None:
+        params["hold"] = hold
+    _cmd(ctx, "key_down", **params)
+
+
+@app.command(name="key-up")
+def key_up(
+    ctx: typer.Context,
+    keys: str = typer.Argument(help="Key(s) to release"),
+) -> None:
+    """Release key(s) (raw key-up)."""
+    _cmd(ctx, "key_up", keys=keys)
+
+
 @app.command()
 def expand(
     ctx: typer.Context,

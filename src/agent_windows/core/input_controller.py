@@ -458,6 +458,26 @@ def type_text_at(text: str, x: int, y: int, clear: bool = False,
         _send_vk_key(VK_RETURN)
 
 
+def parse_key(token: str) -> int:
+    """Resolve a single key token to its virtual-key code.
+
+    Accepts aliases (``ctrl``, ``enter``, ``pgup`` …, see ``KEY_ALIASES``),
+    canonical special-key names (``SPECIAL_KEYS``), or a single character
+    (``"a"`` → ``0x41``). Raises ``ValueError`` for an unknown multi-char
+    token. Shared by :func:`shortcut`, :func:`key_down`, :func:`key_up`.
+    """
+    name = KEY_ALIASES.get(token.lower(), token)
+    if len(name) == 1:
+        name = name.upper()
+    vk = SPECIAL_KEYS.get(name)
+    if vk is None:
+        if len(name) == 1:
+            vk = ord(name.upper())
+        else:
+            raise ValueError(f"Unknown key: {token}")
+    return vk
+
+
 def shortcut(keys: str, wait_time: float = 0.3) -> None:
     """Send a keyboard shortcut (e.g. 'ctrl+c', 'alt+f4').
 
@@ -468,23 +488,7 @@ def shortcut(keys: str, wait_time: float = 0.3) -> None:
     if not parts:
         return
 
-    # Resolve key names
-    resolved: list[tuple[str, int]] = []
-    for part in parts:
-        name = KEY_ALIASES.get(part.lower(), part)
-        # Capitalize first letter for display
-        if len(name) == 1:
-            name = name.upper()
-
-        vk = SPECIAL_KEYS.get(name)
-        if vk is None:
-            # Try single character
-            if len(name) == 1:
-                vk = ord(name.upper())
-            else:
-                raise ValueError(f"Unknown key: {part}")
-
-        resolved.append((name, vk))
+    vks = [parse_key(p) for p in parts]
 
     # Press modifier keys (hold them), press the final key, then release
     # modifiers in reverse order. The whole press→final→release sequence is
@@ -494,14 +498,13 @@ def shortcut(keys: str, wait_time: float = 0.3) -> None:
     # (below) has the same guard for the same reason.
     held_vks: list[int] = []
     try:
-        for name, vk in resolved[:-1]:
+        for vk in vks[:-1]:
             _press_key(vk)
             held_vks.append(vk)
             time.sleep(0.01)
 
         # Press the final key
-        final_name, final_vk = resolved[-1]
-        _send_vk_key(final_vk)
+        _send_vk_key(vks[-1])
         time.sleep(0.01)
     finally:
         # Release modifiers in reverse order (best-effort: each release is
@@ -513,6 +516,59 @@ def shortcut(keys: str, wait_time: float = 0.3) -> None:
                 logger.warning("Failed to release modifier key %s", vk, exc_info=True)
             time.sleep(0.01)
 
+    time.sleep(wait_time)
+
+
+def key_down(keys: str, hold: float | None = None, wait_time: float = 0.3) -> None:
+    """Press key(s) and optionally hold, then auto-release.
+
+    Each token in ``keys`` (``+``-separated, same vocabulary as
+    :func:`shortcut`) is pressed in order. With ``hold`` set, sleeps ``hold``
+    seconds then releases every key in reverse order (a self-contained timed
+    press). With ``hold=None`` the keys stay pressed — pair with
+    :func:`key_up`, since a stuck key corrupts later input.
+
+    The press→hold→release sequence is wrapped in try/finally (matching
+    :func:`shortcut`) so an exception — a ctypes OSError, a Ctrl+C during the
+    hold sleep, a handler timeout — can't leave a key physically stuck down,
+    which would corrupt every subsequent input on the desktop.
+    """
+    vks = [parse_key(t.strip()) for t in keys.split("+")]
+    held_vks: list[int] = []
+    completed = False
+    try:
+        for vk in vks:
+            _press_key(vk)
+            held_vks.append(vk)
+            time.sleep(0.01)
+        if hold is not None:
+            time.sleep(hold)
+            for vk in reversed(held_vks):
+                _release_key(vk)
+                time.sleep(0.01)
+        completed = True  # success — for hold=None, keys intentionally stay down
+    finally:
+        # Best-effort cleanup so a partial press (or a Ctrl+C / timeout landing
+        # during the hold sleep) can't leave keys stuck. `completed` gates it so
+        # the normal hold=None path keeps keys pressed (pair with key_up); any
+        # BaseException (KeyboardInterrupt included) leaves completed=False and
+        # releases whatever was actually pressed. Each release is independent.
+        if not completed:
+            for vk in reversed(held_vks):
+                try:
+                    _release_key(vk)
+                except Exception:
+                    logger.warning("Failed to release key %s", vk, exc_info=True)
+                time.sleep(0.01)
+    time.sleep(wait_time)
+
+
+def key_up(keys: str, wait_time: float = 0.3) -> None:
+    """Release key(s) previously pressed via :func:`key_down`."""
+    vks = [parse_key(t.strip()) for t in keys.split("+")]
+    for vk in reversed(vks):
+        _release_key(vk)
+        time.sleep(0.01)
     time.sleep(wait_time)
 
 
