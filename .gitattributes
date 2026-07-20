@@ -1,0 +1,32 @@
+# Normalize all text files to LF in the repo.
+# Working tree uses LF on all platforms; CRLF gets converted on commit.
+* text=auto eol=lf
+
+# Windows-only shell scripts keep CRLF in the working tree
+# (cmd.exe / PowerShell choke on LF in some edge cases).
+*.cmd   text eol=crlf
+*.bat   text eol=crlf
+*.ps1   text eol=crlf
+
+# Treat lockfiles as plain text (force LF, avoid merge noise).
+*.lock  text eol=lf
+
+# Binary assets — never normalize or diff.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.icns  binary
+*.bmp   binary
+*.webp  binary
+*.exe   binary
+*.dll   binary
+*.lib   binary
+*.pdb   binary
+*.zip   binary
+*.7z    binary
+*.gz    binary
+*.tar   binary
+*.whl   binary
+*.egg   binary
