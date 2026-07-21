@@ -168,6 +168,26 @@ def test_snapshot_fn_forwards_display():
     assert out == "tree"
 
 
+def test_snapshot_fn_forwards_window():
+    with patch("agent_windows.mcp.tools.observation._call") as m:
+        obs.snapshot_fn(window="note")
+    m.assert_called_once_with("snapshot", window="note")
+
+
+def test_snapshot_fn_forwards_active():
+    with patch("agent_windows.mcp.tools.observation._call") as m:
+        obs.snapshot_fn(active=True)
+    m.assert_called_once_with("snapshot", active=True)
+
+
+def test_snapshot_fn_forwards_all_combined():
+    # active=False is the default — it must NOT inject the key (mirrors the
+    # CLI/handler: only a truthy active is sent).
+    with patch("agent_windows.mcp.tools.observation._call") as m:
+        obs.snapshot_fn(display=[0], window="note", active=False)
+    m.assert_called_once_with("snapshot", display=[0], window="note")
+
+
 def test_observe_fn_defaults_to_snapshot_plus_screenshot():
     with patch.object(obs, "_call", return_value={"output": "x"}) as m:
         out = obs.observe_fn()

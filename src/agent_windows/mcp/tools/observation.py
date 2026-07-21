@@ -124,13 +124,33 @@ def screenshot_fn(
         return [f"Error capturing screenshot: {e}. Please try again."]
 
 
-def snapshot_fn(display: list[int] | None = None) -> str:
+def snapshot_fn(
+    display: list[int] | None = None,
+    window: str | None = None,
+    active: bool = False,
+) -> str:
     """Traverse the UIA tree and return a semantic snapshot.
 
     On failure returns a retryable error string instead of raising. (TODO #12)
+
+    ``window``/``active`` scope the snapshot to a single top-level window.
+    ``window`` accepts an HWND (decimal or ``0x`` hex) or a title/process
+    substring — the daemon resolves it (mirroring ``app switch``: HWND first,
+    then title substring, then process name fallback).
+    ``active=True`` targets the foreground window. The two are mutually
+    exclusive (the daemon raises INVALID_PARAMS); omit both for the full
+    desktop snapshot. ``display`` further crops by display geometry and
+    composes with either scoping mode.
     """
+    params: dict[str, Any] = {}
+    if display is not None:
+        params["display"] = display
+    if window is not None:
+        params["window"] = window
+    if active:
+        params["active"] = True
     try:
-        return str(_call("snapshot", display=display).get("output", ""))
+        return str(_call("snapshot", **params).get("output", ""))
     except (RuntimeError, OSError) as e:
         logger.warning("snapshot tool failed", exc_info=True)
         return f"Error capturing desktop state: {e}. Please try again."
@@ -301,11 +321,12 @@ def register(mcp) -> None:
         "bounding boxes and @eN labels. Pixel-precise; use before clicking. "
         "Keywords: accessibility tree, UI elements, inspect, what's on screen, "
         "read UI, element ids. Optionally filter to specific displays, e.g. "
-        "display=[0]."
+        "display=[0]. Use window/active to scope to one top-level window."
     ), annotations=ToolAnnotations(title="Snapshot", readOnlyHint=True,
                                    idempotentHint=True, openWorldHint=False))
-    def _snapshot(display: list[int] | None = None) -> str:
-        return snapshot_fn(display=display)
+    def _snapshot(display: list[int] | None = None,
+                  window: str | None = None, active: bool = False) -> str:
+        return snapshot_fn(display=display, window=window, active=active)
 
     @mcp.tool(name="observe", description=(
         "Combined observation: snapshot + screenshot (+ optional visual "

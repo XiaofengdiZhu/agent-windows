@@ -95,7 +95,7 @@
     { "name": "scroll", "description": "Scroll at [x, y] or @eN." },
     { "name": "shell", "description": "Run a PowerShell command and return stdout/stderr." },
     { "name": "shortcut", "description": "Send a keyboard shortcut, e.g. \"ctrl+c\", \"alt+tab\", \"win+r\"." },
-    { "name": "snapshot", "description": "Return a semantic snapshot of the UIA accessibility tree: focused window, open windows, and interactive/scrollable elements with their bounding boxes and @eN labels." },
+    { "name": "snapshot", "description": "Return a semantic snapshot of the UIA accessibility tree: focused window, open windows, and interactive/scrollable elements with their bounding boxes and @eN labels. Use window/active to scope to one top-level window." },
     { "name": "type", "description": "Type text using Unicode direct input (bypasses IME)." },
     { "name": "wait", "description": "Wait for a duration, an element (@eN selector) to appear, or text to appear in an interactive element's name." },
     { "name": "wait_for", "description": "Wait until a UI condition holds." }
