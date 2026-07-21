@@ -581,14 +581,28 @@ fn parse_observe(rest: &[String]) -> Result<Action, ParseError> {
     Ok(Action::Call { method: "observe".into(), params: Value::Object(params) })
 }
 
-/// `snapshot` used to forward an empty params object; now it also forwards the
-/// multi-display filter (`--display`/`-d`, repeatable) so the launcher matches
-/// the Python CLI (TODO #9-B). The daemon's `parse_display_selection` accepts a
-/// single int or a list; we always send a list (a single `-d 0` → `[0]`).
+/// `snapshot` forwards the multi-display filter (`--display`/`-d`, repeatable)
+/// plus optional window scoping: `--window V` (limit the tree to one top-level
+/// window; the daemon resolves V as HWND / title-substring / process-name) and
+/// `--active` (use the foreground window). Mirrors observe.py:snapshot.
+///
+/// `--window` is a value-taking option (listed in `value_opts`); `--active` is
+/// a bare boolean flag and must NOT appear in `value_opts` — otherwise the
+/// parser would swallow the following token as its value (the find-image /
+/// pixel-at pitfall). `collect_display(rest)` walks the raw argv itself because
+/// `-d` is repeatable and `ParsedArgs` is last-writer-wins — same split as
+/// `parse_observe`.
 fn parse_snapshot(rest: &[String]) -> Result<Action, ParseError> {
+    let p = ParsedArgs::parse(rest, &["window"]);
     let mut params = Map::new();
     if let Some(disp) = collect_display(rest)? {
         params.insert("display".into(), disp);
+    }
+    if let Some(w) = p.value(&["window"]) {
+        params.insert("window".into(), w.into());
+    }
+    if p.flag(&["active"]) {
+        params.insert("active".into(), true.into());
     }
     Ok(Action::Call { method: "snapshot".into(), params: Value::Object(params) })
 }
@@ -2409,6 +2423,65 @@ mod tests {
                 assert_eq!(params["y"], 0);
             }
             other => panic!("expected Call with x=-1920, got {:?}", other),
+        }
+    }
+
+    /// `snapshot --window V` / `--active` forwarding (TODO #9-C, mirrors the
+    /// snapshot-window-scoping spec). `--window` takes a value; `--active` is a
+    /// bare bool flag. Neither is forwarded when absent (backward compatible).
+    /// Regression lock: mirrors `parse_observe`'s coexistence of `ParsedArgs`
+    /// with `collect_display` — the repeatable `-d` walker must still see all
+    /// tokens after ParsedArgs consumes its slice.
+    #[test]
+    fn parse_snapshot_forwards_window_active() {
+        let g = GlobalFlags::default();
+        // Bare — both window/active absent (existing behavior preserved).
+        match parse(&argv(&["snapshot"]), &g) {
+            Ok(Action::Call { method, params }) => {
+                assert_eq!(method, "snapshot");
+                assert!(params.get("window").is_none());
+                assert!(params.get("active").is_none());
+                assert!(params.get("display").is_none());
+            }
+            other => panic!("expected Call, got {:?}", other),
+        }
+        // --window VALUE → params["window"]
+        match parse(&argv(&["snapshot", "--window", "note"]), &g) {
+            Ok(Action::Call { params, .. }) => assert_eq!(params["window"], "note"),
+            other => panic!("got {:?}", other),
+        }
+        // --window=VALUE form
+        match parse(&argv(&["snapshot", "--window=calc"]), &g) {
+            Ok(Action::Call { params, .. }) => assert_eq!(params["window"], "calc"),
+            other => panic!("got {:?}", other),
+        }
+        // --active (bool flag) → params["active"] = true
+        match parse(&argv(&["snapshot", "--active"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert_eq!(params["active"], true);
+                assert!(params.get("window").is_none());
+            }
+            other => panic!("got {:?}", other),
+        }
+        // Combination: -d 0 + --window — verifies collect_display still works
+        // alongside ParsedArgs (the regression that motivated the single-pass
+        // rewrite).
+        match parse(&argv(&["snapshot", "-d", "0", "--window", "note"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert_eq!(params["display"], serde_json::json!([0]));
+                assert_eq!(params["window"], "note");
+            }
+            other => panic!("got {:?}", other),
+        }
+        // --active must NOT swallow the following token as its value
+        // (regression: find-image/pixel-at tripped this when a bool flag was
+        // wrongly listed in value_opts).
+        match parse(&argv(&["snapshot", "--active", "--window", "note"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert_eq!(params["active"], true);
+                assert_eq!(params["window"], "note");
+            }
+            other => panic!("got {:?}", other),
         }
     }
 }

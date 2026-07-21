@@ -768,7 +768,7 @@ Global options (before the command):
 
 Commands:
   observe               Combined observation (snapshot + screenshot)
-  snapshot              UIA accessibility tree
+  snapshot              UIA accessibility tree (optionally scoped via --window/--active)
   screenshot            Screen capture (optionally cropped)
   ground                Visual coordinate grounding
   ask-vision            Free-form visual Q&A
