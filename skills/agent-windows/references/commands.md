@@ -39,16 +39,24 @@ When no flags are given, defaults to `--snapshot --screenshot`.
 UIA accessibility tree traversal. Returns the full structured text view.
 
 ```bash
-agent-windows snapshot
-agent-windows snapshot -d 0            # only the primary display
-agent-windows snapshot -d 0 -d 1       # union of displays 0 and 1
+agent-windows snapshot                            # full desktop (default)
+agent-windows snapshot -d 0                        # only the primary display
+agent-windows snapshot -d 0 -d 1                   # union of displays 0 and 1
+agent-windows snapshot --window "记事本"            # scope by title substring
+agent-windows snapshot --window notepad             # ...or process name (title→process fallback)
+agent-windows snapshot --window 0x1a2b              # ...or HWND (decimal or 0xHEX)
+agent-windows snapshot --active                     # foreground window only
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `--display` / `-d` | list[int] | `[]` | Limit windows/interactive-elements/cursor to the given display index(es), repeatable (e.g. `-d 0 -d 1`). Omit for the full desktop. |
+| `--window` | str | `""` | Scope to one top-level window. `VALUE` is an HWND (decimal `12345` or `0xHEX`), a title substring (case-insensitive), or a process name — title misses fall back to process match, same as `app switch`. First match wins; multiple matches print a `⚠ Matched N windows ...` warning at the top (pass the HWND for determinism). Zero matches → `INVALID_PARAMS` (`Window not found`). |
+| `--active` | bool | `false` | Scope to the foreground window (`GetForegroundWindow`). Mutually exclusive with `--window` (both given → `INVALID_PARAMS`). |
 
 Uses config `tree.max_depth` (default 15), `tree.max_elements` (default 200), `tree.timeout` (default 10s), `tree.include_invisible`, `tree.include_offscreen`.
+
+**Window scoping** (`--window` / `--active`): skips the full-screen enumerate and expands only the target window's subtree — lighter output when one large window (browser/IDE) would otherwise dominate. `@eN` refs restart at `@e1` and are written to the same 2s TTL cache slot used by `observe`/`snapshot`, so a follow-up `click @e1` / `get-text @e1` / `element_state @e1` resolves against that subtree with no cross-window mapping. Output is prefixed with a `## Window: "<title>" (<process>, HWND 0x...)` header (plus the `⚠ Matched ...` line when the selector matched more than one window). All `tree.*` caps (`max_depth` / `max_elements` / `timeout`) still apply to the subtree.
 
 **Display filtering**: `-d` clips each window/element bounding box to the selected display(s)' union and drops items that don't overlap (intersect-clip, not "window belongs to one display" — a window spanning two displays is kept, clipped to the selected one). `@eN` refs are renumbered against the filtered list. The cursor is reported as `N/A` when it's off the selected display(s). The Accessibility Tree text block is NOT filtered (it's free text without per-line coordinates); a note is shown when a filter is active.
 

@@ -84,10 +84,16 @@ Output includes: Desktop State (cursor, resolution), Windows table, Accessibilit
 ### snapshot — UIA Tree Only
 
 ```bash
-agent-windows snapshot
+agent-windows snapshot                           # full screen (default)
+agent-windows snapshot --window "记事本"          # scope by title substring
+agent-windows snapshot --window notepad           # ...or process name (title→process fallback)
+agent-windows snapshot --window 0x1a2b            # ...or HWND (decimal or 0xHEX)
+agent-windows snapshot --active                   # foreground window only
 ```
 
 Returns a structured text view of the UIA accessibility tree. Contains the **Interactive Elements table** with `@eN` refs and their bounding box coordinates. This is the primary way to find clickable targets.
+
+`--window` / `--active` scope the traversal to a single top-level window — use when one large window (browser, IDE, complex dialog) would otherwise flood the output. `--window V` resolves as HWND (`12345` / `0x1a2b`), title substring (case-insensitive), then process name, mirroring `app switch`; first match wins and a warning is printed when multiple match. In single-window mode `@eN` restarts at `@e1` and maps to that window's subtree, written to the same 2s cache slot — so an immediate `click @e1` / `get-text @e1` lines up with the subtree, no cross-window mapping. `--window` and `--active` are mutually exclusive.
 
 ### screenshot — Screen Capture
 

@@ -111,7 +111,7 @@ Python daemon (持久化, COM STA worker)
 | 命令 | 说明 |
 |---------|-------------|
 | `observe [--snapshot] [--screenshot] [--ground DESC] [-d N]` | 组合观察（`-d`/`--display` 选择显示器，可重复） |
-| `snapshot [-d N]` | UIA 无障碍树（`-d`/`--display` 选择显示器，可重复） |
+| `snapshot [-d N] [--window V] [--active]` | UIA 无障碍树（`-d`/`--display` 选择显示器，可重复；`--window V`/`--active` 限定单窗口降噪） |
 | `screenshot [-o PATH] [--monitor N] [-s @eN] [--bbox X1,Y1,X2,Y2] [--annotate] [--grid-w N] [--grid-h N]` | 屏幕抓取；`--monitor -1`=全部；`--annotate` 叠加带编号的 `@eN` 框（全屏）+ 可选 `%` 参考网格 |
 | `ground DESCRIPTION [--single-pass]` | 视觉坐标定位（`--single-pass`：1 次 API 调用，约 2 倍速，精度较低） |
 | `detect DESCRIPTION [-i IMAGE] [--max-targets N]` | 多目标边界框检测 |
