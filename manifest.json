@@ -87,6 +87,7 @@
     { "name": "notify", "description": "Show a Windows toast notification." },
     { "name": "observe", "description": "Combined observation: snapshot + screenshot (+ optional visual grounding), returned as text." },
     { "name": "ping", "description": "Daemon health check (single IPC round-trip)." },
+    { "name": "pixel_at", "description": "Read the color at a screen point; with match, return is_match within tolerance. Deterministic, no vision-model call." },
     { "name": "process_kill", "description": "Kill a process by PID (int) or name (str)." },
     { "name": "process_list", "description": "List running processes with PID, name, memory, and CPU time." },
     { "name": "registry", "description": "Windows Registry operation." },

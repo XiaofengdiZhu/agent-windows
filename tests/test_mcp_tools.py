@@ -623,6 +623,21 @@ def test_find_image_fn_forwards_to_daemon():
     assert isinstance(out, list)  # _image_from_result -> [text] (empty path: no Image)
 
 
+def test_pixel_at_fn_forwards_to_daemon():
+    from agent_windows.mcp.tools.observation import pixel_at_fn
+    fake = {"output": "## Pixel At\nRGB(255, 0, 0) #ff0000",
+            "rgb": [255, 0, 0], "hex": "#ff0000", "screenshot_path": ""}
+    with patch("agent_windows.mcp.tools.observation._call",
+               return_value=fake) as mock_call:
+        out = pixel_at_fn(10, 20, match="#ff0000", tolerance=5)
+    assert mock_call.call_args.args == ("pixel_at",)
+    assert mock_call.call_args.kwargs == {
+        "x": 10, "y": 20, "source": None, "sample": 1,
+        "match": "#ff0000", "tolerance": 5, "grayscale": False, "output": None,
+    }
+    assert isinstance(out, list)  # _image_from_result -> [text] (empty path: no Image)
+
+
 def test_register_all_registers_every_domain_on_a_fake_mcp():
     """register_all calls register() on every tool module with the given mcp."""
     from agent_windows.mcp.tools import register_all, observation, vision, input, \
@@ -641,7 +656,7 @@ def test_register_all_registers_every_domain_on_a_fake_mcp():
     expected = {
         # observation
         "screenshot", "snapshot", "observe", "get_text", "element_state",
-        "highlight", "diff", "cleanup_screenshots", "find_image",
+        "highlight", "diff", "cleanup_screenshots", "find_image", "pixel_at",
         # vision
         "ground", "detect", "ask_vision",
         # input

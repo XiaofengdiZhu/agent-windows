@@ -218,6 +218,28 @@ def find_image_fn(
     return _image_from_result(result, "screenshot_path")
 
 
+def pixel_at_fn(
+    x: int, y: int,
+    source: str | None = None,
+    sample: int = 1,
+    match: str | None = None,
+    tolerance: int = 0,
+    grayscale: bool = False,
+    output: str | None = None,
+) -> list:
+    """Read the color at a screen point; optionally match a target color.
+
+    Deterministic, no vision-model call. Use to judge state by color (LED on/off,
+    progress-bar fill, selected swatch). Returns rgb/hex; with ``match`` also an
+    is_match boolean plus per-channel max_diff and score (0-1). Keywords: pixel
+    color, sample pixel, LED state, color at point, is color, progress bar fill.
+    """
+    result = _call("pixel_at", x=x, y=y, source=source, sample=sample,
+                   match=match, tolerance=tolerance, grayscale=grayscale,
+                   output=output)
+    return _image_from_result(result, "screenshot_path")
+
+
 def cleanup_screenshots_fn() -> str:
     """Delete old/oversized screenshots from the data dir."""
     return str(_call("cleanup_screenshots").get("output", ""))
@@ -361,6 +383,24 @@ def register(mcp) -> None:
         return find_image_fn(image=image, source=source, bbox=bbox,
                              tolerance=tolerance, grayscale=grayscale,
                              all_matches=all_matches)
+
+    @mcp.tool(name="pixel_at", description=(
+        "Read the color at a screen point [x, y] and return rgb/hex "
+        "(deterministic, no vision-model call). Keywords: pixel color, sample "
+        "pixel, LED state, color at point, is color, progress bar fill. Optional "
+        "match=<#hex or rgb(r,g,b)> tests against a target color and returns "
+        "is_match plus per-channel max_diff and score (0-1); tolerance=N gives "
+        "per-channel slack (0=exact). sample=N averages an NxN box (default 1). "
+        "grayscale=True reads luminance. source=<path> samples a saved file "
+        "instead of the live screen. output=<path> also saves the screenshot."
+    ), annotations=ToolAnnotations(title="Pixel At", readOnlyHint=True,
+                                   idempotentHint=True, openWorldHint=False))
+    def _pixel_at(x: int, y: int, source: str | None = None, sample: int = 1,
+                  match: str | None = None, tolerance: int = 0,
+                  grayscale: bool = False, output: str | None = None) -> list:
+        return pixel_at_fn(x=x, y=y, source=source, sample=sample, match=match,
+                           tolerance=tolerance, grayscale=grayscale,
+                           output=output)
 
     @mcp.tool(name="cleanup_screenshots", description=(
         "Delete old/oversized screenshots from the agent-windows data dir "
