@@ -199,6 +199,25 @@ def diff_fn(
     return _image_from_result(result, "diff_path")
 
 
+def find_image_fn(
+    image: str,
+    source: str | None = None,
+    bbox: list[int] | None = None,
+    tolerance: int = 0,
+    grayscale: bool = False,
+    all_matches: bool = False,
+) -> list:
+    """Locate a template image on screen; returns coords + a marked screenshot.
+
+    Deterministic, no vision-model call — use when a saved image of the target
+    exists; use ``ground``/``detect`` for natural-language description. Mirrors
+    the daemon's find_image (image=template, source=haystack screenshot).
+    """
+    result = _call("find_image", image=image, source=source, bbox=bbox,
+                   tolerance=tolerance, grayscale=grayscale, all=all_matches)
+    return _image_from_result(result, "screenshot_path")
+
+
 def cleanup_screenshots_fn() -> str:
     """Delete old/oversized screenshots from the data dir."""
     return str(_call("cleanup_screenshots").get("output", ""))
@@ -323,6 +342,25 @@ def register(mcp) -> None:
               threshold: int = 30, output: str | None = None):
         return diff_fn(baseline=baseline, compare=compare,
                        threshold=threshold, output=output)
+
+    @mcp.tool(name="find_image", description=(
+        "Locate a template image file on screen and return click-ready "
+        "coordinates (deterministic, no vision-model call). Keywords: find "
+        "image, template match, locate icon, locate-on-screen, where is image. "
+        "Pass image=<template path>; optional source=<haystack screenshot> "
+        "(default: fresh capture), bbox=[x1,y1,x2,y2] search region, tolerance "
+        "0-255 per-channel slack (0=exact), grayscale=True for a faster "
+        "less-color-sensitive match, all_matches=True to return every match "
+        "(NMS-deduped) instead of just the best. Use ground when you only have "
+        "a description."
+    ), annotations=ToolAnnotations(title="Find Image", readOnlyHint=True,
+                                   idempotentHint=True, openWorldHint=False))
+    def _find_image(image: str, source: str | None = None,
+                    bbox: list[int] | None = None, tolerance: int = 0,
+                    grayscale: bool = False, all_matches: bool = False) -> list:
+        return find_image_fn(image=image, source=source, bbox=bbox,
+                             tolerance=tolerance, grayscale=grayscale,
+                             all_matches=all_matches)
 
     @mcp.tool(name="cleanup_screenshots", description=(
         "Delete old/oversized screenshots from the agent-windows data dir "

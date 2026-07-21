@@ -64,6 +64,7 @@
     { "name": "drag", "description": "Drag from (x1,y1) to (x2,y2)." },
     { "name": "element_state", "description": "Check whether a UIA element (@eN) is visible or enabled." },
     { "name": "expand", "description": "Expand an expandable UI element at @eN (ComboBox/TreeItem/Menu). Idempotent." },
+    { "name": "find_image", "description": "Locate a template image file on screen and return click-ready coordinates (deterministic, no vision-model call). Use when you have a saved image of the target; use ground when you have a description." },
     { "name": "fs_copy", "description": "Copy a file/dir." },
     { "name": "fs_delete", "description": "Delete a file/dir." },
     { "name": "fs_info", "description": "Return metadata (size/dates/type) for a file or directory." },

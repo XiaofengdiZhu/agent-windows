@@ -605,6 +605,24 @@ def test_image_from_result_detects_jpeg_format():
     assert img._mime_type == "image/jpeg"
 
 
+def test_find_image_fn_forwards_to_daemon():
+    from agent_windows.mcp.tools.observation import find_image_fn
+    fake = {"output": "## Find Image\nCount: 1", "count": 1,
+            "matches": [{"index": 1, "x": 5, "y": 6, "w": 3, "h": 3,
+                         "center_x": 6, "center_y": 7, "score": 1.0}],
+            "method": "template", "screenshot_path": ""}
+    with patch("agent_windows.mcp.tools.observation._call",
+               return_value=fake) as mock_call:
+        out = find_image_fn(image="tpl.png", source="src.png", bbox=[1, 2, 3, 4],
+                            tolerance=5, grayscale=True, all_matches=True)
+    assert mock_call.call_args.args == ("find_image",)
+    assert mock_call.call_args.kwargs == {
+        "image": "tpl.png", "source": "src.png", "bbox": [1, 2, 3, 4],
+        "tolerance": 5, "grayscale": True, "all": True,
+    }
+    assert isinstance(out, list)  # _image_from_result -> [text] (empty path: no Image)
+
+
 def test_register_all_registers_every_domain_on_a_fake_mcp():
     """register_all calls register() on every tool module with the given mcp."""
     from agent_windows.mcp.tools import register_all, observation, vision, input, \
@@ -623,7 +641,7 @@ def test_register_all_registers_every_domain_on_a_fake_mcp():
     expected = {
         # observation
         "screenshot", "snapshot", "observe", "get_text", "element_state",
-        "highlight", "diff", "cleanup_screenshots",
+        "highlight", "diff", "cleanup_screenshots", "find_image",
         # vision
         "ground", "detect", "ask_vision",
         # input
