@@ -282,3 +282,46 @@ def _registry(params: dict) -> dict[str, Any]:
     raise ValueError(
         f"mode must be 'get', 'set', 'delete', or 'list' (got {mode!r})"
     )
+
+
+# ── Power ────────────────────────────────────────────────────────────
+
+
+def _delay_and_force(params: dict) -> tuple[int, bool]:
+    """Validate + coerce the shared shutdown/restart params. ``delay`` must be
+    a non-bool int in [0, MAX_SHUTDOWN_DELAY]; ``force`` coerces to bool."""
+    from agent_windows.core.power import MAX_SHUTDOWN_DELAY
+    delay = params.get("delay", 0)
+    if isinstance(delay, bool) or not isinstance(delay, int) or not (0 <= delay <= MAX_SHUTDOWN_DELAY):
+        raise ValueError(f"delay must be an int in [0, {MAX_SHUTDOWN_DELAY}]")
+    return delay, bool(params.get("force", False))
+
+
+@handler("lock")
+def _lock(params: dict) -> dict[str, Any]:
+    """Lock the workstation (Win+L)."""
+    from agent_windows.core.power import lock_workstation
+    return lock_workstation()
+
+
+@handler("sleep")
+def _sleep(params: dict) -> dict[str, Any]:
+    """Suspend the system to sleep (S3)."""
+    from agent_windows.core.power import suspend_sleep
+    return suspend_sleep()
+
+
+@handler("shutdown")
+def _shutdown(params: dict) -> dict[str, Any]:
+    """Shut down. ``delay`` (0–600s, default 0); ``force`` (default graceful)."""
+    from agent_windows.core.power import shutdown_system
+    delay, force = _delay_and_force(params)
+    return shutdown_system(delay, force)
+
+
+@handler("restart")
+def _restart(params: dict) -> dict[str, Any]:
+    """Restart. ``delay`` (0–600s, default 0); ``force`` (default graceful)."""
+    from agent_windows.core.power import restart_system
+    delay, force = _delay_and_force(params)
+    return restart_system(delay, force)
