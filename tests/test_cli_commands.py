@@ -392,6 +392,45 @@ class TestObserveCommands:
         assert params["screenshot"] is False
         assert params["ground"] == "the button"
 
+    # ── snapshot --window / --active scoping ───────────────────────────
+
+    @patch("agent_windows.cli.commands.observe._cmd")
+    def test_snapshot_window_option(self, mock_cmd):
+        """--window VALUE forwards window param; no active key."""
+        runner.invoke(app, ["snapshot", "--window", "note"])
+        method, params = _cmd_calls(mock_cmd)[0]
+        assert method == "snapshot"
+        assert params["window"] == "note"
+        assert "active" not in params
+
+    @patch("agent_windows.cli.commands.observe._cmd")
+    def test_snapshot_active_flag(self, mock_cmd):
+        """--active forwards active=True; no window key."""
+        runner.invoke(app, ["snapshot", "--active"])
+        method, params = _cmd_calls(mock_cmd)[0]
+        assert method == "snapshot"
+        assert params["active"] is True
+        assert "window" not in params
+
+    @patch("agent_windows.cli.commands.observe._cmd")
+    def test_snapshot_window_combined_with_display(self, mock_cmd):
+        """--window combines with --display (both forwarded)."""
+        runner.invoke(app, ["snapshot", "-d", "0", "--window", "note"])
+        method, params = _cmd_calls(mock_cmd)[0]
+        assert method == "snapshot"
+        assert params["display"] == [0]
+        assert params["window"] == "note"
+
+    @patch("agent_windows.cli.commands.observe._cmd")
+    def test_snapshot_no_args_backward_compat(self, mock_cmd):
+        """No args → empty params (no window/active/display keys)."""
+        runner.invoke(app, ["snapshot"])
+        method, params = _cmd_calls(mock_cmd)[0]
+        assert method == "snapshot"
+        assert params == {}
+        assert "window" not in params
+        assert "active" not in params
+
     @patch("agent_windows.cli.commands.observe._cmd")
     def test_screenshot_bbox_parsed_to_ints(self, mock_cmd):
         runner.invoke(app, ["screenshot", "--bbox", "10,20,30,40"])

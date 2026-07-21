@@ -38,11 +38,26 @@ def snapshot(
     display: list[int] = typer.Option(
         None, "--display", "-d",
         help="Limit to display index(es), e.g. -d 0 -d 1 (repeatable)"),
+    window: str = typer.Option(
+        None, "--window",
+        help="Scope to one top-level window: HWND (int or 0xHEX), title "
+             "substring, or process name (title->process fallback like app switch)"),
+    active: bool = typer.Option(
+        False, "--active",
+        help="Scope to the foreground window"),
 ) -> None:
-    """UIA accessibility tree traversal, returns semantic text."""
+    """UIA accessibility tree traversal, returns semantic text.
+
+    By default the full screen tree is returned. Use --window (or --active) to
+    scope to a single top-level window -- cuts noise from large windows.
+    """
     params: dict = {}
     if display:
         params["display"] = display
+    if window:
+        params["window"] = window
+    if active:
+        params["active"] = True
     _cmd(ctx, "snapshot", **params)
 
 
