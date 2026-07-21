@@ -437,3 +437,53 @@ class TestScreenshotProfiling:
         profile_lines = [r for r in caplog.records
                          if "screenshot profile:" in r.getMessage()]
         assert profile_lines == []  # production: zero profiling output
+
+
+class TestFindImageHandler:
+    """find_image handler: param forwarding + validation -> INVALID_PARAMS."""
+
+    def test_forwards_params_and_best_match(self, tmp_path):
+        from agent_windows.daemon.router import HANDLERS
+
+        tpl = _tmp_image(tmp_path)
+        fake = {"count": 1, "matches": [{"index": 1, "x": 10, "y": 20, "w": 3,
+                 "h": 3, "center_x": 11, "center_y": 21, "score": 1.0}],
+                "method": "template", "truncated": False,
+                "screenshot_path": "/fake/m.png"}
+        with patch("agent_windows.core.image_match.find_image",
+                   return_value=fake) as mock_fi:
+            result = HANDLERS["find_image"]({
+                "image": str(tpl), "tolerance": 5, "grayscale": True, "all": True,
+            })
+        mock_fi.assert_called_once_with(
+            template=str(tpl), source=None, region=None,
+            tolerance=5, grayscale=True, all_matches=True)
+        assert result["count"] == 1
+        assert result["method"] == "template"
+        assert result["truncated"] is False
+
+    def test_bbox_becomes_region(self, tmp_path):
+        from agent_windows.daemon.router import HANDLERS
+
+        tpl = _tmp_image(tmp_path)
+        with patch("agent_windows.core.image_match.find_image",
+                   return_value={"count": 0, "matches": [], "method": "template",
+                                 "truncated": False, "screenshot_path": ""}) as mock_fi:
+            HANDLERS["find_image"]({"image": str(tpl), "bbox": [1, 2, 3, 4]})
+        assert mock_fi.call_args.kwargs["region"] == (1, 2, 3, 4)
+
+    def test_missing_image_rejected(self):
+        from agent_windows.daemon.router import HANDLERS
+        with pytest.raises(ValueError, match="image"):
+            HANDLERS["find_image"]({})
+
+    def test_tolerance_out_of_range_rejected(self, tmp_path):
+        from agent_windows.daemon.router import HANDLERS
+        tpl = _tmp_image(tmp_path)
+        with pytest.raises(ValueError, match="tolerance"):
+            HANDLERS["find_image"]({"image": str(tpl), "tolerance": 999})
+
+    def test_blacklisted_template_rejected(self):
+        from agent_windows.daemon.router import HANDLERS
+        with pytest.raises(ValueError, match="restricted"):
+            HANDLERS["find_image"]({"image": _BLACKLISTED})

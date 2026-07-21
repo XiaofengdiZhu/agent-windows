@@ -349,3 +349,79 @@ def _cleanup_screenshots(params: dict) -> dict[str, Any]:
         ),
         **stats,
     }
+
+
+@handler("find_image")
+def _find_image(params: dict) -> dict[str, Any]:
+    """Locate a template image on screen (or in a source screenshot).
+
+    Deterministic, zero-API-cost alternative to ground/detect when a template
+    image file is available. ``image`` is the template path; ``source``
+    optionally names a haystack screenshot (default: fresh capture). ``bbox``
+    is a (x1,y1,x2,y2) search ROI. ``tolerance`` 0-255 per-channel;
+    ``grayscale`` fast-path; ``all`` returns every NMS-deduped match instead of
+    the best. DoS caps (template <=128x128, <=100 matches) are enforced in
+    core.image_match; bad params here raise ValueError -> INVALID_PARAMS.
+    """
+    from agent_windows.core.image_match import find_image
+    from agent_windows.core.filesystem import validate_read_path
+
+    template = require(params, "image", str)
+    template = str(validate_read_path(template))
+
+    source = params.get("source") or None
+    if source:
+        source = str(validate_read_path(source))
+
+    region: tuple[int, int, int, int] | None = None
+    bbox = params.get("bbox")
+    if bbox:
+        from agent_windows.core.input_controller import validate_coordinates
+        if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+            raise ValueError("bbox must be a list of 4 ints [x1,y1,x2,y2]")
+        try:
+            x1, y1, x2, y2 = (int(v) for v in bbox)
+        except (ValueError, TypeError):
+            raise ValueError("bbox values must be integers")
+        validate_coordinates(x1, y1)
+        validate_coordinates(x2, y2)
+        if x2 <= x1 or y2 <= y1:
+            raise ValueError("bbox must have x2 > x1 and y2 > y1")
+        region = (x1, y1, x2, y2)
+
+    tolerance = params.get("tolerance", 0)
+    try:
+        tolerance = int(tolerance)
+    except (ValueError, TypeError):
+        raise ValueError("tolerance must be an integer")
+    if not (0 <= tolerance <= 255):
+        raise ValueError("tolerance must be in [0, 255]")
+
+    result = find_image(
+        template=template,
+        source=source,
+        region=region,
+        tolerance=tolerance,
+        grayscale=bool(params.get("grayscale", False)),
+        all_matches=bool(params.get("all", False)),
+    )
+
+    matches = result["matches"]
+    if matches:
+        lines = ["## Find Image", f"Method: {result['method']}",
+                 f"Count: {result['count']}", "Matches:"]
+        for m in matches:
+            lines.append(
+                f"  #{m['index']}: ({m['x']}, {m['y']}) "
+                f"{m['w']}x{m['h']} center=({m['center_x']}, {m['center_y']}) "
+                f"score={m['score']}"
+            )
+        if result.get("truncated"):
+            lines.append("Note: results truncated at the 100-match cap.")
+        if result.get("screenshot_path"):
+            lines.append(f"Screenshot: {result['screenshot_path']} (marked)")
+        output = "\n".join(lines)
+    else:
+        output = "## Find Image\nCount: 0\nNo match found."
+
+    return {"output": output, **result}
