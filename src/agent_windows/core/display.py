@@ -259,12 +259,18 @@ def _enum_monitor_infoex() -> list[dict]:
 
     raw: list[dict] = []
 
-    def _cb(hmonitor, _hdc, _lprc_monitor, _lparam):
+    def _cb(hmonitor, _hdc, lprc_monitor, _lparam):
         mi = MONITORINFOEXW()
         mi.cbSize = ctypes.sizeof(MONITORINFOEXW)
-        # GetMonitorInfoW returning 0 means it failed for this handle — skip
-        # it but keep enumerating (return 1) so one bad monitor doesn't blank
-        # the list.
+        # EnumDisplayMonitors hands us the monitor rect directly
+        # (lprc_monitor) — the same source ``GetMonitorsRect`` reads — so we
+        # ALWAYS append one entry per callback. If ``GetMonitorInfoW`` fails
+        # for a handle we degrade gracefully (no primary flag / device name /
+        # work area) instead of skipping it: skipping would shift later
+        # indices down and break the dense 0..N-1 alignment with
+        # ``GetMonitorsRect`` / ``-d N``, which is the whole point of this
+        # command.
+        rc = lprc_monitor.contents
         if ctypes.windll.user32.GetMonitorInfoW(hmonitor, ctypes.byref(mi)):
             rm, rw = mi.rcMonitor, mi.rcWork
             raw.append({
@@ -273,6 +279,14 @@ def _enum_monitor_infoex() -> list[dict]:
                 "work_right": rw.right, "work_bottom": rw.bottom,
                 "is_primary": bool(mi.dwFlags & MONITORINFOF_PRIMARY),
                 "device_name": mi.szDevice or "",
+            })
+        else:
+            raw.append({
+                "left": rc.left, "top": rc.top, "right": rc.right, "bottom": rc.bottom,
+                "work_left": rc.left, "work_top": rc.top,
+                "work_right": rc.right, "work_bottom": rc.bottom,
+                "is_primary": False,
+                "device_name": "",
             })
         return 1
 
