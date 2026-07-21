@@ -48,6 +48,7 @@ dependencies = [
     "pywin32>=306",
     "Pillow>=10.0",
     "mss>=10.0",
+    "numpy>=1.26",
     "openai>=1.0",
     "toml>=0.10",
 ]
@@ -62,8 +63,6 @@ Changelog = "https://github.com/XiaofengdiZhu/agent-windows/releases"
 dxcam = ["dxcam>=0.3"]
 anthropic = ["anthropic>=0.40"]
 gemini = ["google-genai>=1.0"]
-# numpy speeds up the `diff` screenshot command (falls back to a slow path if absent)
-diff = ["numpy>=1.26"]
 # MCP server: exposes every command as MCP tools via FastMCP (see docs/MCP-support.md)
 mcp = ["fastmcp>=3.0"]
 dev = ["pytest>=9.0.3"]

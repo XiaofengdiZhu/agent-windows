@@ -16,7 +16,7 @@ Package manager is **uv** (Python ≥3.13).
 uv sync                      # core deps
 uv sync --extra mcp          # MCP server (fastmcp) — needed for mcp serve
 uv sync --extra dev          # pytest
-uv sync --all-extras         # everything (mcp + dev + dxcam/anthropic/gemini/numpy)
+uv sync --all-extras         # everything (mcp + dev + dxcam/anthropic/gemini)
 
 uv run agent-windows --help  # run the CLI from a checkout
 uv run pytest -q             # full suite
