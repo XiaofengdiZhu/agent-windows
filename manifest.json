@@ -79,6 +79,7 @@
     { "name": "hover", "description": "Hover at [x, y] or @eN to trigger tooltips/highlights." },
     { "name": "key_down", "description": "Press key(s) (raw key-down). With hold N, auto-release after N seconds; without, stays pressed (pair with key_up)." },
     { "name": "key_up", "description": "Release key(s) (raw key-up). Pair with key_down." },
+    { "name": "list_displays", "description": "List all displays (index, primary, resolution, rect, work area, device name). Indices match the display arg on snapshot/observe/screenshot." },
     { "name": "mouse_down", "description": "Press and hold a mouse button at [x, y] or @eN." },
     { "name": "mouse_up", "description": "Release a mouse button at [x, y] or @eN." },
     { "name": "move", "description": "Move the mouse cursor to [x, y] or @eN (without clicking)." },
