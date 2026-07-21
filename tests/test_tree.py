@@ -32,6 +32,7 @@ from agent_windows.core.tree import (
     traverse_tree,
     render_snapshot,
     resolve_element,
+    resolve_window,
     ElementInfo,
     WindowInfo,
     BoundingBox,
@@ -1729,6 +1730,140 @@ def _link_siblings_and_grandchildren(root):
     for child in root.children:
         if child.children:
             _link_siblings(child.children)
+
+
+# ── resolve_window: snapshot --window / --active selector (TODO #16) ──
+
+
+def _win(title="App", process="app.exe", handle=1, active=False):
+    """Build a WindowInfo with keyword args (robust against future field
+    additions); mirrors the keyword style used elsewhere in this file."""
+    return WindowInfo(
+        title=title,
+        process_name=process,
+        handle=handle,
+        bbox=BoundingBox(0, 0, 100, 100),
+        is_active=active,
+        class_name="",
+        status="",
+        is_browser=False,
+    )
+
+
+class TestResolveWindow:
+    """resolve_window resolves a top-level window for snapshot --window /
+    --active. Each test patches enumerate_windows so no Win32 / desktop access
+    happens — the function is a pure filter over a WindowInfo list."""
+
+    @patch("agent_windows.core.tree.enumerate_windows")
+    def test_title_substring_first_match(self, mock_enum):
+        mock_enum.return_value = [_win(title="Notepad"),
+                                  _win(title="Calculator", handle=2)]
+        win, warn = resolve_window(value="note")
+        assert win.title == "Notepad"
+        assert warn is None
+
+    @patch("agent_windows.core.tree.enumerate_windows")
+    def test_title_case_insensitive(self, mock_enum):
+        mock_enum.return_value = [_win(title="Notepad")]
+        win, _ = resolve_window(value="NOTEPAD")
+        assert win.title == "Notepad"
+
+    @patch("agent_windows.core.tree.enumerate_windows")
+    def test_process_fallback(self, mock_enum):
+        mock_enum.return_value = [_win(title="Untitled", process="notepad.exe")]
+        win, warn = resolve_window(value="notepad")
+        assert win.process_name == "notepad.exe"
+        assert warn is None
+
+    @patch("agent_windows.core.tree.enumerate_windows")
+    def test_hwnd_decimal(self, mock_enum):
+        mock_enum.return_value = [_win(handle=12345, title="A")]
+        win, _ = resolve_window(value="12345")
+        assert win.handle == 12345
+
+    @patch("agent_windows.core.tree.enumerate_windows")
+    def test_hwnd_hex(self, mock_enum):
+        mock_enum.return_value = [_win(handle=0x1a2b, title="A")]
+        win, _ = resolve_window(value="0x1a2b")
+        assert win.handle == 0x1a2b
+
+    @patch("agent_windows.core.tree.enumerate_windows")
+    def test_active_picks_foreground(self, mock_enum):
+        mock_enum.return_value = [_win(title="BG", handle=1, active=False),
+                                  _win(title="FG", handle=2, active=True)]
+        win, warn = resolve_window(active=True)
+        assert win.title == "FG"
+        assert warn is None
+
+    @patch("agent_windows.core.tree.enumerate_windows")
+    def test_active_no_foreground_raises(self, mock_enum):
+        mock_enum.return_value = [_win(title="BG", active=False)]
+        with pytest.raises(ValueError, match="No active foreground window"):
+            resolve_window(active=True)
+
+    @patch("agent_windows.core.tree.enumerate_windows")
+    def test_multiple_title_matches_warning(self, mock_enum):
+        mock_enum.return_value = [_win(title="calc — main", handle=1),
+                                  _win(title="calc — options", handle=2)]
+        win, warn = resolve_window(value="calc")
+        assert win.title == "calc — main"
+        assert warn is not None
+        assert "2 windows" in warn
+        assert "calc — main" in warn
+        assert "HWND" in warn
+
+    @patch("agent_windows.core.tree.enumerate_windows")
+    def test_multiple_process_matches_warning(self, mock_enum):
+        mock_enum.return_value = [_win(title="A", process="win.exe", handle=1),
+                                  _win(title="B", process="win.exe", handle=2)]
+        win, warn = resolve_window(value="win")
+        assert warn is not None and "2 windows" in warn
+
+    @patch("agent_windows.core.tree.enumerate_windows")
+    def test_no_match_raises(self, mock_enum):
+        mock_enum.return_value = [_win(title="Notepad")]
+        with pytest.raises(ValueError, match="Window not found"):
+            resolve_window(value="nonexistent")
+
+    @patch("agent_windows.core.tree.enumerate_windows")
+    def test_hwnd_no_match_raises(self, mock_enum):
+        mock_enum.return_value = [_win(handle=999)]
+        with pytest.raises(ValueError, match="Window not found"):
+            resolve_window(value="12345")
+
+
+class TestTraverseTreeOnlyWindow:
+    """traverse_tree(only_window=...) skips enumerate_windows and scopes the
+    traversal to a single target window. Patches the UIA / Win32 entry points
+    so no real desktop access happens (mirrors TestTraverseTreeMetadata)."""
+
+    @patch("agent_windows.core.tree._traverse_window")
+    @patch("agent_windows.core.tree._build_traversal_cache", return_value=object())
+    @patch("agent_windows.uia.core._AutomationClient")
+    @patch("agent_windows.core.screenshot.get_dpi_scale", return_value=1.0)
+    @patch("agent_windows.core.screenshot.get_virtual_screen_rect",
+           return_value=(0, 0, 1920, 1080))
+    @patch("agent_windows.core.tree.enumerate_windows")
+    def test_only_window_skips_enumerate(self, mock_enum, m_vs, m_dpi, m_client,
+                                         m_cache, m_trav):
+        target = _win(title="Only", handle=42)
+        data = traverse_tree(only_window=target)
+        mock_enum.assert_not_called()
+        assert data["windows"] == [target]
+        assert data["active_window"] is target
+
+    @patch("agent_windows.core.tree._traverse_window")
+    @patch("agent_windows.core.tree._build_traversal_cache", return_value=object())
+    @patch("agent_windows.uia.core._AutomationClient")
+    @patch("agent_windows.core.screenshot.get_dpi_scale", return_value=1.0)
+    @patch("agent_windows.core.screenshot.get_virtual_screen_rect",
+           return_value=(0, 0, 1920, 1080))
+    @patch("agent_windows.core.tree.enumerate_windows", return_value=[])
+    def test_none_window_keeps_enumerate(self, mock_enum, m_vs, m_dpi, m_client,
+                                         m_cache, m_trav):
+        traverse_tree()
+        mock_enum.assert_called_once()
 
 
 

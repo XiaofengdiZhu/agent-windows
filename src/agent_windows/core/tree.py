@@ -287,6 +287,92 @@ def enumerate_windows() -> list[WindowInfo]:
     return windows
 
 
+def resolve_window(
+    value: str | None = None,
+    active: bool = False,
+) -> tuple[WindowInfo, str | None]:
+    """Resolve a top-level window for ``snapshot --window`` / ``--active``.
+
+    Returns ``(WindowInfo, warning_text_or_None)``.
+
+    - ``active=True``: pick the foreground window via the ``is_active`` flag set
+      during :func:`enumerate_windows` (``hwnd == GetForegroundWindow()``).
+      Raises ``ValueError`` if no enumerated window is active (desktop / not
+      collected). No extra Win32 call.
+    - ``value`` parses as an integer (``int(value, 0)`` — accepts ``"12345"`` and
+      ``"0x1a2b"``) → matched against ``WindowInfo.handle``.
+    - otherwise: title substring (case-insensitive); zero hits → process-name
+      fallback (``.exe``-normalized substring on both sides); zero hits →
+      ``ValueError("Window not found")`` (mirrors ``switch_window``).
+
+    On multiple matches: returns the first and a ``warning`` naming the count,
+    the chosen title, and a "pass the HWND for determinism" hint.
+
+    Args:
+        value: Window title substring, process-name substring, or HWND (decimal
+            or ``0x``-hex). ``None`` only when ``active=True`` (the handler
+            enforces mutual exclusion).
+        active: If True, return the foreground window and ignore ``value``.
+
+    Returns:
+        ``(WindowInfo, warning)`` where ``warning`` is ``None`` for a unique
+        match, else a human-readable string describing the ambiguity.
+
+    Raises:
+        ValueError: zero match, or ``active`` with no foreground window. These
+            surface as INVALID_PARAMS (-32602) via ``route_request``.
+    """
+    windows = enumerate_windows()
+
+    if active:
+        win = next((w for w in windows if w.is_active), None)
+        if win is None:
+            raise ValueError("No active foreground window")
+        return win, None
+
+    # 1) Integer → HWND (accepts decimal "12345" and 0x-prefixed hex "0x1a2b").
+    try:
+        hwnd = int(value, 0)
+    except (ValueError, TypeError):
+        hwnd = None
+    if hwnd is not None:
+        for w in windows:
+            if w.handle == hwnd:
+                return w, None
+        raise ValueError(f"Window not found: HWND {hwnd}")
+
+    # 2) Title substring (case-insensitive).
+    needle = value.lower()
+    title_hits = [w for w in windows if needle in (w.title or "").lower()]
+    if title_hits:
+        chosen = title_hits[0]
+        warning = None
+        if len(title_hits) > 1:
+            warning = (
+                f'⚠ Matched {len(title_hits)} windows by title "{value}"; '
+                f'using first: "{chosen.title}". Pass the HWND for determinism.'
+            )
+        return chosen, warning
+
+    # 3) Process-name fallback (.exe-normalized substring on both sides so the
+    #    match is robust to whether process_name carries the suffix).
+    proc_needle = needle.removesuffix(".exe")
+    proc_hits = [
+        w for w in windows
+        if proc_needle in (w.process_name or "").lower().removesuffix(".exe")
+    ]
+    if proc_hits:
+        chosen = proc_hits[0]
+        warning = None
+        if len(proc_hits) > 1:
+            warning = (
+                f'⚠ Matched {len(proc_hits)} windows by process "{value}"; '
+                f'using first: "{chosen.title}". Pass the HWND for determinism.'
+            )
+        return chosen, warning
+
+    raise ValueError(f"Window not found: {value!r}")
+
 
 # ── UIA Tree Traversal ────────────────────────────────────────────
 
@@ -298,6 +384,7 @@ def traverse_tree(
     timeout_per_window: float = 5.0,
     max_elements: int = 200,
     timeout: float = 10.0,
+    only_window: WindowInfo | None = None,
 ) -> dict[str, Any]:
     """Walk the UIA tree and return structured data.
 
@@ -305,6 +392,14 @@ def traverse_tree(
     interactive-elements list (traversal stops once it is reached), and
     ``timeout`` is a global wall-clock budget across all windows. Set any
     bound to 0 to disable it.
+
+    ``only_window`` (snapshot --window / --active): when set, skip the full
+    desktop ``enumerate_windows()`` call and traverse ONLY the given window's
+    subtree. ``data["windows"]`` will be ``[only_window]`` and
+    ``data["active_window"]`` will be ``only_window`` itself (single-window
+    focus; whether it's the real foreground is expressed by --active at the
+    handler layer). ``None`` preserves the existing whole-desktop behavior
+    byte-for-byte (backward compatible).
 
     Returns a dict with:
         - cursor: (x, y) mouse position
@@ -343,8 +438,17 @@ def traverse_tree(
     # hot path pays nothing.
     _profile = is_debug()
     _t_enumerate = time.perf_counter() if _profile else 0.0
-    all_windows = enumerate_windows()
-    active_window = next((w for w in all_windows if w.is_active), None)
+    if only_window is None:
+        all_windows = enumerate_windows()
+        active_window = next((w for w in all_windows if w.is_active), None)
+    else:
+        # Single-window scope (snapshot --window / --active): skip the full
+        # desktop enumerate and focus the traversal on the target window. The
+        # target itself is the "active" window of the snapshot — whether it's
+        # the real foreground is expressed by --active at the handler layer,
+        # not by a separate GetForegroundWindow call here.
+        all_windows = [only_window]
+        active_window = only_window
     # enumerate_ms measures ONLY the Win32 enumeration + the trivial active-window
     # scan, so its label stays truthful. The COM-init / CacheRequest build below
     # is UIA-traversal setup and correctly falls under traverse_ms instead.
