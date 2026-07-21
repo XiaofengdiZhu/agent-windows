@@ -441,7 +441,7 @@ def shutdown(
     force: bool = typer.Option(False, "--force", help="Force-close apps without saving"),
 ) -> None:
     """Shut down the system."""
-    _cmd(ctx, "shutdown", delay=delay, force=force)
+    _cmd(ctx, "system_shutdown", delay=delay, force=force)
 
 
 def restart(
@@ -450,4 +450,4 @@ def restart(
     force: bool = typer.Option(False, "--force", help="Force-close apps without saving"),
 ) -> None:
     """Restart the system."""
-    _cmd(ctx, "restart", delay=delay, force=force)
+    _cmd(ctx, "system_restart", delay=delay, force=force)

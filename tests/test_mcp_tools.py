@@ -426,7 +426,7 @@ def test_shutdown_fn_forwards_delay_force():
         return {"output": "## Shutdown\n..."}
     with patch.object(sysmod, "_call", side_effect=fake):
         sysmod.shutdown_fn(delay=30, force=True)
-    assert captured == {"method": "shutdown", "delay": 30, "force": True}
+    assert captured == {"method": "system_shutdown", "delay": 30, "force": True}
 
 
 def test_restart_fn_forwards_delay_force():
@@ -436,7 +436,7 @@ def test_restart_fn_forwards_delay_force():
         return {"output": "## Restart\n..."}
     with patch.object(sysmod, "_call", side_effect=fake):
         sysmod.restart_fn(delay=60, force=False)
-    assert captured == {"method": "restart", "delay": 60, "force": False}
+    assert captured == {"method": "system_restart", "delay": 60, "force": False}
 
 
 import agent_windows.mcp.tools.batch as bat

@@ -27,7 +27,7 @@ def test_sleep_handler_forwards():
 
 def test_shutdown_handler_forwards_delay_and_force():
     with patch("agent_windows.core.power.shutdown_system", return_value=_RESULT) as m:
-        r = HANDLERS["shutdown"]({"delay": 30, "force": True})
+        r = HANDLERS["system_shutdown"]({"delay": 30, "force": True})
     m.assert_called_once_with(30, True)
     assert r["action"] == "shutdown"
 
@@ -36,7 +36,7 @@ def test_restart_handler_defaults_delay_zero_force_false():
     _restart_result = _RESULT.copy()
     _restart_result["action"] = "restart"
     with patch("agent_windows.core.power.restart_system", return_value=_restart_result) as m:
-        r = HANDLERS["restart"]({})
+        r = HANDLERS["system_restart"]({})
     m.assert_called_once_with(0, False)
     assert r["action"] == "restart"
 
@@ -44,9 +44,9 @@ def test_restart_handler_defaults_delay_zero_force_false():
 @pytest.mark.parametrize("delay", [601, -1, "5", 1.5, True])
 def test_shutdown_bad_delay_invalid_params(delay):
     with pytest.raises(ValueError):
-        HANDLERS["shutdown"]({"delay": delay})
+        HANDLERS["system_shutdown"]({"delay": delay})
 
 
 def test_restart_bad_delay_invalid_params():
     with pytest.raises(ValueError):
-        HANDLERS["restart"]({"delay": 601})
+        HANDLERS["system_restart"]({"delay": 601})

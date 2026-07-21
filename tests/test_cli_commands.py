@@ -789,7 +789,7 @@ class TestSystemCommands:
         result = runner.invoke(app, ["shutdown", "--delay", "30", "--force"])
         assert result.exit_code == 0
         method, params = _cmd_calls(mock_cmd)[0]
-        assert method == "shutdown"
+        assert method == "system_shutdown"
         assert params == {"delay": 30, "force": True}
 
     @patch("agent_windows.cli.commands.system._cmd")
@@ -798,7 +798,7 @@ class TestSystemCommands:
         result = runner.invoke(app, ["restart", "--delay", "60", "--force"])
         assert result.exit_code == 0
         method, params = _cmd_calls(mock_cmd)[0]
-        assert method == "restart"
+        assert method == "system_restart"
         assert params == {"delay": 60, "force": True}
 
 

@@ -311,16 +311,20 @@ def _sleep(params: dict) -> dict[str, Any]:
     return suspend_sleep()
 
 
-@handler("shutdown")
-def _shutdown(params: dict) -> dict[str, Any]:
-    """Shut down. ``delay`` (0–600s, default 0); ``force`` (default graceful)."""
+@handler("system_shutdown")
+def _system_shutdown(params: dict) -> dict[str, Any]:
+    """Shut down. ``delay`` (0–600s, default 0); ``force`` (default graceful).
+
+    Registered as ``system_shutdown`` (not ``shutdown``) to avoid clobbering
+    the daemon's built-in lifecycle ``shutdown`` handler (router.py) that
+    ``daemon stop`` relies on — a power-off must never hijack that name."""
     from agent_windows.core.power import shutdown_system
     delay, force = _delay_and_force(params)
     return shutdown_system(delay, force)
 
 
-@handler("restart")
-def _restart(params: dict) -> dict[str, Any]:
+@handler("system_restart")
+def _system_restart(params: dict) -> dict[str, Any]:
     """Restart. ``delay`` (0–600s, default 0); ``force`` (default graceful)."""
     from agent_windows.core.power import restart_system
     delay, force = _delay_and_force(params)

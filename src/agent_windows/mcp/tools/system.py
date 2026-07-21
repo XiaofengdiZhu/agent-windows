@@ -142,11 +142,13 @@ def sleep_fn() -> str:
 
 
 def shutdown_fn(delay: int = 0, force: bool | str = False) -> str:
-    return str(_call("shutdown", delay=delay, force=_as_bool(force)).get("output", ""))
+    # method is "system_shutdown" (not "shutdown") — the daemon's built-in
+    # lifecycle "shutdown" (daemon stop) owns that name; reuse would hijack it.
+    return str(_call("system_shutdown", delay=delay, force=_as_bool(force)).get("output", ""))
 
 
 def restart_fn(delay: int = 0, force: bool | str = False) -> str:
-    return str(_call("restart", delay=delay, force=_as_bool(force)).get("output", ""))
+    return str(_call("system_restart", delay=delay, force=_as_bool(force)).get("output", ""))
 
 
 # ── registration ───────────────────────────────────────────────────────

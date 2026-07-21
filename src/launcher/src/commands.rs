@@ -220,8 +220,8 @@ pub fn parse(argv: &[String], global: &GlobalFlags) -> Result<Action, ParseError
             params: json!({}),
         }),
         // `shutdown` / `restart`: --delay (value, default 0) + --force (bool flag).
-        "shutdown" => parse_power(rest, "shutdown"),
-        "restart" => parse_power(rest, "restart"),
+        "shutdown" => parse_power(rest, "system_shutdown"),
+        "restart" => parse_power(rest, "system_restart"),
 
         // ── `is visible/enabled @eN` ──────────────────────────────────────
         "is" => parse_is(rest),
@@ -2562,7 +2562,7 @@ mod tests {
         let g = GlobalFlags::default();
         match parse(&argv(&["shutdown", "--delay", "30", "--force"]), &g) {
             Ok(Action::Call { method, params }) => {
-                assert_eq!(method, "shutdown");
+                assert_eq!(method, "system_shutdown");
                 assert_eq!(params["delay"], 30);
                 assert_eq!(params["force"], true);
             }
