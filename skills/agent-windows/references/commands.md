@@ -58,6 +58,19 @@ Uses config `tree.max_depth` (default 15), `tree.max_elements` (default 200), `t
 
 **Window scoping** (`--window` / `--active`): skips the full-screen enumerate and expands only the target window's subtree — lighter output when one large window (browser/IDE) would otherwise dominate. `@eN` refs restart at `@e1` and are written to the same 2s TTL cache slot used by `observe`/`snapshot`, so a follow-up `click @e1` / `get-text @e1` / `element_state @e1` resolves against that subtree with no cross-window mapping. Output is prefixed with a `## Window: "<title>" (<process>, HWND 0x...)` header (plus the `⚠ Matched ...` line when the selector matched more than one window). All `tree.*` caps (`max_depth` / `max_elements` / `timeout`) still apply to the subtree.
 
+### list-displays
+
+Enumerate every display so you know which `-d N` to pass to `snapshot`/`observe`/`screenshot` instead of guessing.
+
+```bash
+agent-windows list-displays
+agent-windows --format json list-displays   # structured output (global flag, prefix position)
+```
+
+No parameters. Indices are 0-based, `EnumDisplayMonitors` order — **identical to the `-d N` / `--display N` filter**, so the `N` shown here is the `N` you pass to `-d`.
+
+**Output**: a `## Displays (count)` markdown table — `#` (index), `Primary` (`*` marks the primary display), `Resolution` (`WxH`), `Rect (L,T,R,B)` (full screen rect), `Work Area (L,T,R,B)` (desktop minus taskbar), `Device` (raw `\\.\DISPLAYN`). A `System DPI scale:` footnote follows. With `--format json`, returns `{count, displays[], dpi_scale, output}` where each entry also carries the derived `width`/`height`.
+
 **Display filtering**: `-d` clips each window/element bounding box to the selected display(s)' union and drops items that don't overlap (intersect-clip, not "window belongs to one display" — a window spanning two displays is kept, clipped to the selected one). `@eN` refs are renumbered against the filtered list. The cursor is reported as `N/A` when it's off the selected display(s). The Accessibility Tree text block is NOT filtered (it's free text without per-line coordinates); a note is shown when a filter is active.
 
 **Output**: Same as observe but without screenshot file. Contains the Interactive Elements table with `@eN` refs.
@@ -918,7 +931,7 @@ agent-windows mcp uninstall        # stop + remove the login auto-start task
 
 `--tools`/`--exclude-tools` are enforced: removed tools cannot be invoked, including via `batch`. Each flag also has an `AGENT_WINDOWS_*` env-var equivalent (see the Global Options table below).
 
-The server exposes ~52 tools mapping 1:1 to the daemon methods (screenshot, snapshot, observe, ground, detect, ask_vision, highlight, diff, find_image, pixel_at, get_text, element_state, cleanup_screenshots, click, dblclick, hover, move, mouse_down, mouse_up, drag, scroll, type, shortcut, key_down, key_up, expand, collapse, app_launch/switch/resize/list, shell, fs_read/write/list/copy/move/delete/search/info, clipboard_get/set, process_list/kill, notify, registry, batch, multi_select, multi_edit, ping, wait, wait_for). Same usage tips apply: call `snapshot` first for pixel-exact coordinates, prefer it over `ground`/`detect` for named controls, and always `app switch` before input.
+The server exposes ~53 tools mapping 1:1 to the daemon methods (screenshot, snapshot, observe, ground, detect, ask_vision, highlight, diff, find_image, pixel_at, get_text, element_state, cleanup_screenshots, list_displays, click, dblclick, hover, move, mouse_down, mouse_up, drag, scroll, type, shortcut, key_down, key_up, expand, collapse, app_launch/switch/resize/list, shell, fs_read/write/list/copy/move/delete/search/info, clipboard_get/set, process_list/kill, notify, registry, batch, multi_select, multi_edit, ping, wait, wait_for). Same usage tips apply: call `snapshot` first for pixel-exact coordinates, prefer it over `ground`/`detect` for named controls, and always `app switch` before input.
 
 ---
 

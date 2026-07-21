@@ -112,6 +112,7 @@ Most commands have more flags than shown — run `agent-windows --help` or see t
 |---------|-------------|
 | `observe [--snapshot] [--screenshot] [--ground DESC] [-d N]` | Combined observation (`-d`/`--display` selects a monitor, repeatable) |
 | `snapshot [-d N] [--window V] [--active]` | UIA accessibility tree (`-d`/`--display` selects a monitor, repeatable; `--window V`/`--active` scope to one window to cut noise) |
+| `list-displays` | List displays (index, primary, resolution, rect, work area, device) — use the index with `-d N` |
 | `screenshot [-o PATH] [--monitor N] [-s @eN] [--bbox X1,Y1,X2,Y2] [--annotate] [--grid-w N] [--grid-h N]` | Screen capture; `--monitor -1`=all; `--annotate` overlays numbered `@eN` boxes (full-screen) + optional `%` reference grid |
 | `ground DESCRIPTION [--single-pass]` | Visual coordinate grounding (`--single-pass`: 1 API call, ~2x faster, lower precision) |
 | `detect DESCRIPTION [-i IMAGE] [--max-targets N]` | Multi-target bounding box detection |

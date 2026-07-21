@@ -95,6 +95,14 @@ Returns a structured text view of the UIA accessibility tree. Contains the **Int
 
 `--window` / `--active` scope the traversal to a single top-level window — use when one large window (browser, IDE, complex dialog) would otherwise flood the output. `--window V` resolves as HWND (`12345` / `0x1a2b`), title substring (case-insensitive), then process name, mirroring `app switch`; first match wins and a warning is printed when multiple match. In single-window mode `@eN` restarts at `@e1` and maps to that window's subtree, written to the same 2s cache slot — so an immediate `click @e1` / `get-text @e1` lines up with the subtree, no cross-window mapping. `--window` and `--active` are mutually exclusive.
 
+### list-displays — Enumerate Displays
+
+```bash
+agent-windows list-displays            # table: index, primary, resolution, rect, work area, device
+```
+
+Lists every monitor so you can pick the right `-d N` for `snapshot`/`observe`/`screenshot` instead of guessing. Indices are 0-based and match the `-d`/`--display` filter exactly (same `EnumDisplayMonitors` order). `*` marks the primary display; negative `Rect` coordinates mean a monitor left/above the primary (multi-monitor desktop). Add `--format json` (as a global prefix flag) for a structured `displays[]`/`count`/`dpi_scale`.
+
 ### screenshot — Screen Capture
 
 ```bash
