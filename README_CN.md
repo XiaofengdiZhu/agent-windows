@@ -64,26 +64,15 @@ agent-windows observe
 
 # 视觉定位（按描述定位元素）
 agent-windows ground "the taskbar"
-# 单趟模式：一次 API 调用，约 2 倍速，精度较低（覆盖配置项 vlm.single_pass）
-agent-windows ground "the taskbar" --single-pass
-
-# 检测多个目标（返回边界框）
-agent-windows detect "PDF file icons on the desktop"
-
-# 视觉问答（自定义提示词 + 截图）
-agent-windows ask-vision "Which windows are open? Is there an error dialog?"
 
 # 鼠标/键盘
 agent-windows click 500 300
 agent-windows type "Hello World" --enter
 agent-windows shortcut ctrl+c
-agent-windows scroll 500 300 --direction down --amount 5
 
 # 系统
 agent-windows app list
 agent-windows shell "Get-Process | Select-Object -First 5"
-agent-windows fs list C:\\Users
-agent-windows clipboard get
 agent-windows batch --file commands.json
 ```
 
@@ -105,64 +94,63 @@ Python daemon (持久化, COM STA worker)
 
 ## 命令
 
-多数命令还有更多未列出的参数——运行 `agent-windows --help` 或查阅 [Agent 技能](skills/agent-windows/SKILL.md) 获取完整用法。
+完整参数与示例见[命令参考](skills/agent-windows/references/commands.md)；何时用哪个见 [Agent 技能](skills/agent-windows/SKILL.md)。运行 `agent-windows --help` 可快速查看命令清单。
 
 ### 观察（Observation）
 | 命令 | 说明 |
 |---------|-------------|
-| `observe [--snapshot] [--screenshot] [--ground DESC] [-d N]` | 组合观察（`-d`/`--display` 选择显示器，可重复） |
-| `snapshot [-d N] [--window V] [--active]` | UIA 无障碍树（`-d`/`--display` 选择显示器，可重复；`--window V`/`--active` 限定单窗口降噪） |
-| `list-displays` | 列出显示器（序号、主显、分辨率、矩形、工作区、设备名）—— 用序号配合 `-d N` |
-| `screenshot [-o PATH] [--monitor N] [-s @eN] [--bbox X1,Y1,X2,Y2] [--annotate] [--grid-w N] [--grid-h N]` | 屏幕抓取；`--monitor -1`=全部；`--annotate` 叠加带编号的 `@eN` 框（全屏）+ 可选 `%` 参考网格 |
-| `ground DESCRIPTION [--single-pass]` | 视觉坐标定位（`--single-pass`：1 次 API 调用，约 2 倍速，精度较低） |
-| `detect DESCRIPTION [-i IMAGE] [--max-targets N]` | 多目标边界框检测 |
-| `find-image TEMPLATE [--in SOURCE] [--bbox X1,Y1,X2,Y2] [-t N] [--grayscale] [--all]` | 在屏幕上定位已保存的模板图；确定性、不调用视觉模型。有目标截图（图标/字形）时使用。 |
-| `pixel-at X Y [--in SOURCE] [--sample N] [--match COLOR] [-t N] [--grayscale]` | 读取屏幕某点的颜色；`--match` 按颜色判断状态（LED 亮灭、进度条填色）。确定性、不调用视觉模型。 |
-| `ask-vision PROMPT [-i IMAGE] [-m MODEL]` | 自由形式视觉问答 |
-| `highlight X1 Y1 X2 Y2 [-l LABEL] [-c COLOR]` | 在截图上高亮区域 |
-| `diff BASELINE [-c COMPARE] [-t THRESHOLD]` | 像素级截图差异 |
-| `get-text SELECTOR` | 获取某 UIA 元素的文本内容 |
-| `is visible/enabled SELECTOR` | 检查元素状态 |
+| `observe` | 组合观察（snapshot + screenshot + 可选视觉定位） |
+| `snapshot` | UIA 无障碍树；`--window`/`--active` 限定单窗口 |
+| `list-displays` | 列出显示器（序号、主显、分辨率、矩形、工作区、设备名），供 `-d N` 使用 |
+| `screenshot` | 屏幕抓取；可裁剪到区域/元素，叠加 `@eN` 编号框、参考网格 |
+| `ground` | 视觉坐标定位（`--single-pass`：1 次 API 调用，更快、精度较低） |
+| `detect` | 多目标边界框检测 |
+| `find-image` | 在屏幕上定位已保存模板图——确定性、不调用视觉模型 |
+| `pixel-at` | 读取屏幕某点颜色；`--match` 按颜色判断状态——确定性 |
+| `ask-vision` | 自由形式视觉问答 |
+| `highlight` | 在截图上高亮区域 |
+| `diff` | 像素级截图差异 |
+| `get-text` | 获取某 UIA 元素的文本内容 |
+| `is visible/enabled` | 检查元素状态 |
 
 ### 输入（Input）
-| `click X Y \| -s @eN [--right] [--double]` | 鼠标点击 |
-| `dblclick X Y \| -s @eN [--right]` | 双击 |
-| `hover X Y \| -s @eN` | 悬停（触发工具提示/高亮） |
-| `mouse-down X Y \| -s @eN [--button left\|right\|middle]` | 按住鼠标按键 |
-| `mouse-up X Y \| -s @eN [--button left\|right\|middle]` | 释放鼠标按键 |
-| `type TEXT [--at X,Y \| --ats @eN] [--enter] [--clear] [--caret start\|idle\|end]` | 输入文本（Unicode 直接输入） |
-| `scroll X Y \| -s @eN [--direction up\|down] [--amount N]` | 滚动 |
-| `move X Y \| -s @eN` | 移动鼠标 |
-| `drag X1 Y1 X2 Y2 [--right]` | 拖拽 |
-| `shortcut KEYS` | 键盘快捷键（如 `ctrl+c`） |
-| `key-down KEYS [--hold N]` | 按下按键（原始 key-down）；`--hold N` 为按住 N 秒后自动释放，否则保持按下（配 `key-up`） |
-| `key-up KEYS` | 释放按键（原始 key-up） |
-| `expand SELECTOR` | 展开元素（@eN）——ComboBox/TreeItem/Menu |
-| `collapse SELECTOR` | 折叠元素（@eN） |
+| 命令 | 说明 |
+|---------|-------------|
+| `click` | 鼠标点击（坐标或 `@eN`） |
+| `dblclick` | 双击 |
+| `hover` | 悬停（触发工具提示/高亮） |
+| `mouse-down` | 按住鼠标按键 |
+| `mouse-up` | 释放鼠标按键 |
+| `type` | 输入文本（Unicode 直接输入） |
+| `scroll` | 滚动 |
+| `move` | 移动鼠标 |
+| `drag` | 拖拽 |
+| `shortcut` | 键盘快捷键（如 `ctrl+c`） |
+| `key-down` | 按下按键（原始 key-down）；`--hold N` 自动释放，否则保持按下（配 `key-up`） |
+| `key-up` | 释放按键（原始 key-up） |
+| `expand` | 展开元素（`@eN`）——ComboBox/TreeItem/Menu |
+| `collapse` | 折叠元素（`@eN`） |
 
 ### 系统（System）
 | 命令 | 说明 |
 |---------|-------------|
-| `app launch NAME [ARGS...]` | 按名称启动应用（开始菜单 friendly name，含 UWP/Store 应用如 `calculator`）、exe 名或路径；末尾 token 作为参数 |
-| `app switch NAME` | 切换到某窗口 |
-| `app resize NAME --width W --height H [--x X --y Y]` | 调整窗口大小/位置（`--x`/`--y` 默认 `-1` = 保持不变） |
+| `app launch` | 按名称启动应用（开始菜单 friendly name、UWP/Store 应用）、exe 或路径 |
+| `app switch` | 切换到某窗口 |
+| `app resize` | 调整窗口大小/位置 |
 | `app list` | 列出可见窗口 |
-| `shell COMMAND [--timeout SECS]` | 运行 PowerShell 命令（UTF-8 输出；`--timeout` 覆盖默认 30 秒） |
-| `fs read PATH [--offset N] [--limit N] [--encoding ENC]` | 读取文件（`--encoding` 对旧代码页文件覆盖默认 UTF-8） |
-| `fs write PATH CONTENT [--append]` | 写入文件 |
-| `fs list PATH [--pattern GLOB] [--recursive] [--show-hidden]` | 列出目录 |
-| `fs copy/move SRC DST [--overwrite]` · `fs delete PATH [--recursive]` · `fs search PATH PATTERN [--no-recursive]` · `fs info PATH` | 复制/移动/删除/搜索/信息 |
-| `clipboard get/set [--keyboard]` | 剪贴板访问（`--keyboard` 模拟 Ctrl+C/V） |
-| `process list [--sort-by memory\|cpu\|name] [--limit N] [--name SUBSTR]` | 列出运行中的进程 |
-| `process kill PID\|NAME [--force]` | 终止进程（`--force` = 立即；默认优雅终止） |
-| `notify TITLE MESSAGE [--app-id ID]` | Windows toast 通知（默认使用 PowerShell 的 AUMID） |
-| `registry get/set/delete/list PATH [NAME] [VALUE] [--type T]` | Windows 注册表操作（类型化值：String/DWord/QWord/MultiString/Binary） |
+| `shell` | 运行 PowerShell 命令（UTF-8 输出） |
+| `fs read/write/list/copy/move/delete/search/info` | 文件系统操作 |
+| `clipboard get/set` | 剪贴板访问（`--keyboard` 模拟 Ctrl+C/V） |
+| `process list` | 列出运行中的进程 |
+| `process kill` | 终止进程（优雅或 `--force`） |
+| `notify` | Windows toast 通知 |
+| `registry get/set/delete/list` | Windows 注册表操作（类型化值） |
 | `cleanup` | 清理旧的/过大的截图 |
-| `wait SECONDS|SELECTOR [--text TEXT] [--timeout N] [--interval N]` | 等待时长、元素或文本 |
-| `wait-for CONDITION [--text S] [--window W] [--timeout N]` | 等待某 UI 谓词成立（`text_exists`/`active_window`/`element_exists`/`element_enabled`/`focused_element`；别名 `text`/`window`/`element`/`enabled`/`focused`） |
-| `batch JSON/--file PATH [--delay N] [--continue-on-error]` | 一次 IPC 往返执行多条命令 |
-| `multi-select JSON/--file PATH [--selectors] [--no-ctrl]` | 点击多个目标（默认按住 Ctrl） |
-| `multi-edit JSON/--file PATH [--selectors]` | 一次调用写入多个字段 |
+| `wait` | 等待时长、元素或文本 |
+| `wait-for` | 等待某 UI 谓词成立 |
+| `batch` | 一次 IPC 往返执行多条命令 |
+| `multi-select` | 点击多个目标（默认按住 Ctrl） |
+| `multi-edit` | 一次调用写入多个字段 |
 
 ### 守护进程与配置（Daemon & Config）
 | 命令 | 说明 |

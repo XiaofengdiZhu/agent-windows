@@ -64,26 +64,15 @@ agent-windows observe
 
 # Visual grounding (locate element by description)
 agent-windows ground "the taskbar"
-# Single-pass: one API call, ~2x faster, lower precision (overrides config vlm.single_pass)
-agent-windows ground "the taskbar" --single-pass
-
-# Detect multiple targets (returns bounding boxes)
-agent-windows detect "PDF file icons on the desktop"
-
-# Visual Q&A (custom prompt + screenshot)
-agent-windows ask-vision "Which windows are open? Is there an error dialog?"
 
 # Mouse/keyboard
 agent-windows click 500 300
 agent-windows type "Hello World" --enter
 agent-windows shortcut ctrl+c
-agent-windows scroll 500 300 --direction down --amount 5
 
 # System
 agent-windows app list
 agent-windows shell "Get-Process | Select-Object -First 5"
-agent-windows fs list C:\\Users
-agent-windows clipboard get
 agent-windows batch --file commands.json
 ```
 
@@ -105,64 +94,63 @@ Python daemon (persistent, COM STA worker)
 
 ## Commands
 
-Most commands have more flags than shown — run `agent-windows --help` or see the [Agent Skill](skills/agent-windows/SKILL.md) for full usage.
+Full flags and examples live in the [Command Reference](skills/agent-windows/references/commands.md); for when-to-use guidance see the [Agent Skill](skills/agent-windows/SKILL.md). Run `agent-windows --help` for a quick list.
 
 ### Observation
 | Command | Description |
 |---------|-------------|
-| `observe [--snapshot] [--screenshot] [--ground DESC] [-d N]` | Combined observation (`-d`/`--display` selects a monitor, repeatable) |
-| `snapshot [-d N] [--window V] [--active]` | UIA accessibility tree (`-d`/`--display` selects a monitor, repeatable; `--window V`/`--active` scope to one window to cut noise) |
-| `list-displays` | List displays (index, primary, resolution, rect, work area, device) — use the index with `-d N` |
-| `screenshot [-o PATH] [--monitor N] [-s @eN] [--bbox X1,Y1,X2,Y2] [--annotate] [--grid-w N] [--grid-h N]` | Screen capture; `--monitor -1`=all; `--annotate` overlays numbered `@eN` boxes (full-screen) + optional `%` reference grid |
-| `ground DESCRIPTION [--single-pass]` | Visual coordinate grounding (`--single-pass`: 1 API call, ~2x faster, lower precision) |
-| `detect DESCRIPTION [-i IMAGE] [--max-targets N]` | Multi-target bounding box detection |
-| `find-image TEMPLATE [--in SOURCE] [--bbox X1,Y1,X2,Y2] [-t N] [--grayscale] [--all]` | Locate a saved template image on screen; deterministic, no vision-model call. Use when you have a screenshot of the target (icon, glyph). |
-| `pixel-at X Y [--in SOURCE] [--sample N] [--match COLOR] [-t N] [--grayscale]` | Read the color at a screen point; `--match` judges state by color (LED on/off, progress-bar fill). Deterministic, no vision-model call. |
-| `ask-vision PROMPT [-i IMAGE] [-m MODEL]` | Free-form visual Q&A |
-| `highlight X1 Y1 X2 Y2 [-l LABEL] [-c COLOR]` | Highlight region on screenshot |
-| `diff BASELINE [-c COMPARE] [-t THRESHOLD]` | Pixel-level screenshot diff |
-| `get-text SELECTOR` | Get text content of a UIA element |
-| `is visible/enabled SELECTOR` | Check element state |
+| `observe` | Combined observation (snapshot + screenshot + optional grounding) |
+| `snapshot` | UIA accessibility tree; `--window`/`--active` scope to one window |
+| `list-displays` | List displays (index, primary, resolution, rect, work area, device) for the `-d N` index |
+| `screenshot` | Screen capture; crop to a region/element, annotate with `@eN` boxes, overlay a grid |
+| `ground` | Visual coordinate grounding (`--single-pass`: 1 API call, faster, lower precision) |
+| `detect` | Multi-target bounding box detection |
+| `find-image` | Locate a saved template image on screen — deterministic, no vision model |
+| `pixel-at` | Read the color at a screen point; `--match` judges state by color — deterministic |
+| `ask-vision` | Free-form visual Q&A |
+| `highlight` | Highlight a region on a screenshot |
+| `diff` | Pixel-level screenshot diff |
+| `get-text` | Get text content of a UIA element |
+| `is visible/enabled` | Check element state |
 
 ### Input
-| `click X Y \| -s @eN [--right] [--double]` | Mouse click |
-| `dblclick X Y \| -s @eN [--right]` | Double-click |
-| `hover X Y \| -s @eN` | Hover (trigger tooltips/highlights) |
-| `mouse-down X Y \| -s @eN [--button left\|right\|middle]` | Press and hold mouse button |
-| `mouse-up X Y \| -s @eN [--button left\|right\|middle]` | Release mouse button |
-| `type TEXT [--at X,Y \| --ats @eN] [--enter] [--clear] [--caret start\|idle\|end]` | Type text (Unicode direct input) |
-| `scroll X Y \| -s @eN [--direction up\|down] [--amount N]` | Scroll |
-| `move X Y \| -s @eN` | Move mouse |
-| `drag X1 Y1 X2 Y2 [--right]` | Drag |
-| `shortcut KEYS` | Keyboard shortcut (e.g. `ctrl+c`) |
-| `key-down KEYS [--hold N]` | Press key(s) (raw key-down); `--hold N` auto-releases after N s, else stays pressed (pair with `key-up`) |
-| `key-up KEYS` | Release key(s) (raw key-up) |
-| `expand SELECTOR` | Expand an element (@eN) — ComboBox/TreeItem/Menu |
-| `collapse SELECTOR` | Collapse an element (@eN) |
+| Command | Description |
+|---------|-------------|
+| `click` | Mouse click (coordinates or `@eN`) |
+| `dblclick` | Double-click |
+| `hover` | Hover (trigger tooltips/highlights) |
+| `mouse-down` | Press and hold a mouse button |
+| `mouse-up` | Release a mouse button |
+| `type` | Type text (Unicode direct input) |
+| `scroll` | Scroll |
+| `move` | Move mouse |
+| `drag` | Drag |
+| `shortcut` | Keyboard shortcut (e.g. `ctrl+c`) |
+| `key-down` | Press key(s) (raw key-down); `--hold N` auto-releases, else stays pressed (pair with `key-up`) |
+| `key-up` | Release key(s) (raw key-up) |
+| `expand` | Expand an element (`@eN`) — ComboBox/TreeItem/Menu |
+| `collapse` | Collapse an element (`@eN`) |
 
 ### System
 | Command | Description |
 |---------|-------------|
-| `app launch NAME [ARGS...]` | Launch app by name (Start-Menu friendly name, incl. UWP/Store apps like `calculator`), exe name, or path; trailing tokens are args |
-| `app switch NAME` | Switch to window |
-| `app resize NAME --width W --height H [--x X --y Y]` | Resize/reposition window (`--x`/`--y` default `-1` = leave) |
+| `app launch` | Launch app by name (Start-Menu friendly name, UWP/Store apps), exe, or path |
+| `app switch` | Switch to a window |
+| `app resize` | Resize/reposition a window |
 | `app list` | List visible windows |
-| `shell COMMAND [--timeout SECS]` | Run PowerShell command (UTF-8 output; `--timeout` overrides default 30s) |
-| `fs read PATH [--offset N] [--limit N] [--encoding ENC]` | Read file (`--encoding` overrides UTF-8 for legacy codepage files) |
-| `fs write PATH CONTENT [--append]` | Write file |
-| `fs list PATH [--pattern GLOB] [--recursive] [--show-hidden]` | List directory |
-| `fs copy/move SRC DST [--overwrite]` · `fs delete PATH [--recursive]` · `fs search PATH PATTERN [--no-recursive]` · `fs info PATH` | Copy/move/delete/search/info |
-| `clipboard get/set [--keyboard]` | Clipboard access (`--keyboard` simulates Ctrl+C/V) |
-| `process list [--sort-by memory\|cpu\|name] [--limit N] [--name SUBSTR]` | List running processes |
-| `process kill PID\|NAME [--force]` | Kill process (`--force` = immediate; default graceful) |
-| `notify TITLE MESSAGE [--app-id ID]` | Windows toast notification (defaults to PowerShell's AUMID) |
-| `registry get/set/delete/list PATH [NAME] [VALUE] [--type T]` | Windows Registry operations (typed values: String/DWord/QWord/MultiString/Binary) |
+| `shell` | Run a PowerShell command (UTF-8 output) |
+| `fs read/write/list/copy/move/delete/search/info` | Filesystem operations |
+| `clipboard get/set` | Clipboard access (`--keyboard` simulates Ctrl+C/V) |
+| `process list` | List running processes |
+| `process kill` | Kill a process (graceful or `--force`) |
+| `notify` | Windows toast notification |
+| `registry get/set/delete/list` | Windows Registry operations (typed values) |
 | `cleanup` | Clean up old/oversized screenshots |
-| `wait SECONDS|SELECTOR [--text TEXT] [--timeout N] [--interval N]` | Wait for duration, element, or text |
-| `wait-for CONDITION [--text S] [--window W] [--timeout N]` | Wait until a UI predicate holds (`text_exists`/`active_window`/`element_exists`/`element_enabled`/`focused_element`; aliases `text`/`window`/`element`/`enabled`/`focused`) |
-| `batch JSON/--file PATH [--delay N] [--continue-on-error]` | Execute multiple commands in one IPC round-trip |
-| `multi-select JSON/--file PATH [--selectors] [--no-ctrl]` | Click multiple targets (Ctrl held by default) |
-| `multi-edit JSON/--file PATH [--selectors]` | Type into multiple fields in one call |
+| `wait` | Wait for a duration, element, or text |
+| `wait-for` | Wait until a UI predicate holds |
+| `batch` | Execute multiple commands in one IPC round-trip |
+| `multi-select` | Click multiple targets (Ctrl held by default) |
+| `multi-edit` | Type into multiple fields in one call |
 
 ### Daemon & Config
 | Command | Description |
