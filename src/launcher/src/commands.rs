@@ -210,6 +210,18 @@ pub fn parse(argv: &[String], global: &GlobalFlags) -> Result<Action, ParseError
             method: "list_displays".into(),
             params: json!({}),
         }),
+        // `lock` / `sleep`: no-arg (same clean shape as `list-displays`).
+        "lock" => Ok(Action::Call {
+            method: "lock".into(),
+            params: json!({}),
+        }),
+        "sleep" => Ok(Action::Call {
+            method: "sleep".into(),
+            params: json!({}),
+        }),
+        // `shutdown` / `restart`: --delay (value, default 0) + --force (bool flag).
+        "shutdown" => parse_power(rest, "shutdown"),
+        "restart" => parse_power(rest, "restart"),
 
         // ── `is visible/enabled @eN` ──────────────────────────────────────
         "is" => parse_is(rest),
@@ -529,6 +541,20 @@ fn parse_mouse_button(rest: &[String], method: &str) -> Result<Action, ParseErro
     }
     let button = p.value(&["button"]).unwrap_or("left").to_string();
     params.insert("button".into(), button.into());
+    Ok(Action::Call { method: method.into(), params: Value::Object(params) })
+}
+
+/// `shutdown` / `restart`: --delay (value-taking, default 0) + --force (bare
+/// bool flag, presence only). value_opts lists ONLY --delay — --force must
+/// NOT appear or the parser swallows the following token as its value.
+fn parse_power(rest: &[String], method: &str) -> Result<Action, ParseError> {
+    let p = ParsedArgs::parse(rest, &["delay"]);
+    let delay: i64 = opt_int(&p, &["delay"], 0)?;
+    let mut params = Map::new();
+    params.insert("delay".into(), delay.into());
+    if p.flag(&["force"]) {
+        params.insert("force".into(), true.into());
+    }
     Ok(Action::Call { method: method.into(), params: Value::Object(params) })
 }
 
@@ -2502,6 +2528,55 @@ mod tests {
             Ok(Action::Call { method, params }) => {
                 assert_eq!(method, "list_displays");
                 assert!(params.as_object().map(|m| m.is_empty()).unwrap_or(false));
+            }
+            other => panic!("expected Call, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn lock_forwards_empty_params() {
+        let g = GlobalFlags::default();
+        match parse(&argv(&["lock"]), &g) {
+            Ok(Action::Call { method, params }) => {
+                assert_eq!(method, "lock");
+                assert!(params.as_object().map(|m| m.is_empty()).unwrap_or(false));
+            }
+            other => panic!("expected Call, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn sleep_forwards_empty_params() {
+        let g = GlobalFlags::default();
+        match parse(&argv(&["sleep"]), &g) {
+            Ok(Action::Call { method, params }) => {
+                assert_eq!(method, "sleep");
+                assert!(params.as_object().map(|m| m.is_empty()).unwrap_or(false));
+            }
+            other => panic!("expected Call, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn shutdown_forwards_delay_and_force() {
+        let g = GlobalFlags::default();
+        match parse(&argv(&["shutdown", "--delay", "30", "--force"]), &g) {
+            Ok(Action::Call { method, params }) => {
+                assert_eq!(method, "shutdown");
+                assert_eq!(params["delay"], 30);
+                assert_eq!(params["force"], true);
+            }
+            other => panic!("expected Call, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn restart_defaults_delay_zero_no_force() {
+        let g = GlobalFlags::default();
+        match parse(&argv(&["restart"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert_eq!(params["delay"], 0);
+                assert!(!params.as_object().unwrap().contains_key("force"));
             }
             other => panic!("expected Call, got {:?}", other),
         }
