@@ -193,6 +193,11 @@ pub fn parse(argv: &[String], global: &GlobalFlags) -> Result<Action, ParseError
         // daemon handler, but missing from this table — without this arm the
         // recommended `uv tool install` path fails with "Unknown command".
         "find-image" => parse_find_image(rest),
+        // `pixel-at` was registered in the Python CLI (observe.py) + daemon
+        // handler, but missing from this table — without this arm the
+        // recommended `uv run`/`uv tool install` path fails with
+        // "Unknown command: pixel-at".
+        "pixel-at" => parse_pixel_at(rest),
         "cleanup" => Ok(Action::Call {
             method: "cleanup_screenshots".into(),
             params: json!({}),
@@ -786,6 +791,34 @@ fn parse_find_image(rest: &[String]) -> Result<Action, ParseError> {
     if p.flag(&["grayscale"]) { params.insert("grayscale".into(), true.into()); }
     if p.flag(&["all"]) { params.insert("all".into(), true.into()); }
     Ok(Action::Call { method: "find_image".into(), params: Value::Object(params) })
+}
+
+fn parse_pixel_at(rest: &[String]) -> Result<Action, ParseError> {
+    // Mirrors observe.py:pixel_at: positional X Y → `x`/`y` (i64, allows
+    // negative multi-monitor coords), --in → `source`, --sample/-t/--match/
+    // --output forwarded only when present (core defaults: sample 1, tolerance
+    // 0), and --grayscale as a bare flag. value_opts lists ONLY value-taking
+    // options — --grayscale must NOT appear here or the parser swallows the
+    // next token as its value (same pitfall parse_find_image guards against).
+    let p = ParsedArgs::parse(rest, &["in", "sample", "match", "tolerance", "t", "output", "o"]);
+    let x: i64 = p.pos(0, "x")?.parse().map_err(|_| invalid("x must be an integer"))?;
+    let y: i64 = p.pos(1, "y")?.parse().map_err(|_| invalid("y must be an integer"))?;
+    let mut params = Map::new();
+    params.insert("x".into(), x.into());
+    params.insert("y".into(), y.into());
+    if let Some(v) = p.value(&["in"]) { params.insert("source".into(), v.into()); }
+    if let Some(v) = p.value(&["sample"]) {
+        params.insert("sample".into(), v.parse::<i64>()
+            .map_err(|_| invalid("sample must be an integer"))?.into());
+    }
+    if let Some(v) = p.value(&["match"]) { params.insert("match".into(), v.into()); }
+    if let Some(v) = p.value(&["tolerance", "t"]) {
+        params.insert("tolerance".into(), v.parse::<i64>()
+            .map_err(|_| invalid("tolerance must be an integer"))?.into());
+    }
+    if let Some(v) = p.value(&["output", "o"]) { params.insert("output".into(), v.into()); }
+    if p.flag(&["grayscale"]) { params.insert("grayscale".into(), true.into()); }
+    Ok(Action::Call { method: "pixel_at".into(), params: Value::Object(params) })
 }
 
 fn parse_is(rest: &[String]) -> Result<Action, ParseError> {
@@ -2324,5 +2357,58 @@ mod tests {
         // Missing template positional → missing_argument.
         let e = parse(&argv(&["find-image"]), &g).unwrap_err();
         assert_eq!(e.type_name(), "missing_argument");
+    }
+
+    /// `pixel-at` forwards x/y always (i64, negatives ok for multi-monitor),
+    /// --in→source, --sample/--match/-t/--output only when present, --grayscale
+    /// as a bare flag. Regression lock: this command was missing from the
+    /// dispatch table initially and failed with "Unknown command".
+    #[test]
+    fn pixel_at_forwards_params() {
+        let g = GlobalFlags::default();
+        // Bare: x/y forwarded; everything else absent (sample/tolerance omitted
+        // → core defaults apply, NOT forwarded as 1/0).
+        match parse(&argv(&["pixel-at", "10", "20"]), &g) {
+            Ok(Action::Call { method, params }) => {
+                assert_eq!(method, "pixel_at");
+                assert_eq!(params["x"], 10);
+                assert_eq!(params["y"], 20);
+                for k in &["source", "sample", "match", "tolerance", "output", "grayscale"] {
+                    assert!(params.get(*k).is_none(), "{} should be absent", k);
+                }
+            }
+            other => panic!("expected Call, got {:?}", other),
+        }
+        // Full form.
+        match parse(&argv(&[
+            "pixel-at", "30", "40", "--in", "s.png", "--sample", "5",
+            "--match", "#ff0000", "-t", "10", "--grayscale", "-o", "out.png",
+        ]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert_eq!(params["x"], 30);
+                assert_eq!(params["y"], 40);
+                assert_eq!(params["source"], "s.png");
+                assert_eq!(params["sample"], 5);
+                assert_eq!(params["match"], "#ff0000");
+                assert_eq!(params["tolerance"], 10);
+                assert_eq!(params["output"], "out.png");
+                assert_eq!(params["grayscale"], true);
+            }
+            other => panic!("expected Call, got {:?}", other),
+        }
+        // Malformed sample → invalid_value.
+        let e = parse(&argv(&["pixel-at", "10", "20", "--sample", "abc"]), &g).unwrap_err();
+        assert_eq!(e.type_name(), "invalid_value");
+        // Missing y positional → missing_argument.
+        let e = parse(&argv(&["pixel-at", "10"]), &g).unwrap_err();
+        assert_eq!(e.type_name(), "missing_argument");
+        // Negative coords (multi-monitor) survive as positionals.
+        match parse(&argv(&["pixel-at", "-1920", "0"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert_eq!(params["x"], -1920);
+                assert_eq!(params["y"], 0);
+            }
+            other => panic!("expected Call with x=-1920, got {:?}", other),
+        }
     }
 }
