@@ -202,6 +202,14 @@ pub fn parse(argv: &[String], global: &GlobalFlags) -> Result<Action, ParseError
             method: "cleanup_screenshots".into(),
             params: json!({}),
         }),
+        // `list-displays`: no-arg read-only query (same shape as `cleanup`).
+        // Forwards to the `list_displays` handler, which returns a markdown
+        // table + structured displays[]/count/dpi_scale (the launcher just
+        // relays; --format json serialization is the Python CLI's job).
+        "list-displays" => Ok(Action::Call {
+            method: "list_displays".into(),
+            params: json!({}),
+        }),
 
         // ── `is visible/enabled @eN` ──────────────────────────────────────
         "is" => parse_is(rest),
@@ -2482,6 +2490,20 @@ mod tests {
                 assert_eq!(params["window"], "note");
             }
             other => panic!("got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn list_displays_forwards_empty_params() {
+        // No-arg read-only query (same shape as `cleanup`): forwards to the
+        // list_displays handler with an empty params object.
+        let g = GlobalFlags::default();
+        match parse(&argv(&["list-displays"]), &g) {
+            Ok(Action::Call { method, params }) => {
+                assert_eq!(method, "list_displays");
+                assert!(params.as_object().map(|m| m.is_empty()).unwrap_or(false));
+            }
+            other => panic!("expected Call, got {:?}", other),
         }
     }
 }
