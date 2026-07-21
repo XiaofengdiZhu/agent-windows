@@ -463,6 +463,37 @@ class TestObserveCommands:
         assert params == {"selector": "@e5", "check": "enabled"}
 
 
+# ── find-image command (template matching) ───────────────────────────
+
+
+class TestFindImageCommand:
+    @patch("agent_windows.cli.commands.observe._cmd")
+    def test_find_image_forwards_method_and_params(self, mock_cmd):
+        result = runner.invoke(app, ["find-image", "tpl.png",
+                                     "--in", "src.png", "--bbox", "1,2,3,4",
+                                     "--tolerance", "5", "--grayscale", "--all"])
+        assert result.exit_code == 0
+        method, params = _cmd_calls(mock_cmd)[0]
+        assert method == "find_image"
+        assert params == {"image": "tpl.png", "source": "src.png",
+                          "bbox": [1, 2, 3, 4], "tolerance": 5,
+                          "grayscale": True, "all": True}
+
+    @patch("agent_windows.cli.commands.observe._cmd")
+    def test_find_image_omits_optionals_when_default(self, mock_cmd):
+        """Bare `find-image tpl.png` sends only image + tolerance(=0)."""
+        runner.invoke(app, ["find-image", "tpl.png"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params == {"image": "tpl.png", "tolerance": 0}
+
+    @patch("agent_windows.cli.commands.observe._cmd")
+    def test_find_image_short_tolerance_flag(self, mock_cmd):
+        """-t is the short alias for --tolerance."""
+        runner.invoke(app, ["find-image", "tpl.png", "-t", "8"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params["tolerance"] == 8
+
+
 # ── system commands (app/fs/clipboard/process) ───────────────────────
 
 

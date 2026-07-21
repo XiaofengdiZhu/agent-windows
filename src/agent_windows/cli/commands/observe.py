@@ -135,6 +135,33 @@ def detect(
     _cmd(ctx, "detect", **params)
 
 
+@app.command(name="find-image")
+def find_image(
+    ctx: typer.Context,
+    template: str = typer.Argument(help="Path to the template image to locate"),
+    in_: str = typer.Option("", "--in", help="Source screenshot path (default: fresh capture)"),
+    bbox: str = typer.Option("", "--bbox", help="Restrict search to region x1,y1,x2,y2"),
+    tolerance: int = typer.Option(0, "--tolerance", "-t", help="Per-channel max diff 0-255 (0=exact)"),
+    grayscale: bool = typer.Option(False, "--grayscale", help="Match in grayscale (faster)"),
+    all_: bool = typer.Option(False, "--all", help="Return all matches, not just the best"),
+) -> None:
+    """Find a template image on screen (deterministic, no vision-model call).
+
+    Use when you have a saved image of the target (e.g. an icon); use ``ground``
+    when you only have a description. Returns click-ready coordinates.
+    """
+    params: dict = {"image": template, "tolerance": tolerance}
+    if in_:
+        params["source"] = in_
+    if bbox:
+        params["bbox"] = [int(v) for v in bbox.split(",")]
+    if grayscale:
+        params["grayscale"] = True
+    if all_:
+        params["all"] = True
+    _cmd(ctx, "find_image", **params)
+
+
 @app.command()
 def cleanup(ctx: typer.Context) -> None:
     """Clean up old/oversized screenshots based on age and size limits."""
