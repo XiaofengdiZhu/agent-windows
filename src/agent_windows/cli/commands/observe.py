@@ -32,6 +32,15 @@ def observe(
     _cmd(ctx, "observe", **params)
 
 
+@app.command(name="list-displays")
+def list_displays(ctx: typer.Context) -> None:
+    """List all displays: index, primary, resolution, rect, work area, device.
+
+    Use the index with -d N / --display N on snapshot/observe/screenshot.
+    Indices are 0-based and match EnumDisplayMonitors order."""
+    _cmd(ctx, "list_displays")
+
+
 @app.command()
 def snapshot(
     ctx: typer.Context,

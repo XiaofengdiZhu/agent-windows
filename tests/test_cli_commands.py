@@ -501,6 +501,15 @@ class TestObserveCommands:
         _, params = _cmd_calls(mock_cmd)[0]
         assert params == {"selector": "@e5", "check": "enabled"}
 
+    @patch("agent_windows.cli.commands.observe._cmd")
+    def test_list_displays_forwards_method(self, mock_cmd):
+        result = runner.invoke(app, ["list-displays"])
+        assert result.exit_code == 0
+        mock_cmd.assert_called_once()
+        args, kwargs = mock_cmd.call_args
+        assert args[1] == "list_displays"
+        assert kwargs == {}
+
 
 # ── find-image command (template matching) ───────────────────────────
 
