@@ -11,11 +11,10 @@ template image is available instead of a natural-language description.
 
 import logging
 import time
-from pathlib import Path
 from typing import Any
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image
 
 from agent_windows.core.filesystem import validate_read_path
 from agent_windows.utils.config import get_screenshot_save_dir
@@ -24,8 +23,10 @@ logger = logging.getLogger(__name__)
 
 # DoS bounds. Strict matching is O(positions x template_area x channels); this
 # caps template area so a full-1080p match stays well under STA_SUBMIT_TIMEOUT_S.
-# 128x128 is ~8s worst case / ~88MB peak per scan row on 1080p. For larger
-# templates, crop with --bbox. (FFT matching would lift this; deferred.)
+# 128x128 is ~8s worst case. The sliding-window diff for one scanned source
+# row on 1080p holds ~88M elements (~176MB as int16); the astype→subtract→abs
+# chain transiently peaks at ~2x that (~350MB). For larger templates, narrow
+# the search with `region`. (FFT matching would lift this; deferred.)
 MAX_FIND_TEMPLATE_PIXELS = 16_384   # 128x128
 MAX_FIND_MATCHES = 100
 
@@ -34,13 +35,26 @@ def _load_template(path: str, grayscale: bool) -> tuple[np.ndarray, int, int]:
     """Load + blacklist-check a template image; return (array, width, height).
 
     array is (th, tw, 3) for RGB or (th, tw) for grayscale.
+
+    Reads the image header and enforces the pixel cap BEFORE the full decode
+    (``img.load()``) so an oversized template is rejected without first being
+    materialized into a multi-hundred-MB numpy array (DoS guard). The check
+    is repeated in ``find_image`` as a defensive backstop, since this helper
+    is independently callable.
     """
     p = validate_read_path(path)
     if not p.exists():
         raise ValueError(f"Template image not found: {path}")
     mode = "L" if grayscale else "RGB"
     with Image.open(p) as img:
-        img.load()
+        w_i, h_i = img.size                          # header read, no full decode
+        if w_i * h_i > MAX_FIND_TEMPLATE_PIXELS:
+            raise ValueError(
+                f"template too large: {w_i}x{h_i}={w_i * h_i} px exceeds the "
+                f"{MAX_FIND_TEMPLATE_PIXELS}-px maximum (128x128). Use a "
+                f"smaller template or narrow the search with region."
+            )
+        img.load()                                   # full decode into memory
         if img.mode != mode:
             img = img.convert(mode)
         arr = np.asarray(img)
@@ -71,7 +85,7 @@ def _match_positions(
 
     rgb = src.ndim == 3                       # else grayscale 2D
     reduce_axes = (0, 2, 3) if rgb else (0, 2)
-    out_y, out_x = h - th + 1, w - tw + 1
+    out_y = h - th + 1
     rows: list[np.ndarray] = []
     tpl_i = tpl[:, None, ...].astype(np.int16)   # (th, 1, tw[, C]) for broadcast
     for y in range(out_y):
@@ -93,23 +107,30 @@ def _match_positions(
     return np.concatenate(rows, axis=0)
 
 
-def _nms(positions: np.ndarray, tw: int, th: int, cap: int) -> list[int]:
+def _nms(
+    positions: np.ndarray, tw: int, th: int, cap: int,
+) -> tuple[list[int], bool]:
     """Greedy non-max suppression over positions already sorted best-first.
 
     Suppress any position whose (x, y) is within one template footprint (tw, th)
     of an already-kept one — collapses the overlapping cluster a single target
-    produces into one box. Returns indices into ``positions``, length <= cap.
+    produces into one box. Returns ``(kept_indices, truncated)`` where
+    ``kept_indices`` has length <= cap and ``truncated`` is True iff the cap
+    was hit (so callers can surface a truncation flag, matching the
+    ``core/filesystem.py`` convention for capped ops).
     """
     kept: list[int] = []
+    truncated = False
     for i in range(positions.shape[0]):
         if len(kept) >= cap:
+            truncated = True
             break
         yi, xi = positions[i, 0], positions[i, 1]
         if any(abs(yi - positions[k, 0]) < th and abs(xi - positions[k, 1]) < tw
                for k in kept):
             continue
         kept.append(i)
-    return kept
+    return kept, truncated
 
 
 def _score(src: np.ndarray, tpl: np.ndarray, y: int, x: int) -> float:
@@ -149,17 +170,22 @@ def find_image(
 
     Returns:
         Dict with ``count``, ``matches`` (each {index, x, y, w, h, center_x,
-        center_y, score}), ``method`` == "template", and ``screenshot_path``.
-        Single-match mode also flattens the best match's center to top-level
-        ``x, y``. Raises ValueError on bad paths, oversized templates,
-        out-of-bounds region, or template larger than source.
+        center_y, score}), ``method`` == "template", ``truncated`` (bool — True
+        iff the ``MAX_FIND_MATCHES`` cap was hit in multi-match mode), and
+        ``screenshot_path``. Single-match mode also flattens the best match's
+        center to top-level ``x, y``. Raises ValueError on bad paths, oversized
+        templates, out-of-bounds region, or template larger than source.
     """
     tpl, tw, th = _load_template(template, grayscale)
+    # Defensive backstop: _load_template already enforces this from the image
+    # header before the full decode, but _load_template is independently
+    # callable so the bound is re-checked here on the materialized array.
+    # (`--bbox` is a CLI/handler concern; the Python parameter is `region`.)
     if tw * th > MAX_FIND_TEMPLATE_PIXELS:
         raise ValueError(
             f"template too large: {tw}x{th}={tw * th} px exceeds the "
             f"{MAX_FIND_TEMPLATE_PIXELS}-px maximum (128x128). Use a smaller "
-            f"template or narrow the search with region/--bbox."
+            f"template or narrow the search with region."
         )
 
     # Source: file (blacklist-checked) or fresh capture. Keep a full RGB PIL copy
@@ -194,12 +220,23 @@ def find_image(
     positions = _match_positions(src, tpl, tolerance)     # (N,3) [y,x,worst]
     if positions.shape[0] == 0:
         logger.info("find-image: no match (tolerance=%d, grayscale=%s)", tolerance, grayscale)
-        return {"count": 0, "matches": [], "method": "template", "screenshot_path": ""}
+        return {
+            "count": 0,
+            "matches": [],
+            "method": "template",
+            "truncated": False,
+            "screenshot_path": "",
+        }
 
     # Tightest match first (lowest worst_diff), then NMS or best-only.
-    order = np.argsort(positions[:, 2])
+    # kind="stable" makes the kept (x,y) deterministic across runs for a
+    # uniform cluster of equally-good positions (score is unaffected).
+    order = np.argsort(positions[:, 2], kind="stable")
     positions = positions[order]
-    kept = _nms(positions, tw, th, MAX_FIND_MATCHES) if all_matches else [0]
+    if all_matches:
+        kept, truncated = _nms(positions, tw, th, MAX_FIND_MATCHES)
+    else:
+        kept, truncated = [0], False
 
     matches: list[dict[str, Any]] = []
     for idx, pos_i in enumerate(kept, 1):
@@ -214,10 +251,16 @@ def find_image(
             "score": _score(src, tpl, y, x),
         })
 
+    if truncated:
+        logger.info(
+            "find-image: hit %d-match cap, results truncated", MAX_FIND_MATCHES,
+        )
+
     result: dict[str, Any] = {
         "count": len(matches),
         "matches": matches,
         "method": "template",
+        "truncated": truncated,
         "screenshot_path": _save_match_screenshot(src_pil, matches),
     }
     if not all_matches and matches:
@@ -231,17 +274,40 @@ def _save_match_screenshot(src_pil: Image.Image, matches: list[dict[str, Any]]) 
     """Draw red rectangles around each match on a copy of the source, save it,
     return the path. Match coords are already in full-source space (region
     offsets were applied), so they map directly onto ``src_pil``."""
+    from PIL import ImageDraw, ImageFont
+
     from agent_windows.core.screenshot import save_and_cleanup
 
     if not matches:
         return ""
     marked = src_pil.copy()
     draw = ImageDraw.Draw(marked)
+    try:
+        font = ImageFont.load_default(size=14)
+    except TypeError:
+        font = ImageFont.load_default()
     for m in matches:
         x, y, w, h = m["x"], m["y"], m["w"], m["h"]
         draw.rectangle([(x, y), (x + w - 1, y + h - 1)], outline="red", width=2)
-        draw.text((x + 2, y + 2), f"#{m['index']}", fill="red")
+        _draw_label(draw, f"#{m['index']}", x, y, font)
 
     save_dir = get_screenshot_save_dir()
     path = save_dir / f"find-image-{int(time.time() * 1000)}.png"
     return str(save_and_cleanup(marked, output_path=str(path)))
+
+
+def _draw_label(draw, label: str, x: int, y: int, font) -> None:
+    """Draw a label badge at (x, y) with a solid background for legibility.
+
+    Mirrors ``screenshot.py``'s ``_draw_label``: a white badge with black text
+    reads cleanly on a red match rectangle, where bare red-on-red text would
+    vanish. (House style.)
+    """
+    text_pos = (x + 3, y + 3)
+    text_bbox = draw.textbbox(text_pos, label, font=font)
+    text_bg = [
+        text_bbox[0] - 1, text_bbox[1] - 1,
+        text_bbox[2] + 1, text_bbox[3] + 1,
+    ]
+    draw.rectangle(text_bg, fill="white")
+    draw.text(text_pos, label, fill="black", font=font)

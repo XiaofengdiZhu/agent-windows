@@ -37,7 +37,10 @@ class TestExactMatch:
         assert (m["x"], m["y"]) == (12, 5)
         assert (m["w"], m["h"]) == (3, 3)
         assert (m["center_x"], m["center_y"]) == (13, 6)
-        assert m["score"] == pytest.approx(1.0)
+        # Exact match: 0 max-diff → round(1.0, 4) == 1.0 exactly. Use a
+        # strict == so a formula regression (e.g. wrong axis reduction) that
+        # approx() would tolerate surfaces here.
+        assert m["score"] == 1.0
         assert result["method"] == "template"
         assert result["x"] == 13 and result["y"] == 6
 
@@ -103,11 +106,14 @@ class TestAllMatchesAndNMS:
     def test_nms_collapses_overlapping_hits(self, tmp_path):
         from agent_windows.core.image_match import find_image
 
+        # 5x5 block + 3x3 template → 9 pre-NMS matching positions (a 3x3 grid
+        # of valid top-lefts). NMS must collapse to 1. If _nms returned its
+        # input unchanged, count would be 9.
         src = _solid(20, 20, (0, 0, 0))
-        src[10:13, 10:13] = (100, 0, 0)
+        src[10:15, 10:15] = (100, 0, 0)
         src_path = _save(src, tmp_path / "src.png")
-        tpl = _save(_solid(3, 3, (105, 0, 0)), tmp_path / "tpl.png")
-        result = find_image(tpl, source=src_path, tolerance=5, all_matches=True)
+        tpl = _save(_solid(3, 3, (100, 0, 0)), tmp_path / "tpl.png")
+        result = find_image(tpl, source=src_path, tolerance=0, all_matches=True)
         assert result["count"] == 1
 
 
