@@ -33,3 +33,6 @@ nul
 
 # Temp
 temp/
+
+# AI Agent Documents
+docs/superpowers/
