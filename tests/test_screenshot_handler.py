@@ -584,3 +584,28 @@ class TestPixelAtHandler:
         from agent_windows.daemon.router import HANDLERS
         with pytest.raises(ValueError, match="restricted"):
             HANDLERS["pixel_at"]({"x": 1, "y": 2, "source": _BLACKLISTED})
+
+    def test_float_sample_rejected(self):
+        """A non-integral float sample is rejected, not silently floored to
+        int(1.5)==1. Only reachable via raw JSON-RPC (launcher parses i64,
+        Typer/MCP use int). Parity with strict x/y and the find-image bbox
+        (M-1) rejection."""
+        from agent_windows.daemon.router import HANDLERS
+        with pytest.raises(ValueError, match="integer"):
+            HANDLERS["pixel_at"]({"x": 1, "y": 2, "sample": 1.5})
+
+    def test_float_tolerance_rejected(self):
+        from agent_windows.daemon.router import HANDLERS
+        with pytest.raises(ValueError, match="integer"):
+            HANDLERS["pixel_at"]({"x": 1, "y": 2, "tolerance": 1.5})
+
+    def test_blacklisted_output_rejected_before_core(self):
+        """A blacklisted --output is rejected at the handler before pixel_at
+        runs — no wasted capture/average. (Core re-validates early too, as
+        defense-in-depth for direct IPC callers.)"""
+        from agent_windows.daemon.router import HANDLERS
+        bad_output = str(Path.home() / ".agent-windows" / "pwned.png")
+        with patch("agent_windows.core.pixel.pixel_at") as mock_pa:
+            with pytest.raises(ValueError, match="install tree"):
+                HANDLERS["pixel_at"]({"x": 1, "y": 2, "output": bad_output})
+            mock_pa.assert_not_called()

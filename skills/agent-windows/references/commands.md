@@ -161,7 +161,7 @@ Read the color at a screen point; optionally compare it to a target color.
 Deterministic, zero-API-cost — use to judge state by color (an LED that flips
 green/red, a progress bar's fill, a selected swatch) without a vision-model call.
 
-**Usage:** `pixel-at X Y [--in SOURCE] [--sample N] [--match COLOR] [-t N] [--grayscale]`
+**Usage:** `pixel-at X Y [--in SOURCE] [--sample N] [--match COLOR] [-t N] [--grayscale] [--output PATH]`
 
 - `X Y` (required): the point. Virtual-screen px for a live capture (same space
   as `click`); image px with `--in`. Integers (negative ok on multi-monitor).

@@ -279,7 +279,7 @@ class TestRequire:
                     "app_launch", "app_switch", "app_list",
                     "get_text", "element_state", "wait", "wait_check",
                     "wait_for", "wait_for_check",
-                    "highlight", "diff", "find_image", "cleanup_screenshots",
+                    "highlight", "diff", "find_image", "pixel_at", "cleanup_screenshots",
                     "move", "drag", "hover", "dblclick",
                     "mouse_down", "mouse_up", "app_resize",
                     "key_down", "key_up",

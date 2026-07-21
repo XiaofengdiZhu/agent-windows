@@ -449,8 +449,11 @@ def _pixel_at(params: dict) -> dict[str, Any]:
     capture). ``sample`` N takes an N×N box average (default 1).
     ``match``/``tolerance`` compare a target color (per-channel max abs diff ≤
     tolerance). ``grayscale`` compares luminance. ``output`` saves an annotated
-    capture. Bad params raise ValueError → INVALID_PARAMS; blacklisted paths →
-    PERMISSION_DENIED; missing source file → ELEMENT_NOT_FOUND.
+    capture. All bad params — wrong types, out-of-bounds coords, unparseable
+    match color, sample/tolerance out of range, a blacklisted path, or a missing
+    source file — raise ValueError → INVALID_PARAMS (-32602). (Matches find_image:
+    the path blacklist and a missing source file surface as INVALID_PARAMS here,
+    not PERMISSION_DENIED/ELEMENT_NOT_FOUND.)
     """
     from agent_windows.core.pixel import pixel_at
     from agent_windows.core.filesystem import validate_read_path, validate_write_path
@@ -463,17 +466,13 @@ def _pixel_at(params: dict) -> dict[str, Any]:
         source = str(validate_read_path(source))
 
     sample = params.get("sample", 1)
-    try:
-        sample = int(sample)
-    except (ValueError, TypeError):
+    if isinstance(sample, bool) or not isinstance(sample, int):
         raise ValueError("sample must be an integer")
 
     match = params.get("match") or None
 
     tolerance = params.get("tolerance", 0)
-    try:
-        tolerance = int(tolerance)
-    except (ValueError, TypeError):
+    if isinstance(tolerance, bool) or not isinstance(tolerance, int):
         raise ValueError("tolerance must be an integer")
     if not (0 <= tolerance <= 255):
         raise ValueError("tolerance must be in [0, 255]")

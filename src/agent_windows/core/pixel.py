@@ -284,6 +284,12 @@ def pixel_at(
 
     target = _parse_color(match) if match is not None else None
 
+    # Validate the output path up front (before any capture/crop/average work)
+    # so a blacklisted or invalid write target is rejected without wasting a
+    # screen grab. The handler also validates this; this is the defense-in-depth
+    # backstop for direct core/IPC callers.
+    output_path = validate_write_path(output) if output is not None else None
+
     # --- resolve source: file (blacklist-checked) or live capture. ---
     # bounds is (left, top, width, height) of the source rect in its own
     # coordinate space — virtual-screen for live, image-pixel for file.
@@ -415,7 +421,7 @@ def pixel_at(
     # around the queried pixel); translate the queried center and the sample
     # box into canvas coords. `canvas` is non-None whenever `output` is. ---
     if output is not None:
-        op = validate_write_path(output)
+        op = output_path  # validated up front, before the capture
         assert canvas is not None  # set in the `output` branch above
         so_x, so_y = sample_offset
         sw_box, sh_box = box_r - box_l, box_b - box_t
