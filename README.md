@@ -145,6 +145,10 @@ Full flags and examples live in the [Command Reference](skills/agent-windows/ref
 | `process kill` | Kill a process (graceful or `--force`) |
 | `notify` | Windows toast notification |
 | `registry get/set/delete/list` | Windows Registry operations (typed values) |
+| `lock` | Lock the workstation (Win+L) |
+| `sleep` | Suspend the system to sleep (S3) |
+| `shutdown` | Shut down (`--delay N` 0=immediate max 600, `--force` skip save dialogs) |
+| `restart` | Restart (`--delay N`, `--force`) |
 | `cleanup` | Clean up old/oversized screenshots |
 | `wait` | Wait for a duration, element, or text |
 | `wait-for` | Wait until a UI predicate holds |

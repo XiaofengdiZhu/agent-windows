@@ -931,7 +931,71 @@ agent-windows mcp uninstall        # stop + remove the login auto-start task
 
 `--tools`/`--exclude-tools` are enforced: removed tools cannot be invoked, including via `batch`. Each flag also has an `AGENT_WINDOWS_*` env-var equivalent (see the Global Options table below).
 
-The server exposes ~53 tools mapping 1:1 to the daemon methods (screenshot, snapshot, observe, ground, detect, ask_vision, highlight, diff, find_image, pixel_at, get_text, element_state, cleanup_screenshots, list_displays, click, dblclick, hover, move, mouse_down, mouse_up, drag, scroll, type, shortcut, key_down, key_up, expand, collapse, app_launch/switch/resize/list, shell, fs_read/write/list/copy/move/delete/search/info, clipboard_get/set, process_list/kill, notify, registry, batch, multi_select, multi_edit, ping, wait, wait_for). Same usage tips apply: call `snapshot` first for pixel-exact coordinates, prefer it over `ground`/`detect` for named controls, and always `app switch` before input.
+The server exposes ~57 tools mapping 1:1 to the daemon methods (screenshot, snapshot, observe, ground, detect, ask_vision, highlight, diff, find_image, pixel_at, get_text, element_state, cleanup_screenshots, list_displays, click, dblclick, hover, move, mouse_down, mouse_up, drag, scroll, type, shortcut, key_down, key_up, expand, collapse, app_launch/switch/resize/list, shell, fs_read/write/list/copy/move/delete/search/info, clipboard_get/set, process_list/kill, notify, registry, lock, sleep, shutdown, restart, batch, multi_select, multi_edit, ping, wait, wait_for). Same usage tips apply: call `snapshot` first for pixel-exact coordinates, prefer it over `ground`/`detect` for named controls, and always `app switch` before input.
+
+---
+
+## Power
+
+### lock
+
+Lock the workstation (equivalent to Win+L). Recoverable — log back in to resume.
+
+```bash
+agent-windows lock
+```
+
+No parameters.
+
+**Output**: `{output}`
+
+### sleep
+
+Suspend the system to sleep (S3). Recoverable — wake to resume.
+
+```bash
+agent-windows sleep
+```
+
+No parameters.
+
+**Output**: `{output}`
+
+### shutdown
+
+Shut down the system. Optionally delay the shutdown and/or force-close applications.
+
+```bash
+agent-windows shutdown                    # Immediate shutdown
+agent-windows shutdown --delay 60        # 60-second delay
+agent-windows shutdown --delay 60 --force
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `--delay` / `-d` | int | `0` | Delay before shutdown, in seconds (0–600, default 0 = immediate) |
+| `--force` | bool | `false` | Force-close apps without waiting for save dialogs |
+
+A scheduled shutdown (`--delay N` where `N > 0`) can be canceled by the user via `shutdown /a` or the Windows shutdown UI. `--force` skips the graceful shutdown sequence — apps lose unsaved data.
+
+**Output**: `{output}`
+
+### restart
+
+Restart the system. Same parameters as `shutdown`.
+
+```bash
+agent-windows restart                     # Immediate restart
+agent-windows restart --delay 120        # 2-minute delay
+agent-windows restart --delay 120 --force
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `--delay` / `-d` | int | `0` | Delay before restart, in seconds (0–600, default 0 = immediate) |
+| `--force` | bool | `false` | Force-close apps without waiting for save dialogs |
+
+**Output**: `{output}`
 
 ---
 

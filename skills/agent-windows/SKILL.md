@@ -467,6 +467,19 @@ agent-windows registry delete HKCU:\Software\MyApp                  # Delete who
 
 `set` types: `String` (default), `ExpandString`, `DWord`, `QWord`, `MultiString` (value = JSON array), `Binary` (value = hex string). Paths must start with `HKCU/HKLM/HKCR/HKU/HKCC/HKPD`.
 
+### Power
+
+Control system power state. Use `lock` to secure the workstation (Win+L, recoverable by logging back in). Use `sleep` to suspend to S3 (recoverable by waking). `shutdown` and `restart` are irreversible; both accept `--delay N` (0–600 seconds, default 0 = immediate) and `--force` (skips save dialogs, apps lose unsaved data). A scheduled shutdown (`--delay N` where N > 0) can be canceled by the user via `shutdown /a` or the Windows UI.
+
+```bash
+agent-windows lock                    # Lock workstation
+agent-windows sleep                   # Suspend to S3
+agent-windows shutdown                # Immediate shutdown
+agent-windows shutdown --delay 120    # 2-minute delay
+agent-windows shutdown --force        # Skip save dialogs
+agent-windows restart --delay 60 --force
+```
+
 ## Batch Execution
 
 Execute multiple commands in one call:

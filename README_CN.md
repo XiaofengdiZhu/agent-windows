@@ -145,6 +145,10 @@ Python daemon (持久化, COM STA worker)
 | `process kill` | 终止进程（优雅或 `--force`） |
 | `notify` | Windows toast 通知 |
 | `registry get/set/delete/list` | Windows 注册表操作（类型化值） |
+| `lock` | 锁定工作站（Win+L） |
+| `sleep` | 使系统进入睡眠（S3） |
+| `shutdown` | 关机（`--delay N` 0=立即 最大 600，`--force` 跳过保存对话框） |
+| `restart` | 重启（`--delay N`，`--force`） |
 | `cleanup` | 清理旧的/过大的截图 |
 | `wait` | 等待时长、元素或文本 |
 | `wait-for` | 等待某 UI 谓词成立 |
