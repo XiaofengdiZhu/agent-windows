@@ -777,6 +777,7 @@ Commands:
   is visible/enabled    Check element state
   highlight             Highlight a region on a screenshot
   diff                  Pixel-level screenshot diff
+  find-image            Locate a template image on screen (deterministic)
   cleanup               Clean up old screenshots
 
   click / dblclick / hover / move  Mouse actions (--selector/-s @eN)

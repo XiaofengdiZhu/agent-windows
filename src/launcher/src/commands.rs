@@ -189,6 +189,10 @@ pub fn parse(argv: &[String], global: &GlobalFlags) -> Result<Action, ParseError
         }
         "highlight" => parse_highlight(rest),
         "diff" => parse_diff(rest),
+        // `find-image` was registered in the Python CLI (observe.py:138) and the
+        // daemon handler, but missing from this table — without this arm the
+        // recommended `uv tool install` path fails with "Unknown command".
+        "find-image" => parse_find_image(rest),
         "cleanup" => Ok(Action::Call {
             method: "cleanup_screenshots".into(),
             params: json!({}),
@@ -748,6 +752,40 @@ fn parse_diff(rest: &[String]) -> Result<Action, ParseError> {
     if let Some(v) = p.value(&["compare", "c"]) { params.insert("compare".into(), v.into()); }
     if let Some(v) = p.value(&["output", "o"]) { params.insert("output".into(), v.into()); }
     Ok(Action::Call { method: "diff".into(), params: Value::Object(params) })
+}
+
+fn parse_find_image(rest: &[String]) -> Result<Action, ParseError> {
+    // Mirrors observe.py:find_image (cli/commands/observe.py:138-162): the
+    // positional template → `image`, --in → `source`, --bbox x1,y1,x2,y2 → a
+    // 4-int array, -t/--tolerance → int (always forwarded, default 0), and the
+    // --grayscale / --all flags forward only when set.
+    // value_opts lists only the VALUE-TAKING options (--in/--bbox/-t). The
+    // boolean flags --grayscale/--all must NOT be listed here, or the parser
+    // would treat them as value-taking and swallow the following token.
+    let p = ParsedArgs::parse(rest, &["in", "bbox", "tolerance", "t"]);
+    let template = p.pos(0, "template")?;
+    let tolerance: i64 = opt_int(&p, &["tolerance", "t"], 0)?;
+    let mut params = Map::new();
+    params.insert("image".into(), template.into());
+    params.insert("tolerance".into(), tolerance.into());
+    if let Some(v) = p.value(&["in"]) { params.insert("source".into(), v.into()); }
+    if let Some(bbox) = p.value(&["bbox"]) {
+        // "x1,y1,x2,y2" → [x1, y1, x2, y2]; the daemon handler re-validates the
+        // count and ordering, so here we only parse each comma field as int.
+        let nums: Result<Vec<i64>, ParseError> = bbox
+            .split(',')
+            .map(|s| {
+                s.trim().parse::<i64>().map_err(|_| {
+                    invalid("--bbox must be four integers: x1,y1,x2,y2")
+                })
+            })
+            .collect();
+        let arr: Vec<Value> = nums?.into_iter().map(Value::from).collect();
+        params.insert("bbox".into(), Value::Array(arr));
+    }
+    if p.flag(&["grayscale"]) { params.insert("grayscale".into(), true.into()); }
+    if p.flag(&["all"]) { params.insert("all".into(), true.into()); }
+    Ok(Action::Call { method: "find_image".into(), params: Value::Object(params) })
 }
 
 fn parse_is(rest: &[String]) -> Result<Action, ParseError> {
@@ -2240,5 +2278,51 @@ mod tests {
             Ok(Action::Call { params, .. }) => assert_eq!(params["amount"], 3),
             other => panic!("expected Call, got {:?}", other),
         }
+    }
+
+    /// `find-image` forwards image+tolerance always, --in→source, --bbox→4-int
+    /// array, and the --grayscale/--all flags only when set. Mirrors
+    /// observe.py:find_image. Regression lock: this command was once missing
+    /// from the dispatch table and failed with "Unknown command".
+    #[test]
+    fn find_image_forwards_params() {
+        let g = GlobalFlags::default();
+        // Bare: template → image, tolerance defaults to 0, nothing else set.
+        match parse(&argv(&["find-image", "tpl.png"]), &g) {
+            Ok(Action::Call { method, params }) => {
+                assert_eq!(method, "find_image");
+                assert_eq!(params["image"], "tpl.png");
+                assert_eq!(params["tolerance"], 0);
+                assert!(params.get("source").is_none());
+                assert!(params.get("bbox").is_none());
+                assert!(params.get("grayscale").is_none());
+                assert!(params.get("all").is_none());
+            }
+            other => panic!("expected Call, got {:?}", other),
+        }
+        // Full form: --in, --bbox, -t, both flags.
+        match parse(&argv(&[
+            "find-image", "tpl.png", "--in", "src.png", "--bbox", "10,20,30,40",
+            "-t", "12", "--grayscale", "--all",
+        ]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert_eq!(params["image"], "tpl.png");
+                assert_eq!(params["tolerance"], 12);
+                assert_eq!(params["source"], "src.png");
+                assert_eq!(params["bbox"][0], 10);
+                assert_eq!(params["bbox"][1], 20);
+                assert_eq!(params["bbox"][2], 30);
+                assert_eq!(params["bbox"][3], 40);
+                assert_eq!(params["grayscale"], true);
+                assert_eq!(params["all"], true);
+            }
+            other => panic!("expected Call, got {:?}", other),
+        }
+        // Malformed bbox → invalid_value (not a silent default or panic).
+        let e = parse(&argv(&["find-image", "t", "--bbox", "1,2,oops"]), &g).unwrap_err();
+        assert_eq!(e.type_name(), "invalid_value");
+        // Missing template positional → missing_argument.
+        let e = parse(&argv(&["find-image"]), &g).unwrap_err();
+        assert_eq!(e.type_name(), "missing_argument");
     }
 }
