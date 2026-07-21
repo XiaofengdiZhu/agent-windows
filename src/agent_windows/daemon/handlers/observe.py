@@ -1,5 +1,6 @@
 """Observe handler: combined snapshot + screenshot + grounding."""
 
+import dataclasses
 from typing import Any
 
 from agent_windows.daemon.router import handler
@@ -130,3 +131,55 @@ def _observe(params: dict) -> dict[str, Any]:
     if errors:
         result["errors"] = errors
     return result
+
+
+def _render_displays(displays: list, dpi_scale: float) -> str:
+    """Render a list of DisplayInfo as a markdown table (list-displays output)."""
+    lines = [f"## Displays ({len(displays)})\n"]
+    if not displays:
+        lines.append("_No displays detected._\n")
+    else:
+        lines.append(
+            "| # | Primary | Resolution | Rect (L,T,R,B) | "
+            "Work Area (L,T,R,B) | Device |"
+        )
+        lines.append("|---|---------|------------|----------------|"
+                     "---------------------|--------|")
+        for d in displays:
+            primary = "*" if d.is_primary else ""
+            lines.append(
+                f"| {d.index} | {primary} | {d.width}x{d.height} | "
+                f"{d.left},{d.top},{d.right},{d.bottom} | "
+                f"{d.work_left},{d.work_top},{d.work_right},{d.work_bottom} | "
+                f"{d.device_name} |"
+            )
+    lines.append(f"\nSystem DPI scale: {dpi_scale}")
+    return "\n".join(lines)
+
+
+@handler("list_displays")
+def _list_displays(params: dict) -> dict[str, Any]:
+    """List all displays: index, primary, resolution, rect, work area, device.
+
+    Index order matches ``-d N`` / ``--display N`` (EnumDisplayMonitors). Returns
+    a markdown table under ``output`` plus a structured ``displays`` list,
+    ``count``, and ``dpi_scale`` so ``--format json`` consumers get machine-
+    readable data (same multi-field pattern as ``get_text``).
+    """
+    from agent_windows.core.display import enumerate_displays
+    from agent_windows.core.screenshot import get_dpi_scale
+
+    displays = enumerate_displays()
+    dpi_scale = get_dpi_scale()
+    return {
+        "output": _render_displays(displays, dpi_scale),
+        # width/height are @property on DisplayInfo, so dataclasses.asdict omits
+        # them — fold them in explicitly so JSON consumers get the resolution
+        # too (parity with the markdown Resolution column).
+        "displays": [
+            {**dataclasses.asdict(d), "width": d.width, "height": d.height}
+            for d in displays
+        ],
+        "count": len(displays),
+        "dpi_scale": dpi_scale,
+    }

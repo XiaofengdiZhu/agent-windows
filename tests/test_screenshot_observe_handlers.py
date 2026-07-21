@@ -527,3 +527,63 @@ class TestObserveHandler:
             r = HANDLERS["observe"]({})
         assert "errors" not in r
         assert "S" in r["output"] and "T" in r["output"]
+
+
+# ── list_displays handler ───────────────────────────────────────────
+
+from agent_windows.core.display import DisplayInfo
+
+
+def _disp(index=0, primary=True, left=0, top=0, right=1920, bottom=1080,
+          work_left=0, work_top=0, work_right=1920, work_bottom=1040,
+          device=r"\\.\DISPLAY1"):
+    return DisplayInfo(index=index, is_primary=primary, left=left, top=top,
+                       right=right, bottom=bottom, work_left=work_left,
+                       work_top=work_top, work_right=work_right,
+                       work_bottom=work_bottom, device_name=device)
+
+
+class TestListDisplaysHandler:
+    def test_returns_table_output_and_structured_fields(self):
+        displays = [_disp(), _disp(index=1, primary=False, left=1920, right=4480,
+                                   bottom=1440, work_right=4480, work_bottom=1400,
+                                   device=r"\\.\DISPLAY2")]
+        with patch("agent_windows.core.display.enumerate_displays",
+                   return_value=displays), \
+             patch("agent_windows.core.screenshot.get_dpi_scale",
+                   return_value=1.0):
+            r = HANDLERS["list_displays"]({})
+        assert r["count"] == 2
+        assert r["dpi_scale"] == 1.0
+        assert "## Displays (2)" in r["output"]
+        # primary marked with *, secondary not
+        assert "| 0 | *" in r["output"]
+        assert "| 1 |" in r["output"] and "| 1 | *" not in r["output"]
+        assert "1920x1080" in r["output"] and "2560x1440" in r["output"]
+        assert r"\\.\DISPLAY1" in r["output"]
+        assert "System DPI scale: 1.0" in r["output"]
+        # structured list: each entry carries width/height (not just rect)
+        assert r["displays"][0]["width"] == 1920 and r["displays"][0]["height"] == 1080
+        assert r["displays"][0]["is_primary"] is True
+        assert r["displays"][1]["index"] == 1 and r["displays"][1]["width"] == 2560
+
+    def test_empty_displays_is_not_an_error(self):
+        with patch("agent_windows.core.display.enumerate_displays",
+                   return_value=[]), \
+             patch("agent_windows.core.screenshot.get_dpi_scale",
+                   return_value=1.25):
+            r = HANDLERS["list_displays"]({})
+        assert r["count"] == 0
+        assert r["displays"] == []
+        assert "## Displays (0)" in r["output"]
+        assert "System DPI scale: 1.25" in r["output"]
+
+    def test_negative_origin_monitor_rendered(self):
+        displays = [_disp(index=0, primary=False, left=-1920, right=0,
+                          device=r"\\.\DISPLAY2")]
+        with patch("agent_windows.core.display.enumerate_displays",
+                   return_value=displays), \
+             patch("agent_windows.core.screenshot.get_dpi_scale",
+                   return_value=1.0):
+            r = HANDLERS["list_displays"]({})
+        assert "-1920,0,0,1080" in r["output"]
