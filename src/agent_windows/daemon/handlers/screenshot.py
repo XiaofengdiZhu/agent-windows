@@ -437,3 +437,66 @@ def _find_image(params: dict) -> dict[str, Any]:
         output = "## Find Image\nCount: 0\nNo match found."
 
     return {"output": output, **result}
+
+
+@handler("pixel_at")
+def _pixel_at(params: dict) -> dict[str, Any]:
+    """Read the color at a screen point; optionally match a target color.
+
+    Deterministic, zero-API-cost state sensor (LED on/off, progress-bar fill).
+    ``x``/``y`` are ints (virtual-screen px for a live capture, image px with
+    ``source``). ``source`` optionally names a screenshot file (default: fresh
+    capture). ``sample`` N takes an N×N box average (default 1).
+    ``match``/``tolerance`` compare a target color (per-channel max abs diff ≤
+    tolerance). ``grayscale`` compares luminance. ``output`` saves an annotated
+    capture. Bad params raise ValueError → INVALID_PARAMS; blacklisted paths →
+    PERMISSION_DENIED; missing source file → ELEMENT_NOT_FOUND.
+    """
+    from agent_windows.core.pixel import pixel_at
+    from agent_windows.core.filesystem import validate_read_path, validate_write_path
+
+    x = require(params, "x", int)
+    y = require(params, "y", int)
+
+    source = params.get("source") or None
+    if source:
+        source = str(validate_read_path(source))
+
+    sample = params.get("sample", 1)
+    try:
+        sample = int(sample)
+    except (ValueError, TypeError):
+        raise ValueError("sample must be an integer")
+
+    match = params.get("match") or None
+
+    tolerance = params.get("tolerance", 0)
+    try:
+        tolerance = int(tolerance)
+    except (ValueError, TypeError):
+        raise ValueError("tolerance must be an integer")
+    if not (0 <= tolerance <= 255):
+        raise ValueError("tolerance must be in [0, 255]")
+
+    output = params.get("output") or None
+    if output:
+        output = str(validate_write_path(output))
+
+    result = pixel_at(
+        x=x, y=y, source=source, sample=sample, match=match,
+        tolerance=tolerance, grayscale=bool(params.get("grayscale", False)),
+        output=output,
+    )
+
+    lines = ["## Pixel At", f"Method: {result['method']}",
+             f"Point: ({result['x']}, {result['y']})  sample={result['sample']}",
+             f"Color: {result['hex']}  rgb={result['rgb']}"]
+    if "match" in result:
+        m = result["match"]
+        lines.append(
+            f"Match: target={m['target']} tolerance={m['tolerance']} "
+            f"is_match={m['is_match']} max_diff={m['max_diff']} score={m['score']}"
+        )
+    if result.get("screenshot_path"):
+        lines.append(f"Screenshot: {result['screenshot_path']} (marked)")
+    return {"output": "\n".join(lines), **result}

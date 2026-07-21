@@ -513,3 +513,74 @@ class TestFindImageHandler:
         from agent_windows.daemon.router import HANDLERS
         with pytest.raises(ValueError, match="restricted"):
             HANDLERS["find_image"]({"image": _BLACKLISTED})
+
+
+class TestPixelAtHandler:
+    """pixel_at handler: param forwarding + validation -> INVALID_PARAMS.
+
+    Mirrors TestFindImageHandler but patches ``agent_windows.core.pixel.pixel_at``
+    (the core engine committed separately). The handler is a thin forwarding +
+    validation layer; the core owns the averaging, matching, and annotation."""
+
+    # Shaped like the real core pixel_at() result with a match block. The handler
+    # spreads this into its returned dict and renders lines from selected keys.
+    _FAKE = {
+        "x": 10, "y": 20, "rgb": [220, 20, 20], "hex": "#dc1414",
+        "sample": 3, "method": "pixel", "screenshot_path": "",
+        "match": {
+            "target": "#ff0000", "tolerance": 5, "is_match": True,
+            "max_diff": 0, "score": 1.0,
+        },
+    }
+
+    def test_forwards_params_and_color(self):
+        from agent_windows.daemon.router import HANDLERS
+
+        with patch("agent_windows.core.pixel.pixel_at",
+                   return_value=self._FAKE) as mock_pa:
+            result = HANDLERS["pixel_at"]({
+                "x": 10, "y": 20, "sample": 3, "match": "#ff0000",
+                "tolerance": 5, "grayscale": True,
+            })
+        mock_pa.assert_called_once_with(
+            x=10, y=20, source=None, sample=3, match="#ff0000",
+            tolerance=5, grayscale=True, output=None,
+        )
+        # Core result is spread into the returned dict.
+        assert result["rgb"] == [220, 20, 20]
+        assert result["hex"] == "#dc1414"
+        assert result["method"] == "pixel"
+        assert result["match"]["is_match"] is True
+        # The rendered output references the color and match block.
+        assert "## Pixel At" in result["output"]
+        assert "Color: #dc1414" in result["output"]
+        assert "rgb=[220, 20, 20]" in result["output"]
+        assert "Match: target=#ff0000 tolerance=5 is_match=True" in result["output"]
+
+    def test_defaults_when_omitted(self):
+        from agent_windows.daemon.router import HANDLERS
+
+        fake = {"x": 1, "y": 2, "rgb": [0, 0, 0], "hex": "#000000",
+                "sample": 1, "method": "pixel", "screenshot_path": ""}
+        with patch("agent_windows.core.pixel.pixel_at",
+                   return_value=fake) as mock_pa:
+            HANDLERS["pixel_at"]({"x": 1, "y": 2})
+        mock_pa.assert_called_once_with(
+            x=1, y=2, source=None, sample=1, match=None,
+            tolerance=0, grayscale=False, output=None,
+        )
+
+    def test_missing_x_rejected(self):
+        from agent_windows.daemon.router import HANDLERS
+        with pytest.raises(ValueError, match="x"):
+            HANDLERS["pixel_at"]({"y": 2})
+
+    def test_tolerance_out_of_range_rejected(self):
+        from agent_windows.daemon.router import HANDLERS
+        with pytest.raises(ValueError, match="tolerance"):
+            HANDLERS["pixel_at"]({"x": 1, "y": 2, "tolerance": 999})
+
+    def test_blacklisted_source_rejected(self):
+        from agent_windows.daemon.router import HANDLERS
+        with pytest.raises(ValueError, match="restricted"):
+            HANDLERS["pixel_at"]({"x": 1, "y": 2, "source": _BLACKLISTED})
