@@ -112,6 +112,27 @@ agent-windows screenshot --annotate --grid-w 4 --grid-h 4  # Annotated + % refer
 
 Prefer `snapshot` for element location; reach for vision only when UIA can't see an element (see `references/vision.md`).
 
+### Template matching (`find-image`) — deterministic, free
+
+When you already have an image of the target (an icon, a glyph, a status indicator), `find-image` finds it by pixel match — no vision-model call, no API cost, fully deterministic. Prefer it over `ground` when a template exists.
+
+```bash
+# Find a saved icon and click its center
+agent-windows find-image save.png
+# → center coords ready for `agent-windows click X Y`
+
+# Tolerate anti-aliasing / minor DPI differences
+agent-windows find-image icon.png --tolerance 10 --grayscale
+
+# Find every occurrence (count icons)
+agent-windows find-image checkbox.png --all
+
+# Restrict the search to a window region for speed
+agent-windows find-image btn.png --bbox 100,100,800,600
+```
+
+Capture a template once with `agent-windows screenshot --bbox x1,y1,x2,y2 -o icon.png` (crop tight to the target, at native DPI). Templates are capped at 128×128; for larger targets, crop with `--bbox` first.
+
 ## Vision Model Setup
 
 `ground`, `detect`, and `ask-vision` need a configured multimodal model to read the screen. Check if one is ready:

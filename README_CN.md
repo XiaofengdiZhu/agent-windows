@@ -115,6 +115,7 @@ Python daemon (持久化, COM STA worker)
 | `screenshot [-o PATH] [--monitor N] [-s @eN] [--bbox X1,Y1,X2,Y2] [--annotate] [--grid-w N] [--grid-h N]` | 屏幕抓取；`--monitor -1`=全部；`--annotate` 叠加带编号的 `@eN` 框（全屏）+ 可选 `%` 参考网格 |
 | `ground DESCRIPTION [--single-pass]` | 视觉坐标定位（`--single-pass`：1 次 API 调用，约 2 倍速，精度较低） |
 | `detect DESCRIPTION [-i IMAGE] [--max-targets N]` | 多目标边界框检测 |
+| `find-image` | 在屏幕上定位已保存的模板图；确定性、不调用视觉模型。有目标截图（图标/字形）时使用。 |
 | `ask-vision PROMPT [-i IMAGE] [-m MODEL]` | 自由形式视觉问答 |
 | `highlight X1 Y1 X2 Y2 [-l LABEL] [-c COLOR]` | 在截图上高亮区域 |
 | `diff BASELINE [-c COMPARE] [-t THRESHOLD]` | 像素级截图差异 |
@@ -308,8 +309,8 @@ output_encoding = ""     # "" = UTF-8（自动）；否则如 "gbk" 用于旧代
 
 - Windows 8.1 / 10 / 11
 - Python 3.13+
-- 依赖：typer、comtypes、pywin32（≥306；推荐 ≥308）、Pillow、mss、openai、toml
-- 可选：fastmcp（≥3.0，用于 MCP 服务端——`uv tool install agent-windows` / `uv sync --extra mcp`）、dxcam、anthropic、google-genai、numpy
+- 依赖：typer、comtypes、pywin32（≥306；推荐 ≥308）、Pillow、mss、openai、toml、numpy
+- 可选：fastmcp（≥3.0，用于 MCP 服务端——`uv tool install agent-windows` / `uv sync --extra mcp`）、dxcam、anthropic、google-genai
 
 > **pywin32 说明**：现代 pywin32 wheel（≥308）在安装时通过 `.pth` 引导脚本自动配置其 DLL，因此 `uv tool install` / `uvx` 开箱即用。若在较旧的 pywin32 或手工管理的环境中遇到 `pythoncom3xx.dll` / `pywintypes3xx.dll` 找不到，请在你的安装前缀下运行 `python Scripts\pywin32_postinstall.py -install`。
 

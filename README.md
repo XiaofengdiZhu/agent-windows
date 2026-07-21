@@ -115,6 +115,7 @@ Most commands have more flags than shown — run `agent-windows --help` or see t
 | `screenshot [-o PATH] [--monitor N] [-s @eN] [--bbox X1,Y1,X2,Y2] [--annotate] [--grid-w N] [--grid-h N]` | Screen capture; `--monitor -1`=all; `--annotate` overlays numbered `@eN` boxes (full-screen) + optional `%` reference grid |
 | `ground DESCRIPTION [--single-pass]` | Visual coordinate grounding (`--single-pass`: 1 API call, ~2x faster, lower precision) |
 | `detect DESCRIPTION [-i IMAGE] [--max-targets N]` | Multi-target bounding box detection |
+| `find-image` | Locate a saved template image on screen; deterministic, no vision-model call. Use when you have a screenshot of the target (icon, glyph). |
 | `ask-vision PROMPT [-i IMAGE] [-m MODEL]` | Free-form visual Q&A |
 | `highlight X1 Y1 X2 Y2 [-l LABEL] [-c COLOR]` | Highlight region on screenshot |
 | `diff BASELINE [-c COMPARE] [-t THRESHOLD]` | Pixel-level screenshot diff |
@@ -309,8 +310,8 @@ Every option below can be set as an env var instead of (or in addition to) the c
 
 - Windows 8.1 / 10 / 11
 - Python 3.13+
-- Dependencies: typer, comtypes, pywin32 (≥306; ≥308 recommended), Pillow, mss, openai, toml
-- Optional: fastmcp (≥3.0, for the MCP server — `uv tool install agent-windows` / `uv sync --extra mcp`), dxcam, anthropic, google-genai, numpy
+- Dependencies: typer, comtypes, pywin32 (≥306; ≥308 recommended), Pillow, mss, openai, toml, numpy
+- Optional: fastmcp (≥3.0, for the MCP server — `uv tool install agent-windows` / `uv sync --extra mcp`), dxcam, anthropic, google-genai
 
 > **pywin32 note**: modern pywin32 wheels (≥308) self-configure their DLLs via a `.pth` bootstrap at install time, so `uv tool install` / `uvx` works out of the box. If you ever hit `pythoncom3xx.dll` / `pywintypes3xx.dll` not found on an older pywin32 or a manually-managed environment, run `python Scripts\pywin32_postinstall.py -install` from your install prefix.
 

@@ -139,6 +139,22 @@ agent-windows detect "PDF file icons" [--max-targets N] [-i IMAGE] [-m MODEL]
 
 **Output**: `{output, description, count, targets, screenshot_path}`. Each target: `{index, label, box: {x1, y1, x2, y2}}`.
 
+### find-image
+
+Locate a saved template image on screen and return click-ready coordinates.
+Deterministic, zero-API-cost alternative to `ground`/`detect`.
+
+**Usage:** `find-image TEMPLATE [--in SOURCE] [--bbox X1,Y1,X2,Y2] [--tolerance N] [--grayscale] [--all]`
+
+- `TEMPLATE` (required): path to the template image to locate.
+- `--in SOURCE`: search a saved screenshot instead of a fresh capture.
+- `--bbox X1,Y1,X2,Y2`: restrict the search region (faster; coords offset back automatically).
+- `--tolerance N` / `-t N`: per-channel max abs diff, 0-255 (0 = exact).
+- `--grayscale`: match in grayscale (~3× faster, ignores color).
+- `--all`: return every match (NMS-deduped) instead of just the best.
+
+Returns `{count, matches:[{x,y,w,h,center_x,center_y,score}], method:"template", screenshot_path}`. Single-match mode also flattens the best match's center to top-level `x, y`. `method` is always `"template"` (vs `ground`'s `"visual-*"`). Templates are capped at 128×128; for larger, crop with `--bbox` first.
+
 ### get-text
 
 Get text content of a UIA element by selector.
@@ -856,7 +872,7 @@ agent-windows mcp uninstall        # stop + remove the login auto-start task
 
 `--tools`/`--exclude-tools` are enforced: removed tools cannot be invoked, including via `batch`. Each flag also has an `AGENT_WINDOWS_*` env-var equivalent (see the Global Options table below).
 
-The server exposes ~50 tools mapping 1:1 to the daemon methods (screenshot, snapshot, observe, ground, detect, ask_vision, highlight, diff, get_text, element_state, cleanup_screenshots, click, dblclick, hover, move, mouse_down, mouse_up, drag, scroll, type, shortcut, key_down, key_up, expand, collapse, app_launch/switch/resize/list, shell, fs_read/write/list/copy/move/delete/search/info, clipboard_get/set, process_list/kill, notify, registry, batch, multi_select, multi_edit, ping, wait, wait_for). Same usage tips apply: call `snapshot` first for pixel-exact coordinates, prefer it over `ground`/`detect` for named controls, and always `app switch` before input.
+The server exposes ~51 tools mapping 1:1 to the daemon methods (screenshot, snapshot, observe, ground, detect, ask_vision, highlight, diff, find_image, get_text, element_state, cleanup_screenshots, click, dblclick, hover, move, mouse_down, mouse_up, drag, scroll, type, shortcut, key_down, key_up, expand, collapse, app_launch/switch/resize/list, shell, fs_read/write/list/copy/move/delete/search/info, clipboard_get/set, process_list/kill, notify, registry, batch, multi_select, multi_edit, ping, wait, wait_for). Same usage tips apply: call `snapshot` first for pixel-exact coordinates, prefer it over `ground`/`detect` for named controls, and always `app switch` before input.
 
 ---
 
