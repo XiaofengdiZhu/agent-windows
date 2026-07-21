@@ -242,6 +242,11 @@ def test_cleanup_fn_returns_output():
         assert obs.cleanup_screenshots_fn() == "done"
 
 
+def test_list_displays_fn_returns_output():
+    with patch.object(obs, "_call", return_value={"output": "## Displays (1)"}):
+        assert obs.list_displays_fn() == "## Displays (1)"
+
+
 import agent_windows.mcp.tools.vision as vis
 
 
@@ -677,6 +682,7 @@ def test_register_all_registers_every_domain_on_a_fake_mcp():
         # observation
         "screenshot", "snapshot", "observe", "get_text", "element_state",
         "highlight", "diff", "cleanup_screenshots", "find_image", "pixel_at",
+        "list_displays",
         # vision
         "ground", "detect", "ask_vision",
         # input

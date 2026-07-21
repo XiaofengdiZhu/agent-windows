@@ -265,6 +265,14 @@ def cleanup_screenshots_fn() -> str:
     return str(_call("cleanup_screenshots").get("output", ""))
 
 
+def list_displays_fn() -> str:
+    """List all displays (index, primary, resolution, rect, work area, name).
+
+    Read-only; indices match the ``display`` arg on snapshot/observe/screenshot
+    so the agent knows which N to pass."""
+    return str(_call("list_displays").get("output", ""))
+
+
 # ── registration ───────────────────────────────────────────────────────
 
 
@@ -431,3 +439,14 @@ def register(mcp) -> None:
                                    idempotentHint=False, openWorldHint=False))
     def _cleanup_screenshots() -> str:
         return cleanup_screenshots_fn()
+
+    @mcp.tool(name="list_displays", description=(
+        "List all displays with their index, primary flag, resolution, screen "
+        "rect, work-area rect, and device name. Read-only. Use the index with "
+        "the `display` arg on snapshot/observe/screenshot to scope to one "
+        "display. Keywords: displays, monitors, screen list, which display, "
+        "display index, multi-monitor."
+    ), annotations=ToolAnnotations(title="List Displays", readOnlyHint=True,
+                                   idempotentHint=True, openWorldHint=False))
+    def _list_displays() -> str:
+        return list_displays_fn()
