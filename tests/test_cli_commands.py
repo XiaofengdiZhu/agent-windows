@@ -765,6 +765,42 @@ class TestSystemCommands:
         _, params = _cmd_calls(mock_cmd)[0]
         assert params == {"mode": "delete", "path": r"HKCU:\Soft", "name": ""}
 
+    @patch("agent_windows.cli.commands.system._cmd")
+    def test_lock_forwards_method(self, mock_cmd):
+        """lock command forwards to 'lock' method with no params."""
+        result = runner.invoke(app, ["lock"])
+        assert result.exit_code == 0
+        method, params = _cmd_calls(mock_cmd)[0]
+        assert method == "lock"
+        assert params == {}
+
+    @patch("agent_windows.cli.commands.system._cmd")
+    def test_sleep_forwards_method(self, mock_cmd):
+        """sleep command forwards to 'sleep' method with no params."""
+        result = runner.invoke(app, ["sleep"])
+        assert result.exit_code == 0
+        method, params = _cmd_calls(mock_cmd)[0]
+        assert method == "sleep"
+        assert params == {}
+
+    @patch("agent_windows.cli.commands.system._cmd")
+    def test_shutdown_forwards_delay_and_force(self, mock_cmd):
+        """shutdown command forwards delay and force params."""
+        result = runner.invoke(app, ["shutdown", "--delay", "30", "--force"])
+        assert result.exit_code == 0
+        method, params = _cmd_calls(mock_cmd)[0]
+        assert method == "shutdown"
+        assert params == {"delay": 30, "force": True}
+
+    @patch("agent_windows.cli.commands.system._cmd")
+    def test_restart_forwards_delay_and_force(self, mock_cmd):
+        """restart command forwards delay and force params."""
+        result = runner.invoke(app, ["restart", "--delay", "60", "--force"])
+        assert result.exit_code == 0
+        method, params = _cmd_calls(mock_cmd)[0]
+        assert method == "restart"
+        assert params == {"delay": 60, "force": True}
+
 
 # ── batch command: JSON source resolution + error paths ─────────────
 

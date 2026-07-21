@@ -420,3 +420,34 @@ def registry_list(
 ) -> None:
     """List values and sub-keys under a path."""
     _cmd(ctx, "registry", mode="list", path=path)
+
+
+# ── power (top-level commands) ──────────────────────────────────────
+
+
+def lock(ctx: typer.Context) -> None:
+    """Lock the workstation (Win+L)."""
+    _cmd(ctx, "lock")
+
+
+def sleep(ctx: typer.Context) -> None:
+    """Suspend the system to sleep (S3)."""
+    _cmd(ctx, "sleep")
+
+
+def shutdown(
+    ctx: typer.Context,
+    delay: int = typer.Option(0, "--delay", help="Delay seconds (0=immediate, max 600)"),
+    force: bool = typer.Option(False, "--force", help="Force-close apps without saving"),
+) -> None:
+    """Shut down the system."""
+    _cmd(ctx, "shutdown", delay=delay, force=force)
+
+
+def restart(
+    ctx: typer.Context,
+    delay: int = typer.Option(0, "--delay", help="Delay seconds (0=immediate, max 600)"),
+    force: bool = typer.Option(False, "--force", help="Force-close apps without saving"),
+) -> None:
+    """Restart the system."""
+    _cmd(ctx, "restart", delay=delay, force=force)

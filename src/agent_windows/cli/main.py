@@ -101,6 +101,7 @@ from agent_windows.cli.commands.input import click, type_text, scroll, move, dbl
 from agent_windows.cli.commands.system import (  # noqa: E402
     shell, batch, notify,
     app_cmd, fs_cmd, clip_cmd, proc_cmd, registry_cmd,
+    lock, sleep, shutdown, restart,
 )
 from agent_windows.cli.commands.wait import wait, wait_for  # noqa: E402
 from agent_windows.cli.commands.multi import multi_select, multi_edit  # noqa: E402
@@ -135,6 +136,10 @@ app.command()(collapse)
 app.command()(shell)
 app.command()(batch)
 app.command()(notify)
+app.command()(lock)
+app.command()(sleep)
+app.command()(shutdown)
+app.command()(restart)
 app.command(name="multi-select")(multi_select)
 app.command(name="multi-edit")(multi_edit)
 app.command()(wait)
