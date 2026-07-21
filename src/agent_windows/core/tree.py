@@ -321,7 +321,10 @@ def resolve_window(
     Raises:
         ValueError: zero match, or ``active`` with no foreground window. These
             surface as INVALID_PARAMS (-32602) via ``route_request``.
+            Also when ``active`` is False and ``value`` is empty/None.
     """
+    if not active and not value:
+        raise ValueError("value is required when active is False")
     windows = enumerate_windows()
 
     if active:

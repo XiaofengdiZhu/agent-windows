@@ -145,7 +145,7 @@ def snapshot_fn(
     params: dict[str, Any] = {}
     if display is not None:
         params["display"] = display
-    if window is not None:
+    if window:
         params["window"] = window
     if active:
         params["active"] = True

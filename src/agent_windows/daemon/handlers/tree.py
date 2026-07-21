@@ -19,9 +19,13 @@ def _snapshot(params: dict) -> dict[str, Any]:
     Optional ``window`` / ``active`` scope the traversal to a single top-level
     window (see :func:`agent_windows.core.tree.resolve_window`). Without them,
     the full screen tree is returned (backward compatible).
+
+    Routes through :func:`get_tree_snapshot` (not ``traverse_tree`` directly) so
+    the result enters the 2s ``_tree_cache`` — that is how ``resolve_element(
+    '@eN')`` / ``click @eN`` align to this (possibly scoped) subtree.
     """
     from agent_windows.core.tree import (
-        traverse_tree, render_snapshot, resolve_window,
+        get_tree_snapshot, render_snapshot, resolve_window,
     )
     from agent_windows.core.display import (
         parse_display_selection, filter_snapshot_to_displays,
@@ -44,7 +48,7 @@ def _snapshot(params: dict) -> dict[str, Any]:
         )
 
     cfg = load_config().get("tree", {})
-    data = traverse_tree(
+    data = get_tree_snapshot(
         max_depth=cfg.get("max_depth", 15),
         include_invisible=cfg.get("include_invisible", False),
         include_offscreen=cfg.get("include_offscreen", False),
