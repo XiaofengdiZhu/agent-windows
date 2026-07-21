@@ -409,6 +409,36 @@ def test_process_list_fn_forwards_filter_params():
     m.assert_called_once_with("process_list", sort_by="cpu", limit=10, name="edge")
 
 
+def test_lock_fn_returns_output():
+    with patch.object(sysmod, "_call", return_value={"output": "## Lock\nWorkstation locked."}):
+        assert sysmod.lock_fn() == "## Lock\nWorkstation locked."
+
+
+def test_sleep_fn_returns_output():
+    with patch.object(sysmod, "_call", return_value={"output": "## Sleep\nSystem suspended."}):
+        assert sysmod.sleep_fn() == "## Sleep\nSystem suspended."
+
+
+def test_shutdown_fn_forwards_delay_force():
+    captured = {}
+    def fake(method, **p):
+        captured.update(method=method, **p)
+        return {"output": "## Shutdown\n..."}
+    with patch.object(sysmod, "_call", side_effect=fake):
+        sysmod.shutdown_fn(delay=30, force=True)
+    assert captured == {"method": "shutdown", "delay": 30, "force": True}
+
+
+def test_restart_fn_forwards_delay_force():
+    captured = {}
+    def fake(method, **p):
+        captured.update(method=method, **p)
+        return {"output": "## Restart\n..."}
+    with patch.object(sysmod, "_call", side_effect=fake):
+        sysmod.restart_fn(delay=60, force=False)
+    assert captured == {"method": "restart", "delay": 60, "force": False}
+
+
 import agent_windows.mcp.tools.batch as bat
 
 
@@ -694,6 +724,7 @@ def test_register_all_registers_every_domain_on_a_fake_mcp():
         "fs_read", "fs_write", "fs_list", "fs_copy", "fs_move", "fs_delete",
         "fs_search", "fs_info", "clipboard_get", "clipboard_set",
         "process_list", "process_kill", "notify", "registry",
+        "lock", "sleep", "shutdown", "restart",
         # batch/multi
         "batch", "multi_select", "multi_edit",
         # control

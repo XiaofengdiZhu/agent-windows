@@ -130,6 +130,25 @@ def registry_fn(
                      value=value, type=type).get("output", ""))
 
 
+# ── power ─────────────────────────────────────────────────────────────
+
+
+def lock_fn() -> str:
+    return str(_call("lock").get("output", ""))
+
+
+def sleep_fn() -> str:
+    return str(_call("sleep").get("output", ""))
+
+
+def shutdown_fn(delay: int = 0, force: bool | str = False) -> str:
+    return str(_call("shutdown", delay=delay, force=_as_bool(force)).get("output", ""))
+
+
+def restart_fn(delay: int = 0, force: bool | str = False) -> str:
+    return str(_call("restart", delay=delay, force=_as_bool(force)).get("output", ""))
+
+
 # ── registration ───────────────────────────────────────────────────────
 
 def register(mcp) -> None:
@@ -302,3 +321,33 @@ def register(mcp) -> None:
                       description="Value type for 'set': 'String' (default), 'DWord', 'QWord', 'MultiString', or 'Binary'."
                   )] = "String") -> str:
         return registry_fn(mode=mode, path=path, name=name, value=value, type=type)
+
+    @mcp.tool(name="lock", description=(
+        "Lock the workstation (Win+L). Keywords: lock screen, lock workstation, "
+        "lock computer, sign out lock. No parameters."
+    ), annotations=_REG(title="Lock", readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))
+    def _lock() -> str:
+        return lock_fn()
+
+    @mcp.tool(name="sleep", description=(
+        "Suspend the system to sleep (S3). Keywords: sleep, suspend, standby, "
+        "put to sleep. No parameters."
+    ), annotations=_REG(title="Sleep", readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))
+    def _sleep() -> str:
+        return sleep_fn()
+
+    @mcp.tool(name="shutdown", description=(
+        "Shut down the system. Keywords: shutdown, power off, turn off computer. "
+        "delay (seconds, 0=immediate, max 600) schedules; force closes apps "
+        "without saving (default graceful)."
+    ), annotations=_REG(title="Shutdown", readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False))
+    def _shutdown(delay: int = 0, force: bool | str = False) -> str:
+        return shutdown_fn(delay=delay, force=force)
+
+    @mcp.tool(name="restart", description=(
+        "Restart the system. Keywords: restart, reboot, restart computer. "
+        "delay (seconds, 0=immediate, max 600) schedules; force closes apps "
+        "without saving (default graceful)."
+    ), annotations=_REG(title="Restart", readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False))
+    def _restart(delay: int = 0, force: bool | str = False) -> str:
+        return restart_fn(delay=delay, force=force)
