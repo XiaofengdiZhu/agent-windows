@@ -26,7 +26,7 @@ app = typer.Typer(
 # (agent-windows-python / --no-daemon) to parity.
 _COORD_CMDS = frozenset({
     "click", "scroll", "move", "dblclick", "hover",
-    "mouse-down", "mouse-up", "drag", "highlight",
+    "mouse-down", "mouse-up", "drag", "highlight", "pixel-at",
 })
 
 # A leading "-<digits>" (optionally a fractional part) is a coordinate, not a
@@ -96,7 +96,7 @@ def global_options(
 # ── Register top-level commands ───────────────────────────────────
 # Commands defined in individual modules, added here to the main app.
 
-from agent_windows.cli.commands.observe import observe, snapshot, screenshot, ground, ask_vision, detect, cleanup, highlight, diff_screenshot, get_text, is_cmd, find_image  # noqa: E402
+from agent_windows.cli.commands.observe import observe, snapshot, screenshot, ground, ask_vision, detect, cleanup, highlight, diff_screenshot, get_text, is_cmd, find_image, pixel_at  # noqa: E402
 from agent_windows.cli.commands.input import click, type_text, scroll, move, dblclick, hover, mouse_down, mouse_up, drag, shortcut, key_down, key_up, expand, collapse  # noqa: E402
 from agent_windows.cli.commands.system import (  # noqa: E402
     shell, batch, notify,
@@ -112,6 +112,7 @@ app.command()(ground)
 app.command()(ask_vision)
 app.command()(detect)
 app.command(name="find-image")(find_image)
+app.command(name="pixel-at")(pixel_at)
 app.command()(cleanup)
 app.command()(highlight)
 app.command(name="diff")(diff_screenshot)

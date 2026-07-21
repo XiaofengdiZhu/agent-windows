@@ -163,6 +163,35 @@ def find_image(
     _cmd(ctx, "find_image", **params)
 
 
+@app.command(name="pixel-at")
+def pixel_at(
+    ctx: typer.Context,
+    x: int = typer.Argument(parser=parse_coord, help="X (virtual-screen px; image px with --in)"),
+    y: int = typer.Argument(parser=parse_coord, help="Y"),
+    in_: str = typer.Option("", "--in", help="Source image path (default: fresh capture)"),
+    sample: int = typer.Option(1, "--sample", help="Sample N×N box, averaged (default 1)"),
+    match: str = typer.Option("", "--match", help="Target color, e.g. #RRGGBB / rgb(r,g,b)"),
+    tolerance: int = typer.Option(0, "--tolerance", "-t", help="Per-channel max diff 0-255 (0=exact)"),
+    grayscale: bool = typer.Option(False, "--grayscale", help="Compare luminance"),
+    output: str = typer.Option("", "--output", "-o", help="Save annotated capture to path"),
+) -> None:
+    """Read the color at a screen point; optionally match a target color.
+
+    Deterministic, no vision-model call. Use to judge state by color (LED on/off,
+    progress-bar fill). With --match, returns is_match within --tolerance.
+    """
+    params: dict = {"x": x, "y": y, "sample": sample, "tolerance": tolerance}
+    if in_:
+        params["source"] = in_
+    if match:
+        params["match"] = match
+    if grayscale:
+        params["grayscale"] = True
+    if output:
+        params["output"] = output
+    _cmd(ctx, "pixel_at", **params)
+
+
 @app.command()
 def cleanup(ctx: typer.Context) -> None:
     """Clean up old/oversized screenshots based on age and size limits."""

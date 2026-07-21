@@ -494,6 +494,70 @@ class TestFindImageCommand:
         assert params["tolerance"] == 8
 
 
+# ── pixel-at command (deterministic color read) ──────────────────────
+
+
+class TestPixelAtCommand:
+    @patch("agent_windows.cli.commands.observe._cmd")
+    def test_basic_forward(self, mock_cmd):
+        """--match + -t forwarded; sample=1 default is forwarded too."""
+        result = runner.invoke(app, ["pixel-at", "10", "20",
+                                     "--match", "#ff0000", "-t", "5"])
+        assert result.exit_code == 0
+        method, params = _cmd_calls(mock_cmd)[0]
+        assert method == "pixel_at"
+        assert params["x"] == 10
+        assert params["y"] == 20
+        assert params["match"] == "#ff0000"
+        assert params["tolerance"] == 5
+        assert params["sample"] == 1  # default forwarded
+
+    @patch("agent_windows.cli.commands.observe._cmd")
+    def test_all_options(self, mock_cmd):
+        """--in/--sample/--grayscale/-o forwarded; absent --match omitted."""
+        runner.invoke(app, ["pixel-at", "10", "20",
+                            "--in", "src.png", "--sample", "3",
+                            "--grayscale", "-o", "out.png"])
+        method, params = _cmd_calls(mock_cmd)[0]
+        assert method == "pixel_at"
+        assert params["source"] == "src.png"
+        assert params["sample"] == 3
+        assert params["grayscale"] is True
+        assert params["output"] == "out.png"
+        assert "match" not in params
+
+    def test_negative_coords_pass_through(self):
+        """pixel-at takes coordinate positionals that can be negative on a
+        multi-monitor desktop (e.g. x=-1920). _COORD_CMDS membership is what
+        makes main()'s argv preprocessor mark a leading -<digits> as a positional
+        instead of letting Click reject it as an unknown option. CliRunner
+        bypasses the preprocessor, so this must go through main() — same pattern
+        as test_highlight_negative_coords. If "pixel-at" is missing from
+        _COORD_CMDS, Click rejects "-1920" and exit code != 0.
+        """
+        calls: list = []
+
+        def capture(ctx, method, **params):
+            calls.append((method, params))
+            return ""
+
+        with patch("agent_windows.cli.commands.observe._cmd", side_effect=capture):
+            old = sys.argv
+            sys.argv = ["agent-windows-python", "pixel-at", "-1920", "0"]
+            code = 0
+            try:
+                main()
+            except SystemExit as e:
+                code = e.code if isinstance(e.code, int) else 1
+            finally:
+                sys.argv = old
+        assert code == 0, "negative pixel-at coord must not exit 2 (Click option-reject)"
+        method, params = calls[0]
+        assert method == "pixel_at"
+        assert params["x"] == -1920
+        assert params["y"] == 0
+
+
 # ── system commands (app/fs/clipboard/process) ───────────────────────
 
 
