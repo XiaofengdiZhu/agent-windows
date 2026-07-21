@@ -99,6 +99,29 @@ class TestReadColor:
         r = pixel_at(7, 7, source=src, sample=5)
         assert r["rgb"] == [255, 0, 0]
 
+    @pytest.mark.parametrize("n", [2, 4])
+    def test_even_sample_returns_valid_color(self, tmp_path, n):
+        # Even N is accepted: the (sample-1)//2 half formula biases one pixel
+        # toward +x/+y, but a 2x2 / 4x4 box still averages to a valid color
+        # and must not crash. Locks the formula against a regression to
+        # sample//2 (which would shift the box by a pixel and still work on a
+        # solid source — the assertion is "doesn't crash, sample echoed").
+        arr = _solid(20, 20, (10, 20, 30))
+        src = _save(arr, tmp_path / "src.png")
+        r = pixel_at(10, 10, source=src, sample=n)
+        assert r["rgb"] == [10, 20, 30]
+        assert r["sample"] == n
+
+    def test_sample_larger_than_image_clamps_to_whole_image(self, tmp_path):
+        # A sample larger than the source must clamp to the whole image and
+        # succeed rather than raise — covers the whole-image clamp path. The
+        # motivating case is a tiny source icon with a generous --sample.
+        arr = _solid(5, 5, (40, 50, 60))
+        src = _save(arr, tmp_path / "src.png")
+        r = pixel_at(2, 2, source=src, sample=101)
+        assert r["rgb"] == [40, 50, 60]
+        assert r["sample"] == 101
+
 
 # ── match ───────────────────────────────────────────────────────────
 
@@ -173,6 +196,16 @@ class TestParamValidation:
         with pytest.raises(ValueError):
             pixel_at(1, 1, source=src, sample=102)
 
+    def test_max_sample_side_accepted(self, tmp_path):
+        # MAX_SAMPLE_SIDE (101) is accepted on a source large enough to fit
+        # the 101x101 box. Symmetric to the 102-rejected test above — locks
+        # the inclusive upper bound.
+        arr = _solid(200, 200, (7, 8, 9))
+        src = _save(arr, tmp_path / "src.png")
+        r = pixel_at(100, 100, source=src, sample=MAX_SAMPLE_SIDE)
+        assert r["rgb"] == [7, 8, 9]
+        assert r["sample"] == MAX_SAMPLE_SIDE
+
     def test_invalid_tolerance(self, tmp_path):
         src = _save(_solid(5, 5, (0, 0, 0)), tmp_path / "src.png")
         with pytest.raises(ValueError):
@@ -212,6 +245,20 @@ class TestGrayscaleMatch:
         # Reported rgb is the luma replicated across all three channels.
         assert r["rgb"][0] == r["rgb"][1] == r["rgb"][2]
 
+    def test_grayscale_match_target_is_gray_equivalent(self, tmp_path):
+        # In grayscale mode the target must be reported as its luma-equivalent
+        # gray so target/rgb/is_match read consistently (otherwise a result
+        # like {target: #006400, rgb: [50,50,50], is_match: true} looks wrong).
+        # #006400 (0,100,0) has PIL Luma = 59 = 0x3b → #3b3b3b. Locks Fix 2.
+        src = _save(_solid(10, 10, (50, 50, 50)), tmp_path / "src.png")
+        r = pixel_at(
+            5, 5, source=src, match="#006400", grayscale=True, tolerance=20,
+        )
+        target = r["match"]["target"]
+        # All three octets equal — gray form, not the user's original color.
+        assert target[1:3] == target[3:5] == target[5:7]
+        assert target == "#3b3b3b"
+
 
 # ── output annotation ──────────────────────────────────────────────
 
@@ -223,6 +270,32 @@ class TestOutput:
         r = pixel_at(5, 5, source=src, output=str(out))
         assert r["screenshot_path"] == str(out)
         assert Path(r["screenshot_path"]).exists()
+
+    def test_output_context_window_is_at_least_annotate_context(self, tmp_path):
+        # Fix 1: with --output the annotation canvas is a context window of
+        # side >= ANNOTATE_CONTEXT (64), not the 1x1 sample box. On a source
+        # large enough to fit it, the saved image is exactly 64x64 for
+        # sample=1.
+        from agent_windows.core.pixel import ANNOTATE_CONTEXT
+
+        assert ANNOTATE_CONTEXT == 64
+        arr = _solid(200, 200, (220, 20, 20))
+        src = _save(arr, tmp_path / "src.png")
+        out = tmp_path / "out.png"
+        r = pixel_at(100, 100, source=src, sample=1, output=str(out))
+        assert r["screenshot_path"] == str(out)
+        with Image.open(out) as im:
+            assert im.size == (ANNOTATE_CONTEXT, ANNOTATE_CONTEXT)
+
+    def test_output_context_window_clamps_to_small_source(self, tmp_path):
+        # When the source is smaller than ANNOTATE_CONTEXT, the context window
+        # clamps to the whole source (no error, no padding).
+        src = _save(_solid(10, 10, (220, 20, 20)), tmp_path / "src.png")
+        out = tmp_path / "out.png"
+        r = pixel_at(5, 5, source=src, output=str(out))
+        assert r["screenshot_path"] == str(out)
+        with Image.open(out) as im:
+            assert im.size == (10, 10)
 
     def test_no_output_means_empty_screenshot_path(self, tmp_path):
         src = _save(_solid(10, 10, (220, 20, 20)), tmp_path / "src.png")

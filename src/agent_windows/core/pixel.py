@@ -9,9 +9,11 @@ per-channel max-diff tolerance.
 
 Coordinate-space parity with ``click``/``find-image``: live source = virtual
 screen pixels (via :func:`input_controller._get_virtual_screen`); file source =
-image-pixel coords. For a live source, only the clamped sample box is captured
-(``capture_screenshot(bbox=…)``), so a single-pixel query is cheap regardless
-of screen size.
+image-pixel coords. For a live source without ``output``, only the clamped
+sample box is captured (``capture_screenshot(bbox=…)``), so a single-pixel
+query is cheap regardless of screen size; with ``output`` a small context
+window (see :data:`ANNOTATE_CONTEXT`) is captured instead so the annotation
+has room to render.
 """
 
 import logging
@@ -28,6 +30,13 @@ logger = logging.getLogger(__name__)
 # backend; caps a runaway --sample value. A larger region would be a region
 # statistic (out of scope — that's ``diff``).
 MAX_SAMPLE_SIDE = 101
+
+# Minimum side of the annotation canvas when `output` is requested. The
+# captured sample box alone would be too small for `sample=1` (a 1x1 image
+# clips the crosshair/swatch/hex-label to nothing); this context window
+# gives the annotation room to render. Averaging still uses only the
+# sample-box sub-rectangle inside the canvas.
+ANNOTATE_CONTEXT = 64
 
 
 def _parse_color(s: str) -> tuple[int, int, int]:
@@ -157,15 +166,12 @@ def _save_pixel_screenshot(
 ) -> str:
     """Draw crosshair + sample-box outline + swatch/label, save, return path.
 
-    The caller chooses what to pass as ``image``:
-
-    - File source: a copy of the FULL source image, with ``cx_in_image`` and
-      ``box_in_image`` in source-pixel coords (so the annotation shows the
-      pixel in its surrounding context).
-    - Live source: the captured region (already just the clamped sample box),
-      with ``cx``/``box`` translated to region-local coords — there is no
-      surrounding context to show because we deliberately captured only the
-      box.
+    The caller passes the ANNOTATION CANVAS (a context window around the
+    queried pixel, ``>= ANNOTATE_CONTEXT`` on a side, clamped to source
+    bounds). ``cx_in_image`` / ``cy_in_image`` are the queried center in
+    canvas coords; ``box_in_image`` is the sample-box rectangle in canvas
+    coords (already translated by the caller via ``sample_offset``) — so even
+    a ``sample=1`` outline lands on a legible canvas rather than a 1x1 image.
     """
     from PIL import ImageDraw, ImageFont
 
@@ -222,10 +228,15 @@ def pixel_at(
             Non-integral floats are rejected (no silent floor — find-image
             M-1 lesson).
         source: Path to a source image file. None = live screen capture.
+            For a live source with a very small sample box, the dxcam fast
+            path may fall back to mss/pillow for tiny regions (harmless; the
+            captured pixels are still correct).
         sample: Sample an N×N box centered on (x, y) and average. Default 1.
             Capped at :data:`MAX_SAMPLE_SIDE`. The box is clamped to source
             bounds at edges (no error); the average divides by the surviving
-            pixel count.
+            pixel count. For even ``N`` the box is biased one pixel toward
+            +x/+y because the half-extension is ``(sample-1)//2`` — true
+            centering only holds for odd ``N``.
         match: Optional target color string (see :func:`_parse_color`). When
             given, the result includes a ``match`` block.
         tolerance: Per-channel max abs diff 0-255 (0 = exact). Default 0.
@@ -307,15 +318,43 @@ def pixel_at(
 
     box_l, box_t, box_r, box_b = _sample_box(x, y, sample, bounds)
 
-    # --- obtain ONLY the clamped sample box (efficient: one-pixel queries
-    # must not capture the full screen). For a file source we also keep the
-    # full image for annotation context. ---
-    if src_pil is not None:
-        region = src_pil.crop((box_l, box_t, box_r, box_b))
-        full_for_annotate: Image.Image | None = src_pil
+    # --- Capture/crop policy: average-pixels vs annotation-canvas.
+    #
+    # Without `output`: capture/crop ONLY the clamped sample box — efficient
+    # (a one-pixel live query must not pull the whole screen). One capture,
+    # no annotation, nothing else allocated.
+    #
+    # With `output`: capture/crop a CONTEXT window of side
+    # `max(sample, ANNOTATE_CONTEXT)` centered on (x, y), clamped to source
+    # bounds, and treat the sample box as a sub-rectangle inside it. The
+    # average is still computed over the sample-box pixels only — the extra
+    # context exists purely so the crosshair/swatch/hex-label have room to
+    # render (a 1x1 canvas would clip them to nothing). For a file source we
+    # crop the context window from the full image (a 64x64 crop keeps the
+    # swatch/label legible at a reasonable size, vs. annotating the whole
+    # image); for live, `capture_screenshot(bbox=context_box)`.
+    canvas: Image.Image | None = None
+    ctx_origin = (0, 0)  # (ctx_l, ctx_t) — canvas top-left in source coords
+    sample_offset = (0, 0)  # sample-box top-left within the canvas
+    if output is None:
+        if src_pil is not None:
+            region = src_pil.crop((box_l, box_t, box_r, box_b))
+        else:
+            region = capture_screenshot(bbox=(box_l, box_t, box_r, box_b))
     else:
-        region = capture_screenshot(bbox=(box_l, box_t, box_r, box_b))
-        full_for_annotate = None
+        ctx_side = max(sample, ANNOTATE_CONTEXT)
+        ctx_l, ctx_t, ctx_r, ctx_b = _sample_box(x, y, ctx_side, bounds)
+        ctx_origin = (ctx_l, ctx_t)
+        sample_offset = (box_l - ctx_l, box_t - ctx_t)
+        if src_pil is not None:
+            canvas = src_pil.crop((ctx_l, ctx_t, ctx_r, ctx_b))
+        else:
+            canvas = capture_screenshot(bbox=(ctx_l, ctx_t, ctx_r, ctx_b))
+        sw_box, sh_box = box_r - box_l, box_b - box_t
+        region = canvas.crop((
+            sample_offset[0], sample_offset[1],
+            sample_offset[0] + sw_box, sample_offset[1] + sh_box,
+        ))
 
     # --- reduce the region to a single averaged color. ---
     if grayscale:
@@ -354,44 +393,40 @@ def pixel_at(
         if grayscale:
             tgt_val = _luminance(target)
             effective_target = (tgt_val, tgt_val, tgt_val)
+            # In grayscale mode the comparison is against the luma-equivalent
+            # gray, so reporting the user's original color as `target` reads
+            # as wrong (e.g. {target: #006400, rgb: [50,50,50], is_match:
+            # true}). Report the gray too — same value already computed.
+            reported_target = (tgt_val, tgt_val, tgt_val)
         else:
             effective_target = target
+            reported_target = target
         diffs = [abs(rgb[i] - effective_target[i]) for i in range(3)]
         max_diff = max(diffs)
         result["match"] = {
-            "target": "#%02x%02x%02x" % tuple(target),
+            "target": "#%02x%02x%02x" % reported_target,
             "tolerance": tolerance,
             "is_match": bool(max_diff <= tolerance),
             "max_diff": int(max_diff),
             "score": round(1.0 - max_diff / 255.0, 4),
         }
 
-    # --- optional annotation. ---
+    # --- optional annotation. The canvas was captured above (context window
+    # around the queried pixel); translate the queried center and the sample
+    # box into canvas coords. `canvas` is non-None whenever `output` is. ---
     if output is not None:
         op = validate_write_path(output)
-        if full_for_annotate is not None:
-            # File: annotate a copy of the full source image. The center and
-            # sample box are already in source-pixel coords.
-            saved = _save_pixel_screenshot(
-                full_for_annotate,
-                cx_in_image=x,
-                cy_in_image=y,
-                box_in_image=(box_l, box_t, box_r, box_b),
-                hex_label=hex_str,
-                output=str(op),
-            )
-        else:
-            # Live: the captured region IS the box. Translate the center and
-            # sample box into region-local coords so the crosshair lands on
-            # the queried pixel and the outline traces the box edges.
-            saved = _save_pixel_screenshot(
-                region,
-                cx_in_image=x - box_l,
-                cy_in_image=y - box_t,
-                box_in_image=(0, 0, box_r - box_l, box_b - box_t),
-                hex_label=hex_str,
-                output=str(op),
-            )
+        assert canvas is not None  # set in the `output` branch above
+        so_x, so_y = sample_offset
+        sw_box, sh_box = box_r - box_l, box_b - box_t
+        saved = _save_pixel_screenshot(
+            canvas,
+            cx_in_image=x - ctx_origin[0],
+            cy_in_image=y - ctx_origin[1],
+            box_in_image=(so_x, so_y, so_x + sw_box, so_y + sh_box),
+            hex_label=hex_str,
+            output=str(op),
+        )
         result["screenshot_path"] = saved
 
     return result
