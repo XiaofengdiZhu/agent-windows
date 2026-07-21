@@ -1,4 +1,5 @@
-"""Observe commands: observe, snapshot, screenshot, ground."""
+"""Observe commands: observe, snapshot, screenshot, ground, ask-vision,
+detect, find-image, highlight, diff, get-text, is, cleanup."""
 
 import typer
 

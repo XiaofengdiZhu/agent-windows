@@ -115,7 +115,7 @@ Python daemon (持久化, COM STA worker)
 | `screenshot [-o PATH] [--monitor N] [-s @eN] [--bbox X1,Y1,X2,Y2] [--annotate] [--grid-w N] [--grid-h N]` | 屏幕抓取；`--monitor -1`=全部；`--annotate` 叠加带编号的 `@eN` 框（全屏）+ 可选 `%` 参考网格 |
 | `ground DESCRIPTION [--single-pass]` | 视觉坐标定位（`--single-pass`：1 次 API 调用，约 2 倍速，精度较低） |
 | `detect DESCRIPTION [-i IMAGE] [--max-targets N]` | 多目标边界框检测 |
-| `find-image` | 在屏幕上定位已保存的模板图；确定性、不调用视觉模型。有目标截图（图标/字形）时使用。 |
+| `find-image TEMPLATE [--in SOURCE] [--bbox X1,Y1,X2,Y2] [-t N] [--grayscale] [--all]` | 在屏幕上定位已保存的模板图；确定性、不调用视觉模型。有目标截图（图标/字形）时使用。 |
 | `ask-vision PROMPT [-i IMAGE] [-m MODEL]` | 自由形式视觉问答 |
 | `highlight X1 Y1 X2 Y2 [-l LABEL] [-c COLOR]` | 在截图上高亮区域 |
 | `diff BASELINE [-c COMPARE] [-t THRESHOLD]` | 像素级截图差异 |

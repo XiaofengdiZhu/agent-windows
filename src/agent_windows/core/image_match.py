@@ -5,8 +5,11 @@ click-ready coordinates — no vision-model call, no network, fully deterministi
 Sliding-window pixel match with a strict per-pixel tolerance criterion, optional
 grayscale fast-path, and greedy non-max suppression for multi-match.
 
-Result vocabulary mirrors ``ground``/``detect`` so callers can swap it in when a
-template image is available instead of a natural-language description.
+In single-match mode the best match's center is flattened to top-level
+``x, y`` to match ``ground``'s click-target shape, so callers can swap it in
+for ``ground`` when a template image is available instead of a natural-language
+description. (``detect`` returns a different per-target shape, so it is not a
+drop-in swap.)
 """
 
 import logging
