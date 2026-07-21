@@ -13,6 +13,7 @@ source = { editable = "." }
 dependencies = [
     { name = "comtypes" },
     { name = "mss" },
+    { name = "numpy" },
     { name = "openai" },
     { name = "pillow" },
     { name = "pywin32" },
@@ -26,9 +27,6 @@ anthropic = [
 ]
 dev = [
     { name = "pytest" },
-]
-diff = [
-    { name = "numpy" },
 ]
 dxcam = [
     { name = "dxcam" },
@@ -53,7 +51,7 @@ requires-dist = [
     { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=3.0" },
     { name = "google-genai", marker = "extra == 'gemini'", specifier = ">=1.0" },
     { name = "mss", specifier = ">=10.0" },
-    { name = "numpy", marker = "extra == 'diff'", specifier = ">=1.26" },
+    { name = "numpy", specifier = ">=1.26" },
     { name = "openai", specifier = ">=1.0" },
     { name = "pillow", specifier = ">=10.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.3" },
@@ -61,7 +59,7 @@ requires-dist = [
     { name = "toml", specifier = ">=0.10" },
     { name = "typer", specifier = ">=0.12" },
 ]
-provides-extras = ["dxcam", "anthropic", "gemini", "diff", "mcp", "dev"]
+provides-extras = ["dxcam", "anthropic", "gemini", "mcp", "dev"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=9.0.3" }]
