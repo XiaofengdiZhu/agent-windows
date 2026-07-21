@@ -472,6 +472,32 @@ class TestFindImageHandler:
             HANDLERS["find_image"]({"image": str(tpl), "bbox": [1, 2, 3, 4]})
         assert mock_fi.call_args.kwargs["region"] == (1, 2, 3, 4)
 
+    def test_bbox_beyond_virtual_screen_still_forwarded(self, tmp_path):
+        """Regression (review I-1): bbox is in SOURCE coordinates, which may be
+        a file larger than the live display. A 4k screenshot's ROI must NOT be
+        rejected against a 1080p virtual screen — the core bounds-checks against
+        the actual source dims. Patches core so this asserts the handler
+        forwards the region instead of short-circuiting with the wrong error."""
+        from agent_windows.daemon.router import HANDLERS
+
+        tpl = _tmp_image(tmp_path)
+        big = [2500, 2500, 2600, 2600]   # far past a 1080p virtual screen
+        with patch("agent_windows.core.image_match.find_image",
+                   return_value={"count": 0, "matches": [], "method": "template",
+                                 "truncated": False, "screenshot_path": ""}) as mock_fi:
+            HANDLERS["find_image"]({"image": str(tpl), "bbox": big})
+        assert mock_fi.call_args.kwargs["region"] == (2500, 2500, 2600, 2600)
+
+    def test_bbox_nonintegral_float_rejected(self, tmp_path):
+        """A non-integral float bbox element is rejected, not silently floored
+        to int(1.5)==1. Only reachable via raw JSON-RPC (launcher parses i64,
+        MCP schema is list[int]), so this guards the handler boundary."""
+        from agent_windows.daemon.router import HANDLERS
+
+        tpl = _tmp_image(tmp_path)
+        with pytest.raises(ValueError, match="integers"):
+            HANDLERS["find_image"]({"image": str(tpl), "bbox": [1.5, 2, 3, 4]})
+
     def test_missing_image_rejected(self):
         from agent_windows.daemon.router import HANDLERS
         with pytest.raises(ValueError, match="image"):

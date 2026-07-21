@@ -376,15 +376,27 @@ def _find_image(params: dict) -> dict[str, Any]:
     region: tuple[int, int, int, int] | None = None
     bbox = params.get("bbox")
     if bbox:
-        from agent_windows.core.input_controller import validate_coordinates
+        # bbox is a search ROI in SOURCE coordinates. The source may be a file
+        # far larger than the live display, so do NOT bounds-check it against
+        # the virtual screen: validate_coordinates would reject a valid ROI on
+        # a 4k screenshot when the live display is 1080p, and would raise the
+        # wrong code (COORDINATE_OUT_OF_RANGE -1002 instead of INVALID_PARAMS
+        # -32602). The core bounds-checks region against the actual source
+        # dimensions and raises a plain ValueError -> INVALID_PARAMS, which is
+        # the authoritative, correctly-framed check.
         if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
             raise ValueError("bbox must be a list of 4 ints [x1,y1,x2,y2]")
-        try:
-            x1, y1, x2, y2 = (int(v) for v in bbox)
-        except (ValueError, TypeError):
-            raise ValueError("bbox values must be integers")
-        validate_coordinates(x1, y1)
-        validate_coordinates(x2, y2)
+        ints: list[int] = []
+        for v in bbox:
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                raise ValueError("bbox values must be integers")
+            # Reject non-integral floats (e.g. 1.5) instead of silently flooring
+            # them (int(1.5) == 1). Only reachable via raw JSON-RPC: the
+            # launcher parses i64 and the MCP schema is list[int].
+            if isinstance(v, float) and not v.is_integer():
+                raise ValueError("bbox values must be integers")
+            ints.append(int(v))
+        x1, y1, x2, y2 = ints
         if x2 <= x1 or y2 <= y1:
             raise ValueError("bbox must have x2 > x1 and y2 > y1")
         region = (x1, y1, x2, y2)
