@@ -1,7 +1,6 @@
 """Multi-display filtering for snapshot/observe (TODO #9-B).
 
-Pure functions — no COM calls except ``GetMonitorsRect`` (lazily imported inside
-:func:`get_display_union_bbox`), no daemon, no I/O. The snapshot handler calls
+Pure functions — no COM calls except ``GetMonitorsRect`` (lazily imported inside :func:`get_display_union_bbox`) and the ``EnumDisplayMonitors`` + ``GetMonitorInfoW`` calls inside :func:`enumerate_displays` (both lazy ctypes inside that function). The snapshot handler calls
 :func:`filter_snapshot_to_displays` with the dict from :func:`traverse_tree`;
 everything here is unit-testable with a hand-built snapshot dict and a patched
 ``GetMonitorsRect``.
@@ -197,3 +196,117 @@ def filter_snapshot_to_displays(
         "cursor": filtered_cursor,
         "display_filter": indices,
     }
+
+
+# ── Display enumeration (list-displays) ─────────────────────────────
+
+
+@dataclasses.dataclass
+class DisplayInfo:
+    """One physical display, indexed in EnumDisplayMonitors order.
+
+    ``index`` matches the ``-d N`` / ``--display N`` filter (same Win32
+    enumeration order), so the N shown by ``list-displays`` is the N you pass
+    to ``-d``. ``width``/``height`` are derived (not stored).
+    """
+
+    index: int
+    is_primary: bool
+    left: int
+    top: int
+    right: int
+    bottom: int
+    work_left: int
+    work_top: int
+    work_right: int
+    work_bottom: int
+    device_name: str
+
+    @property
+    def width(self) -> int:
+        return self.right - self.left
+
+    @property
+    def height(self) -> int:
+        return self.bottom - self.top
+
+
+def _enum_monitor_infoex() -> list[dict]:
+    """Return raw per-monitor MONITORINFOEXW data in EnumDisplayMonitors order.
+
+    Each dict carries the full rect (``left/top/right/bottom``), the work-area
+    rect (``work_*`` — desktop minus taskbar), the primary flag
+    (``is_primary``), and ``device_name`` (the raw ``\\\\.\\DISPLAYN`` string).
+
+    Factored out of :func:`enumerate_displays` so the index/field-mapping
+    logic is unit-testable with a patched return value (the ctypes call itself
+    needs a real desktop). Mirrors the EnumDisplayMonitors callback shape used
+    by :func:`agent_windows.uia.core.GetMonitorsRect`.
+    """
+    import ctypes
+    import ctypes.wintypes
+
+    MONITORINFOF_PRIMARY = 1
+
+    class MONITORINFOEXW(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", ctypes.wintypes.DWORD),
+            ("rcMonitor", ctypes.wintypes.RECT),
+            ("rcWork", ctypes.wintypes.RECT),
+            ("dwFlags", ctypes.wintypes.DWORD),
+            ("szDevice", ctypes.wintypes.WCHAR * 32),
+        ]
+
+    raw: list[dict] = []
+
+    def _cb(hmonitor, _hdc, _lprc_monitor, _lparam):
+        mi = MONITORINFOEXW()
+        mi.cbSize = ctypes.sizeof(MONITORINFOEXW)
+        # GetMonitorInfoW returning 0 means it failed for this handle — skip
+        # it but keep enumerating (return 1) so one bad monitor doesn't blank
+        # the list.
+        if ctypes.windll.user32.GetMonitorInfoW(hmonitor, ctypes.byref(mi)):
+            rm, rw = mi.rcMonitor, mi.rcWork
+            raw.append({
+                "left": rm.left, "top": rm.top, "right": rm.right, "bottom": rm.bottom,
+                "work_left": rw.left, "work_top": rw.top,
+                "work_right": rw.right, "work_bottom": rw.bottom,
+                "is_primary": bool(mi.dwFlags & MONITORINFOF_PRIMARY),
+                "device_name": mi.szDevice or "",
+            })
+        return 1
+
+    MONITORENUMPROC = ctypes.WINFUNCTYPE(
+        ctypes.c_int, ctypes.wintypes.HMONITOR, ctypes.wintypes.HDC,
+        ctypes.POINTER(ctypes.wintypes.RECT), ctypes.wintypes.LPARAM,
+    )
+    ctypes.windll.user32.EnumDisplayMonitors(
+        ctypes.c_void_p(0), ctypes.c_void_p(0),
+        MONITORENUMPROC(_cb), 0,
+    )
+    return raw
+
+
+def enumerate_displays() -> list[DisplayInfo]:
+    """Enumerate all displays as :class:`DisplayInfo`, 0-based, in
+    EnumDisplayMonitors order.
+
+    Index order is identical to :func:`agent_windows.uia.core.GetMonitorsRect`
+    and to the ``-d N`` / ``--display N`` filter — the same Win32 enumeration.
+    This is load-bearing: ``list-displays`` exists to show which N to pass to
+    ``-d``, so the indices must line up exactly.
+
+    Returns an empty list on a headless/no-monitor box (not an error — listing
+    displays is legitimate even when there are none).
+    """
+    return [
+        DisplayInfo(
+            index=i,
+            is_primary=m["is_primary"],
+            left=m["left"], top=m["top"], right=m["right"], bottom=m["bottom"],
+            work_left=m["work_left"], work_top=m["work_top"],
+            work_right=m["work_right"], work_bottom=m["work_bottom"],
+            device_name=m["device_name"],
+        )
+        for i, m in enumerate(_enum_monitor_infoex())
+    ]

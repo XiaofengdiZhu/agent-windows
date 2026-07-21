@@ -15,6 +15,8 @@ from agent_windows.core.display import (
     clip_bbox_to_region,
     point_in_region,
     filter_snapshot_to_displays,
+    enumerate_displays,
+    DisplayInfo,
 )
 from agent_windows.core.tree import BoundingBox, ElementInfo, WindowInfo
 from agent_windows.uia.core import Rect
@@ -360,3 +362,72 @@ class TestRenderDisplayFilter:
             "interactive_elements": [],
         })
         assert "Accessibility Tree not filtered" not in rendered
+
+
+# ── enumerate_displays / DisplayInfo ────────────────────────────────
+
+
+def _raw(left, top, right, bottom, *, primary=False, device=r"\\.\DISPLAY1",
+         work=None):
+    """One raw MONITORINFOEX-shaped dict as _enum_monitor_infoex returns."""
+    wl, wt, wr, wb = work if work else (left, top, right, bottom)
+    return {
+        "left": left, "top": top, "right": right, "bottom": bottom,
+        "work_left": wl, "work_top": wt, "work_right": wr, "work_bottom": wb,
+        "is_primary": primary, "device_name": device,
+    }
+
+
+class TestDisplayInfo:
+    def test_width_height_derived(self):
+        d = DisplayInfo(index=0, is_primary=True, left=0, top=0, right=1920,
+                        bottom=1080, work_left=0, work_top=0, work_right=1920,
+                        work_bottom=1040, device_name=r"\\.\DISPLAY1")
+        assert d.width == 1920 and d.height == 1080
+
+    def test_negative_origin_supported(self):
+        d = DisplayInfo(index=1, is_primary=False, left=-1920, top=0,
+                        right=0, bottom=1080, work_left=-1920, work_top=0,
+                        work_right=0, work_bottom=1040, device_name=r"\\.\DISPLAY2")
+        assert d.width == 1920 and d.height == 1080
+
+
+class TestEnumerateDisplays:
+    def _patch(self, raws):
+        return patch("agent_windows.core.display._enum_monitor_infoex",
+                     return_value=raws)
+
+    def test_single_primary_monitor(self):
+        with self._patch([_raw(0, 0, 1920, 1080, primary=True,
+                               device=r"\\.\DISPLAY1",
+                               work=(0, 0, 1920, 1040))]):
+            out = enumerate_displays()
+        assert len(out) == 1
+        d = out[0]
+        assert d.index == 0
+        assert d.is_primary is True
+        assert (d.left, d.top, d.right, d.bottom) == (0, 0, 1920, 1080)
+        assert (d.work_left, d.work_top, d.work_right, d.work_bottom) == (0, 0, 1920, 1040)
+        assert d.device_name == r"\\.\DISPLAY1"
+        assert d.width == 1920 and d.height == 1080
+
+    def test_two_monitors_index_order_and_primary_flag(self):
+        raws = [
+            _raw(0, 0, 1920, 1080, primary=True, device=r"\\.\DISPLAY1"),
+            _raw(1920, 0, 4480, 1440, primary=False, device=r"\\.\DISPLAY2"),
+        ]
+        with self._patch(raws):
+            out = enumerate_displays()
+        assert [d.index for d in out] == [0, 1]
+        assert out[0].is_primary and not out[1].is_primary
+        assert out[1].left == 1920 and out[1].width == 2560 and out[1].height == 1440
+
+    def test_negative_origin_monitor(self):
+        with self._patch([_raw(-1920, 0, 0, 1080, primary=False,
+                               device=r"\\.\DISPLAY2")]):
+            out = enumerate_displays()
+        assert out[0].left == -1920 and out[0].width == 1920
+
+    def test_empty_when_no_monitors(self):
+        with self._patch([]):
+            assert enumerate_displays() == []
