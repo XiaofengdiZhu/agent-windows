@@ -14,12 +14,34 @@ MAX_WAIT_SECONDS = 300
 
 @handler("snapshot")
 def _snapshot(params: dict) -> dict[str, Any]:
-    """UIA tree traversal and semantic snapshot."""
-    from agent_windows.core.tree import traverse_tree, render_snapshot
+    """UIA tree traversal and semantic snapshot.
+
+    Optional ``window`` / ``active`` scope the traversal to a single top-level
+    window (see :func:`agent_windows.core.tree.resolve_window`). Without them,
+    the full screen tree is returned (backward compatible).
+    """
+    from agent_windows.core.tree import (
+        traverse_tree, render_snapshot, resolve_window,
+    )
     from agent_windows.core.display import (
         parse_display_selection, filter_snapshot_to_displays,
     )
     from agent_windows.utils.config import load_config
+
+    window = params.get("window")
+    active = bool(params.get("active"))
+    if window and active:
+        raise ValueError("snapshot: --window and --active are mutually exclusive")
+
+    only_window = None
+    header = None
+    warning = None
+    if active or window:
+        only_window, warning = resolve_window(value=window, active=active)
+        header = (
+            f'## Window: "{only_window.title}" '
+            f'({only_window.process_name}, HWND {hex(only_window.handle)})'
+        )
 
     cfg = load_config().get("tree", {})
     data = traverse_tree(
@@ -28,6 +50,7 @@ def _snapshot(params: dict) -> dict[str, Any]:
         include_offscreen=cfg.get("include_offscreen", False),
         max_elements=cfg.get("max_elements", 200),
         timeout=cfg.get("timeout", 10),
+        only_window=only_window,
     )
 
     # Optional multi-display filter (TODO #9-B): clip windows/elements/cursor
@@ -39,6 +62,9 @@ def _snapshot(params: dict) -> dict[str, Any]:
         data = filter_snapshot_to_displays(data, display)
 
     output = render_snapshot(data)
+    if header:
+        prefix = header + (f"\n{warning}" if warning else "")
+        output = prefix + "\n\n" + output
     return {"output": output}
 
 
