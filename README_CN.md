@@ -116,6 +116,7 @@ Python daemon (持久化, COM STA worker)
 | `ground DESCRIPTION [--single-pass]` | 视觉坐标定位（`--single-pass`：1 次 API 调用，约 2 倍速，精度较低） |
 | `detect DESCRIPTION [-i IMAGE] [--max-targets N]` | 多目标边界框检测 |
 | `find-image TEMPLATE [--in SOURCE] [--bbox X1,Y1,X2,Y2] [-t N] [--grayscale] [--all]` | 在屏幕上定位已保存的模板图；确定性、不调用视觉模型。有目标截图（图标/字形）时使用。 |
+| `pixel-at X Y [--in SOURCE] [--sample N] [--match COLOR] [-t N] [--grayscale]` | 读取屏幕某点的颜色；`--match` 按颜色判断状态（LED 亮灭、进度条填色）。确定性、不调用视觉模型。 |
 | `ask-vision PROMPT [-i IMAGE] [-m MODEL]` | 自由形式视觉问答 |
 | `highlight X1 Y1 X2 Y2 [-l LABEL] [-c COLOR]` | 在截图上高亮区域 |
 | `diff BASELINE [-c COMPARE] [-t THRESHOLD]` | 像素级截图差异 |

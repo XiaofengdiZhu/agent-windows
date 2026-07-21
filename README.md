@@ -116,6 +116,7 @@ Most commands have more flags than shown — run `agent-windows --help` or see t
 | `ground DESCRIPTION [--single-pass]` | Visual coordinate grounding (`--single-pass`: 1 API call, ~2x faster, lower precision) |
 | `detect DESCRIPTION [-i IMAGE] [--max-targets N]` | Multi-target bounding box detection |
 | `find-image TEMPLATE [--in SOURCE] [--bbox X1,Y1,X2,Y2] [-t N] [--grayscale] [--all]` | Locate a saved template image on screen; deterministic, no vision-model call. Use when you have a screenshot of the target (icon, glyph). |
+| `pixel-at X Y [--in SOURCE] [--sample N] [--match COLOR] [-t N] [--grayscale]` | Read the color at a screen point; `--match` judges state by color (LED on/off, progress-bar fill). Deterministic, no vision-model call. |
 | `ask-vision PROMPT [-i IMAGE] [-m MODEL]` | Free-form visual Q&A |
 | `highlight X1 Y1 X2 Y2 [-l LABEL] [-c COLOR]` | Highlight region on screenshot |
 | `diff BASELINE [-c COMPARE] [-t THRESHOLD]` | Pixel-level screenshot diff |

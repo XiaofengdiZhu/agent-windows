@@ -133,6 +133,26 @@ agent-windows find-image btn.png --bbox 100,100,800,600
 
 Capture a template once with `agent-windows screenshot --bbox x1,y1,x2,y2 -o icon.png` (crop tight to the target, at native DPI). Templates are capped at 128×128; for larger targets, crop with `--bbox` first.
 
+### Color sampling (`pixel-at`) — judge state by color
+
+When state shows as color — an LED flipping green/red, a progress bar's fill, a selected swatch — `pixel-at` reads the color at a point and can compare it to a target. Deterministic, no vision-model call. Prefer it over `diff` (whole-image) or `ground`/`detect` (vision) when one pixel's color is the signal.
+
+```bash
+# Is the status LED green? → is_match boolean (exact)
+agent-windows pixel-at 100 200 --match "#00cc00"
+
+# Tolerate anti-aliasing + judge by hue only
+agent-windows pixel-at 100 200 --match "#00cc00" -t 10 --grayscale
+
+# Just read the color (no match): returns hex + rgb
+agent-windows pixel-at 100 200
+
+# Average a 5x5 box — robust on anti-aliased / high-DPI edges
+agent-windows pixel-at 100 200 --sample 5
+```
+
+`--match COLOR` accepts `#RRGGBB` / `#RGB` / `rgb(r,g,b)` / bare hex; `is_match = (max per-channel diff <= -t tolerance)`. Find the point's coords first with `snapshot`/`screenshot --annotate`, or reuse a `find-image`/`ground` result's `x, y`. For a live capture the point is in virtual-screen coords (same space as `click`); pass `--in FILE` to sample a saved screenshot instead.
+
 ## Vision Model Setup
 
 `ground`, `detect`, and `ask-vision` need a configured multimodal model to read the screen. Check if one is ready:

@@ -155,6 +155,44 @@ Deterministic, zero-API-cost alternative to `ground`/`detect`.
 
 Returns `{count, matches:[{x,y,w,h,center_x,center_y,score}], method:"template", screenshot_path}`. Single-match mode also flattens the best match's center to top-level `x, y`. `method` is always `"template"` (vs `ground`'s `"visual-*"`). Templates are capped at 128×128; for larger, crop with `--bbox` first.
 
+### pixel-at
+
+Read the color at a screen point; optionally compare it to a target color.
+Deterministic, zero-API-cost — use to judge state by color (an LED that flips
+green/red, a progress bar's fill, a selected swatch) without a vision-model call.
+
+**Usage:** `pixel-at X Y [--in SOURCE] [--sample N] [--match COLOR] [-t N] [--grayscale]`
+
+- `X Y` (required): the point. Virtual-screen px for a live capture (same space
+  as `click`); image px with `--in`. Integers (negative ok on multi-monitor).
+- `--in SOURCE`: read from a saved screenshot instead of a fresh capture.
+- `--sample N`: average an N×N box centered on (X,Y) (default 1). Robust against
+  anti-aliasing / high-DPI jitter; clamps at screen edges.
+- `--match COLOR`: target color to compare — `#RRGGBB` / `#RGB` / `rgb(r,g,b)` /
+  bare hex. When given, the result includes an `is_match` boolean.
+- `--tolerance N` / `-t N`: per-channel max abs diff for the match, 0-255 (0 = exact).
+- `--grayscale`: compare luminance instead of RGB (both sides converted).
+
+Returns `{x, y, rgb:[r,g,b], hex:"#rrggbb", sample, method:"pixel", screenshot_path}`.
+With `--match`, also `match:{target, tolerance, is_match, max_diff, score}` where
+`is_match = (max per-channel diff <= tolerance)` and `score = 1 - max_diff/255`.
+`screenshot_path` is empty unless `--output` is given (no auto-save — pixel-at is
+a lightweight, frequently-polled sensor).
+
+```bash
+# Is the status LED green? (exact match)
+agent-windows pixel-at 100 200 --match "#00cc00"
+
+# Same, tolerating anti-aliasing + judge by hue only
+agent-windows pixel-at 100 200 --match "#00cc00" -t 10 --grayscale
+
+# Just read the pixel color (no match)
+agent-windows pixel-at 100 200
+
+# Robust sample over a 5x5 box (averages anti-aliased edges)
+agent-windows pixel-at 100 200 --sample 5
+```
+
 ### get-text
 
 Get text content of a UIA element by selector.
@@ -872,7 +910,7 @@ agent-windows mcp uninstall        # stop + remove the login auto-start task
 
 `--tools`/`--exclude-tools` are enforced: removed tools cannot be invoked, including via `batch`. Each flag also has an `AGENT_WINDOWS_*` env-var equivalent (see the Global Options table below).
 
-The server exposes ~51 tools mapping 1:1 to the daemon methods (screenshot, snapshot, observe, ground, detect, ask_vision, highlight, diff, find_image, get_text, element_state, cleanup_screenshots, click, dblclick, hover, move, mouse_down, mouse_up, drag, scroll, type, shortcut, key_down, key_up, expand, collapse, app_launch/switch/resize/list, shell, fs_read/write/list/copy/move/delete/search/info, clipboard_get/set, process_list/kill, notify, registry, batch, multi_select, multi_edit, ping, wait, wait_for). Same usage tips apply: call `snapshot` first for pixel-exact coordinates, prefer it over `ground`/`detect` for named controls, and always `app switch` before input.
+The server exposes ~52 tools mapping 1:1 to the daemon methods (screenshot, snapshot, observe, ground, detect, ask_vision, highlight, diff, find_image, pixel_at, get_text, element_state, cleanup_screenshots, click, dblclick, hover, move, mouse_down, mouse_up, drag, scroll, type, shortcut, key_down, key_up, expand, collapse, app_launch/switch/resize/list, shell, fs_read/write/list/copy/move/delete/search/info, clipboard_get/set, process_list/kill, notify, registry, batch, multi_select, multi_edit, ping, wait, wait_for). Same usage tips apply: call `snapshot` first for pixel-exact coordinates, prefer it over `ground`/`detect` for named controls, and always `app switch` before input.
 
 ---
 
