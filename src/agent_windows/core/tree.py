@@ -1625,19 +1625,22 @@ _SNAPSHOT_DIFF_MATCH_RADIUS = 60.0
 _SNAPSHOT_DIFF_MOVE_THRESHOLD = 10.0
 
 
-def _element_identity(el: "ElementInfo") -> tuple[str]:
-    """Pairing key: control_type only.
+def _element_identity(el: "ElementInfo") -> tuple[str, int]:
+    """Pairing key: (control_type, window_handle).
 
-    Both ``name`` and ``window_name`` are intentionally excluded. ``name``: a
-    label/text change should surface as ``changed``, not add+remove. ``window_name``:
-    it mirrors the owning window's *title*, which shifts on common events (page
-    load done, tab switch, status change) — including it would shift every
-    element's key at once and flood Added/Removed. Same-type elements (same or
-    different windows) disambiguate by bbox within MATCH_RADIUS; ``window_name``
-    is still shown in render, and a title change surfaces as ``changed:window``
-    (see _diff_element).
+    ``name`` is excluded: a label/text change surfaces as ``changed``, not
+    add+remove. ``window_name`` is excluded: it mirrors the owning window's
+    title, which shifts on load/tab/state and would flood Added/Removed. Instead
+    the STABLE ``window_handle`` (HWND, lifetime-stable) scopes each bucket to
+    one window, so same-type elements in DIFFERENT windows no longer share a
+    bucket and cannot mis-pair by bbox proximity — a precision win over
+    control_type-only when diffing the full desktop. ``window_name`` is still
+    shown in render; a title change is reported once at window level as
+    ``windows_changed``. A ``window_handle`` of 0 (unset/legacy) degrades to a
+    shared bucket across all 0-handle elements; rare, since traversal always
+    fills the owning handle.
     """
-    return (el.control_type,)
+    return (el.control_type, el.window_handle)
 
 
 def _element_center(el: "ElementInfo") -> tuple[float, float] | None:

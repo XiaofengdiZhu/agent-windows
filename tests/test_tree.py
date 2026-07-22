@@ -1934,6 +1934,25 @@ def test_diff_same_bucket_bbox_pairing():
     assert d["added"] == [] and d["removed"] == [] and d["changed"] == []
 
 
+def test_diff_cross_window_same_type_different_handle_no_mispair():
+    # Two windows, each a Button at the SAME bbox, different handles. They must
+    # NOT pair (different identity buckets). control_type-only identity would
+    # put them in one bucket and pair them by the coincident bbox — masking a
+    # real add/remove. window_handle is the precision anchor that prevents this.
+    from agent_windows.core.tree import diff_snapshots
+    base = {"interactive_elements": [
+        _el("OK", ctype="ButtonControl", window="App A", window_handle=1,
+            bbox=(0, 0, 10, 10)),
+    ], "windows": []}
+    cur = {"interactive_elements": [
+        _el("OK", ctype="ButtonControl", window="App B", window_handle=2,
+            bbox=(0, 0, 10, 10)),  # same bbox + type, different window
+    ], "windows": []}
+    d = diff_snapshots(base, cur)
+    assert len(d["removed"]) == 1 and len(d["added"]) == 1
+    assert d["changed"] == []
+
+
 def test_diff_match_radius_boundary():
     from agent_windows.core.tree import (
         diff_snapshots, _SNAPSHOT_DIFF_MATCH_RADIUS, BoundingBox,
