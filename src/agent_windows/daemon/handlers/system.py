@@ -5,6 +5,33 @@ from typing import Any
 from agent_windows.daemon.router import handler, require
 
 
+def _run_audited(method: str, subset: dict, fn, *args, **kwargs):
+    """Run ``fn(*args, **kwargs)`` with destructive-op audit wrapped around it.
+
+    Records the audit status: ``"blocked"`` for a pre-effect
+    :class:`ValueError` / :class:`PermissionError` (e.g. filesystem blacklist or
+    an INVALID_PARAMS validation — the call was rejected before any destructive
+    effect), ``"fail"`` for any other exception, ``"ok"`` on success. The
+    original exception is always re-raised so :func:`route_request` still maps it
+    to the right JSON-RPC code. (audit)
+
+    ``method`` is the name recorded in the log; ``subset`` is the already
+    privacy-scrubbed param subset (registry ``value`` must be excluded by the
+    caller).
+    """
+    from agent_windows.core.audit import audit_destructive
+    try:
+        result = fn(*args, **kwargs)
+    except (ValueError, PermissionError):
+        audit_destructive(method, subset, "blocked")
+        raise
+    except Exception:
+        audit_destructive(method, subset, "fail")
+        raise
+    audit_destructive(method, subset, "ok")
+    return result
+
+
 # ── Application management ─────────────────────────────────────────
 
 
@@ -140,11 +167,12 @@ def _fs_copy(params: dict) -> dict[str, Any]:
 def _fs_move(params: dict) -> dict[str, Any]:
     """Move/rename a file or directory. ``overwrite=True`` replaces an existing target."""
     from agent_windows.core.filesystem import move_path
-    return move_path(
-        require(params, "path", str),
-        require(params, "destination", str),
-        overwrite=params.get("overwrite", False),
-    )
+    path = require(params, "path", str)
+    destination = require(params, "destination", str)
+    overwrite = params.get("overwrite", False)
+    subset = {"path": path, "destination": destination}
+    return _run_audited("fs_move", subset, move_path, path, destination,
+                        overwrite=overwrite)
 
 
 @handler("fs_delete")
@@ -152,12 +180,16 @@ def _fs_delete(params: dict) -> dict[str, Any]:
     """Delete a file or directory. Default recycles; permanent=True force-deletes.
     dry_run=True previews without deleting. Non-empty dirs need recursive=True."""
     from agent_windows.core.filesystem import delete_path
-    return delete_path(
-        require(params, "path", str),
-        recursive=params.get("recursive", False),
-        permanent=params.get("permanent", False),
-        dry_run=params.get("dry_run", False),
-    )
+    path = require(params, "path", str)
+    recursive = params.get("recursive", False)
+    permanent = params.get("permanent", False)
+    dry_run = params.get("dry_run", False)
+    if dry_run:
+        # No side effect → skip the audit trail entirely (the preview does nothing).
+        return delete_path(path, recursive=recursive, permanent=permanent, dry_run=True)
+    subset = {"path": path, "permanent": permanent, "recursive": recursive}
+    return _run_audited("fs_delete", subset, delete_path, path,
+                        recursive=recursive, permanent=permanent, dry_run=False)
 
 
 @handler("fs_search")
@@ -225,10 +257,10 @@ def _process_list(params: dict) -> dict[str, Any]:
 def _process_kill(params: dict) -> dict[str, Any]:
     """Kill a process. ``force=True`` 强杀 (immediate); default is graceful."""
     from agent_windows.core.process_manager import kill_process
-    return kill_process(
-        require(params, "pid_or_name", (str, int)),
-        force=params.get("force", False),
-    )
+    pid_or_name = require(params, "pid_or_name", (str, int))
+    force = params.get("force", False)
+    subset = {"pid_or_name": pid_or_name, "force": force}
+    return _run_audited("process_kill", subset, kill_process, pid_or_name, force=force)
 
 
 # ── Notifications ────────────────────────────────────────────────────
@@ -261,6 +293,10 @@ def _registry(params: dict) -> dict[str, Any]:
     (e.g. ``HKCU:\\Software\\MyApp``). ``set`` requires ``name``+``value``;
     ``get`` requires ``name``; ``delete`` takes optional ``name`` (omit to
     delete the whole key); ``list`` takes only ``path``.
+
+    ``set`` / ``delete`` are audited (destructive); the recorded method is
+    ``registry_set`` / ``registry_delete`` and the value is NEVER recorded
+    (registry values frequently hold secrets). (audit)
     """
     from agent_windows.core import registry
     mode = require(params, "mode", str)
@@ -268,18 +304,20 @@ def _registry(params: dict) -> dict[str, Any]:
     if mode == "get":
         return registry.get_value(path, require(params, "name", str))
     if mode == "set":
-        return registry.set_value(
-            path,
-            require(params, "name", str),
-            require(params, "value"),
-            reg_type=params.get("type") or "String",
-        )
+        name = require(params, "name", str)
+        value = require(params, "value")
+        reg_type = params.get("type") or "String"
+        subset = {"path": path, "name": name, "type": reg_type}
+        return _run_audited("registry_set", subset, registry.set_value, path,
+                            name, value, reg_type=reg_type)
     if mode == "delete":
         # name absent → delete the whole key; name="" → delete the unnamed
         # (default) value. Distinguish "key not in params" from a falsy name so
         # an explicit empty string targets the default value, not the whole key. (BUG-B)
         name = params["name"] if "name" in params else None
-        return registry.delete_entry(path, name=name)
+        subset = {"path": path, "name": name if name is not None else "<whole key>"}
+        return _run_audited("registry_delete", subset, registry.delete_entry,
+                            path, name=name)
     if mode == "list":
         return registry.list_key(path)
     raise ValueError(
@@ -311,7 +349,7 @@ def _lock(params: dict) -> dict[str, Any]:
 def _sleep(params: dict) -> dict[str, Any]:
     """Suspend the system to sleep (S3)."""
     from agent_windows.core.power import suspend_sleep
-    return suspend_sleep()
+    return _run_audited("sleep", {}, suspend_sleep)
 
 
 @handler("system_shutdown")
@@ -323,7 +361,8 @@ def _system_shutdown(params: dict) -> dict[str, Any]:
     ``daemon stop`` relies on — a power-off must never hijack that name."""
     from agent_windows.core.power import shutdown_system
     delay, force = _delay_and_force(params)
-    return shutdown_system(delay, force)
+    return _run_audited("system_shutdown", {"delay": delay, "force": force},
+                        shutdown_system, delay, force)
 
 
 @handler("system_restart")
@@ -331,4 +370,5 @@ def _system_restart(params: dict) -> dict[str, Any]:
     """Restart. ``delay`` (0–600s, default 0); ``force`` (default graceful)."""
     from agent_windows.core.power import restart_system
     delay, force = _delay_and_force(params)
-    return restart_system(delay, force)
+    return _run_audited("system_restart", {"delay": delay, "force": force},
+                        restart_system, delay, force)
