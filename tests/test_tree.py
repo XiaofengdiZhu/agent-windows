@@ -1880,6 +1880,18 @@ def _el(name="", ctype="ButtonControl", window="App", bbox=None, **kw):
                        window_name=window, **kw)
 
 
+def test_element_info_window_handle_field_default_and_kwarg():
+    # New stable per-element window anchor. Default 0 keeps existing constructors
+    # and the _el fixture backward-compatible.
+    from agent_windows.core.tree import ElementInfo, BoundingBox
+    el = ElementInfo(name="X", control_type="ButtonControl",
+                     bbox=BoundingBox(0, 0, 1, 1))
+    assert el.window_handle == 0
+    el2 = ElementInfo(name="X", control_type="ButtonControl",
+                      bbox=BoundingBox(0, 0, 1, 1), window_handle=4242)
+    assert el2.window_handle == 4242
+
+
 def test_diff_pure_added_removed():
     from agent_windows.core.tree import diff_snapshots
     base = {"interactive_elements": [_el("A", bbox=(0, 0, 10, 10))],

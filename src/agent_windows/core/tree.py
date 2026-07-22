@@ -171,6 +171,14 @@ class ElementInfo:
     # ``str`` (not Optional) with a "" default so existing constructors and the
     # make_element test fixture stay backward-compatible without changes.
     window_name: str = ""
+    # HWND of the top-level WindowInfo this element belongs to (0 if unset).
+    # Filled during traversal from ``window.handle`` at zero extra COM cost
+    # (the window is already an _traverse_node parameter). Gives snapshot-diff a
+    # STABLE per-element window anchor: unlike window_name (which mirrors the
+    # title and shifts on load/tab/state), the handle is stable for a window's
+    # lifetime. ``int`` with a 0 default so existing constructors/fixtures stay
+    # backward-compatible.
+    window_handle: int = 0
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -1105,6 +1113,7 @@ def _traverse_node(
                 is_offscreen=is_offscreen,
                 is_modal=this_in_modal,
                 window_name=window.title,
+                window_handle=window.handle,
                 metadata=metadata,
             ))
 
