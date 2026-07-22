@@ -1588,3 +1588,215 @@ def render_snapshot(data: dict[str, Any]) -> str:
         parts.append("")
 
     return "\n".join(parts)
+
+
+# ── snapshot-diff (structural diff of two snapshots) ────────────────
+
+# Element pairing: identity excludes `name` (a label/text change should be
+# reported as `changed`, not a spurious add+remove). Within one identity
+# bucket, bbox-bearing elements pair by nearest centre; bbox-less elements
+# pair by exact name. MATCH_RADIUS caps spatial pairing (a big move ⇒
+# removed+added). MOVE_THRESHOLD flags a paired element as "moved".
+_SNAPSHOT_DIFF_MATCH_RADIUS = 60.0
+_SNAPSHOT_DIFF_MOVE_THRESHOLD = 10.0
+
+
+def _element_identity(el: "ElementInfo") -> tuple[str, str]:
+    """Pairing key: (control_type, window_name). Name intentionally excluded."""
+    return (el.control_type, el.window_name or "")
+
+
+def _element_center(el: "ElementInfo") -> tuple[float, float] | None:
+    if el.bbox is None:
+        return None
+    cx, cy = el.bbox.center
+    return (float(cx), float(cy))
+
+
+def _pair_elements(
+    base: list["ElementInfo"], cur: list["ElementInfo"],
+) -> tuple[list[tuple["ElementInfo", "ElementInfo"]], list["ElementInfo"], list["ElementInfo"]]:
+    """Greedy nearest-neighbour pairing within identity buckets.
+
+    Returns ``(pairs, removed[base-only], added[cur-only])``.
+    """
+    from collections import defaultdict
+
+    def bucket(elems):
+        b: dict[tuple, list] = defaultdict(list)
+        for e in elems:
+            b[_element_identity(e)].append(e)
+        return b
+
+    base_b = bucket(base)
+    cur_b = bucket(cur)
+    pairs: list[tuple[ElementInfo, ElementInfo]] = []
+    removed: list[ElementInfo] = []
+    added: list[ElementInfo] = []
+
+    for key in set(base_b) | set(cur_b):
+        b_list = list(base_b.get(key, []))
+        c_list = list(cur_b.get(key, []))
+        b_nobox = [e for e in b_list if e.bbox is None]
+        b_box = [e for e in b_list if e.bbox is not None]
+        c_nobox = [e for e in c_list if e.bbox is None]
+        c_box = [e for e in c_list if e.bbox is not None]
+
+        # bbox-less: exact-name match within the bucket.
+        for b_el in list(b_nobox):
+            for i, c_el in enumerate(c_nobox):
+                if (c_el.name or "") == (b_el.name or ""):
+                    pairs.append((b_el, c_el))
+                    b_nobox.remove(b_el)
+                    c_nobox.pop(i)
+                    break
+        removed.extend(b_nobox)
+        added.extend(c_nobox)
+
+        # bbox-bearing: nearest-neighbour within MATCH_RADIUS.
+        dists = []
+        for bi, b_el in enumerate(b_box):
+            bc = _element_center(b_el)
+            for ci, c_el in enumerate(c_box):
+                cc = _element_center(c_el)
+                dx, dy = bc[0] - cc[0], bc[1] - cc[1]
+                dists.append(((dx * dx + dy * dy) ** 0.5, bi, ci))
+        dists.sort()
+        used_b: set[int] = set()
+        used_c: set[int] = set()
+        for dist, bi, ci in dists:
+            # MATCH_RADIUS caps spatial pairing: a base element only pairs with
+            # a current element within this centre distance. dists is sorted
+            # ascending, so everything past the first over-radius entry is also
+            # too far — those base/cur elements fall through to removed/added.
+            if dist > _SNAPSHOT_DIFF_MATCH_RADIUS:
+                continue
+            if bi in used_b or ci in used_c:
+                continue
+            used_b.add(bi)
+            used_c.add(ci)
+            pairs.append((b_box[bi], c_box[ci]))
+        removed.extend(b for i, b in enumerate(b_box) if i not in used_b)
+        added.extend(c for i, c in enumerate(c_box) if i not in used_c)
+
+    return pairs, removed, added
+
+
+def _diff_element(a: "ElementInfo", b: "ElementInfo") -> list[tuple[str, str, str]]:
+    """Field deltas between a paired (baseline=a, current=b) element. Empty if identical."""
+    deltas: list[tuple[str, str, str]] = []
+    if (a.name or "") != (b.name or ""):
+        deltas.append(("name", a.name or "", b.name or ""))
+    if a.is_enabled != b.is_enabled:
+        deltas.append(("enabled", str(a.is_enabled), str(b.is_enabled)))
+    if a.is_focused != b.is_focused:
+        deltas.append(("focused", str(a.is_focused), str(b.is_focused)))
+    if a.is_offscreen != b.is_offscreen:
+        deltas.append(("offscreen", str(a.is_offscreen), str(b.is_offscreen)))
+    if a.is_modal != b.is_modal:
+        deltas.append(("modal", str(a.is_modal), str(b.is_modal)))
+    av = a.metadata.get("value") if a.metadata else None
+    bv = b.metadata.get("value") if b.metadata else None
+    if av != bv:
+        deltas.append(("value", str(av), str(bv)))
+    ac, bc = _element_center(a), _element_center(b)
+    if ac and bc:
+        dx, dy = ac[0] - bc[0], ac[1] - bc[1]
+        if (dx * dx + dy * dy) ** 0.5 > _SNAPSHOT_DIFF_MOVE_THRESHOLD:
+            deltas.append(("moved", f"{int(ac[0])},{int(ac[1])}",
+                           f"{int(bc[0])},{int(bc[1])}"))
+    return deltas
+
+
+def diff_snapshots(baseline: dict, current: dict) -> dict:
+    """Structural diff of two ``traverse_tree`` result dicts.
+
+    Returns ``{added, removed, changed, windows_added, windows_removed, stats}``.
+    ``changed`` entries are ``{"element": <current ElementInfo>, "deltas": [...]}``.
+    """
+    base_els = baseline.get("interactive_elements", [])
+    cur_els = current.get("interactive_elements", [])
+    pairs, removed, added = _pair_elements(base_els, cur_els)
+    changed = []
+    for b_el, c_el in pairs:
+        deltas = _diff_element(b_el, c_el)
+        if deltas:
+            changed.append({"element": c_el, "deltas": deltas})
+
+    base_w = {(w.title, w.process_name): w for w in baseline.get("windows", [])}
+    cur_w = {(w.title, w.process_name): w for w in current.get("windows", [])}
+    win_added = [cur_w[k] for k in cur_w if k not in base_w]
+    win_removed = [base_w[k] for k in base_w if k not in cur_w]
+
+    return {
+        "added": added,
+        "removed": removed,
+        "changed": changed,
+        "windows_added": win_added,
+        "windows_removed": win_removed,
+        "stats": {"baseline_n": len(base_els), "current_n": len(cur_els)},
+    }
+
+
+def _fmt_diff_row(el: "ElementInfo", ref: str | None) -> str:
+    ref = ref or ""
+    t = el.control_type.replace("Control", "")
+    name = (el.name or "")[:40]
+    win = (el.window_name or "")[:30]
+    return f"{ref:<5} {t:<10} {name:<24} [{win}]".rstrip()
+
+
+def render_snapshot_diff(diff: dict, current: dict) -> str:
+    """Render a ``diff_snapshots`` result as markdown.
+
+    ``@eN`` refs are numbered against the CURRENT tree (1-based index into
+    ``current["interactive_elements"]``, matching what ``resolve_element`` uses).
+    Added/changed rows carry the ref (clickable now); removed rows carry none
+    (the element is gone). Empty sections are omitted.
+    """
+    cur_els = current.get("interactive_elements", [])
+    ref_by_id = {id(el): f"@e{i}" for i, el in enumerate(cur_els, 1)}
+    stats = diff["stats"]
+    parts = ["## Snapshot Diff",
+             f'baseline: {stats["baseline_n"]} elements → current: {stats["current_n"]}']
+    summary = []
+    if diff["added"]:
+        summary.append(f'+{len(diff["added"])} added')
+    if diff["removed"]:
+        summary.append(f'-{len(diff["removed"])} removed')
+    if diff["changed"]:
+        summary.append(f'~{len(diff["changed"])} changed')
+    if diff["windows_added"]:
+        summary.append(f'+{len(diff["windows_added"])} window')
+    parts.append("  ".join(summary) if summary else "no changes")
+    parts.append("")
+
+    if diff["added"]:
+        parts.append(f'### Added ({len(diff["added"])})')
+        for el in diff["added"]:
+            parts.append(_fmt_diff_row(el, ref_by_id.get(id(el))))
+        parts.append("")
+    if diff["removed"]:
+        parts.append(f'### Removed ({len(diff["removed"])})')
+        for el in diff["removed"]:
+            parts.append(_fmt_diff_row(el, None))
+        parts.append("")
+    if diff["changed"]:
+        parts.append(f'### Changed ({len(diff["changed"])})')
+        for c in diff["changed"]:
+            el = c["element"]
+            row = _fmt_diff_row(el, ref_by_id.get(id(el)))
+            delta_str = "  ".join(f"{f}: {o}→{n}" for f, o, n in c["deltas"])
+            parts.append(f"{row}  {delta_str}" if row else delta_str)
+        parts.append("")
+    if diff["windows_added"]:
+        parts.append(f'### Windows +{len(diff["windows_added"])}')
+        for w in diff["windows_added"]:
+            parts.append(f'"{w.title}" ({w.process_name})')
+        parts.append("")
+    if diff["windows_removed"]:
+        parts.append(f'### Windows -{len(diff["windows_removed"])}')
+        for w in diff["windows_removed"]:
+            parts.append(f'"{w.title}" ({w.process_name})')
+        parts.append("")
+    return "\n".join(parts).rstrip() + "\n"

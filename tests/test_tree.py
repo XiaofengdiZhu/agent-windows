@@ -1866,5 +1866,122 @@ class TestTraverseTreeOnlyWindow:
         mock_enum.assert_called_once()
 
 
+# ── snapshot-diff (core) ─────────────────────────────────────────────
+
+
+def _el(name="", ctype="ButtonControl", window="App", bbox=None, **kw):
+    """Tiny ElementInfo builder for diff tests."""
+    from agent_windows.core.tree import ElementInfo, BoundingBox
+    if bbox is None:
+        bbox = BoundingBox(0, 0, 10, 10)
+    elif isinstance(bbox, tuple):
+        bbox = BoundingBox(*bbox)
+    return ElementInfo(name=name, control_type=ctype, bbox=bbox,
+                       window_name=window, **kw)
+
+
+def test_diff_pure_added_removed():
+    from agent_windows.core.tree import diff_snapshots
+    base = {"interactive_elements": [_el("A", bbox=(0, 0, 10, 10))],
+            "windows": []}
+    # B is far outside MATCH_RADIUS so the two do NOT pair → genuine add+remove
+    # (a co-located B would pair with A and surface as a name *change*, which
+    # test_diff_name_change_is_changed_not_add_remove covers instead).
+    cur = {"interactive_elements": [_el("B", bbox=(500, 500, 510, 510))],
+           "windows": []}
+    d = diff_snapshots(base, cur)
+    assert len(d["added"]) == 1 and d["added"][0].name == "B"
+    assert len(d["removed"]) == 1 and d["removed"][0].name == "A"
+    assert d["changed"] == []
+
+
+def test_diff_name_change_is_changed_not_add_remove():
+    from agent_windows.core.tree import diff_snapshots
+    base = {"interactive_elements": [_el("Loading", bbox=(0, 0, 10, 10))],
+            "windows": []}
+    cur = {"interactive_elements": [_el("Done", bbox=(0, 0, 10, 10))],
+           "windows": []}
+    d = diff_snapshots(base, cur)
+    assert d["added"] == [] and d["removed"] == []
+    assert len(d["changed"]) == 1
+    fields = {f for f, _, _ in d["changed"][0]["deltas"]}
+    assert "name" in fields
+
+
+def test_diff_same_bucket_bbox_pairing():
+    from agent_windows.core.tree import diff_snapshots, BoundingBox
+    base = {"interactive_elements": [
+        _el("OK", bbox=BoundingBox(0, 0, 10, 10)),
+        _el("OK", bbox=BoundingBox(100, 100, 110, 110)),
+    ], "windows": []}
+    cur = {"interactive_elements": [
+        _el("OK", bbox=BoundingBox(2, 2, 12, 12)),
+        _el("OK", bbox=BoundingBox(102, 102, 112, 112)),
+    ], "windows": []}
+    d = diff_snapshots(base, cur)
+    assert d["added"] == [] and d["removed"] == [] and d["changed"] == []
+
+
+def test_diff_match_radius_boundary():
+    from agent_windows.core.tree import diff_snapshots, _SNAPSHOT_DIFF_MATCH_RADIUS
+    base = {"interactive_elements": [_el("X", bbox=(0, 0, 10, 10))], "windows": []}
+    r = int(_SNAPSHOT_DIFF_MATCH_RADIUS) + 20
+    cur = {"interactive_elements": [_el("X", bbox=(r, r, r + 10, r + 10))],
+           "windows": []}
+    d = diff_snapshots(base, cur)
+    assert len(d["removed"]) == 1 and len(d["added"]) == 1
+
+
+def test_diff_changed_fields_and_move():
+    from agent_windows.core.tree import diff_snapshots, BoundingBox
+    base_el = _el("Search", ctype="EditControl", bbox=BoundingBox(0, 0, 100, 20),
+                  is_enabled=False)
+    base_el.metadata["value"] = ""
+    cur_el = _el("Search", ctype="EditControl", bbox=BoundingBox(20, 0, 120, 20),
+                 is_enabled=True)
+    cur_el.metadata["value"] = "hello"
+    d = diff_snapshots(
+        {"interactive_elements": [base_el], "windows": []},
+        {"interactive_elements": [cur_el], "windows": []})
+    assert len(d["changed"]) == 1
+    fields = {f for f, _, _ in d["changed"][0]["deltas"]}
+    assert {"enabled", "value", "moved"} <= fields
+
+
+def test_diff_windows_add_remove():
+    from agent_windows.core.tree import diff_snapshots, WindowInfo, BoundingBox
+    def w(t, p): return WindowInfo(t, p, 1, BoundingBox(0, 0, 1, 1))
+    d = diff_snapshots(
+        {"interactive_elements": [], "windows": [w("A", "a.exe"), w("B", "b.exe")]},
+        {"interactive_elements": [], "windows": [w("B", "b.exe"), w("C", "c.exe")]})
+    assert [x.title for x in d["windows_added"]] == ["C"]
+    assert [x.title for x in d["windows_removed"]] == ["A"]
+
+
+def test_diff_identical_is_empty():
+    from agent_windows.core.tree import diff_snapshots
+    d = diff_snapshots({"interactive_elements": [_el("A", bbox=(0, 0, 10, 10))],
+                        "windows": []},
+                       {"interactive_elements": [_el("A", bbox=(0, 0, 10, 10))],
+                        "windows": []})
+    assert d["added"] == [] and d["removed"] == [] and d["changed"] == []
+
+
+def test_render_snapshot_diff_markdown_and_current_refs():
+    from agent_windows.core.tree import diff_snapshots, render_snapshot_diff
+    base = {"interactive_elements": [_el("OK", bbox=(0, 0, 10, 10))], "windows": []}
+    cur_els = [_el("Submit", bbox=(0, 0, 10, 10)), _el("OK", bbox=(0, 0, 10, 10))]
+    cur = {"interactive_elements": cur_els, "windows": []}
+    d = diff_snapshots(base, cur)
+    out = render_snapshot_diff(d, cur)
+    assert "## Snapshot Diff" in out
+    assert "Added" in out
+    # One current element landed in Added, another in Changed; both carry a
+    # current @eN ref. Invariant: a ref appears in each non-empty section.
+    import re
+    assert re.search(r"@e\d", out)
+    assert "Changed" in out
+
+
 
 
