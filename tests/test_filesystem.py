@@ -1147,14 +1147,14 @@ class TestDeletePath:
         from agent_windows.core.filesystem import delete_path
         f = tmp_path / "a.txt"
         f.write_text("x", encoding="utf-8")
-        delete_path(str(f))
+        delete_path(str(f), permanent=True)
         assert not f.exists()
 
     def test_delete_empty_dir(self, tmp_path):
         from agent_windows.core.filesystem import delete_path
         d = tmp_path / "empty"
         d.mkdir()
-        delete_path(str(d))
+        delete_path(str(d), permanent=True)
         assert not d.exists()
 
     def test_non_empty_dir_refused_without_recursive(self, tmp_path):
@@ -1171,7 +1171,7 @@ class TestDeletePath:
         d = tmp_path / "full"
         d.mkdir()
         (d / "f.txt").write_text("x", encoding="utf-8")
-        delete_path(str(d), recursive=True)
+        delete_path(str(d), recursive=True, permanent=True)
         assert not d.exists()
 
     def test_refuses_install_tree(self):
@@ -1222,6 +1222,49 @@ class TestDeletePath:
         assert not link.exists()
         assert target.exists()
         assert target.read_text(encoding="utf-8") == "precious"
+
+
+class TestDeleteRecycle:
+    """Default delete_path (permanent=False) routes to _recycle_path. _recycle_path
+    is patched so tests never touch the host's real Recycle Bin."""
+
+    def test_default_recycles_file(self, tmp_path):
+        from unittest.mock import patch
+        from agent_windows.core.filesystem import delete_path
+        f = tmp_path / "a.txt"
+        f.write_text("x", encoding="utf-8")
+        with patch("agent_windows.core.filesystem._recycle_path") as m:
+            delete_path(str(f))
+        m.assert_called_once()
+        assert f.exists()  # mock did not move it; real recycle would
+
+    def test_permanent_unlinks_file(self, tmp_path):
+        from agent_windows.core.filesystem import delete_path
+        f = tmp_path / "a.txt"
+        f.write_text("x", encoding="utf-8")
+        delete_path(str(f), permanent=True)
+        assert not f.exists()
+
+    def test_default_recycles_dir_recursive(self, tmp_path):
+        from unittest.mock import patch
+        from agent_windows.core.filesystem import delete_path
+        d = tmp_path / "d"
+        d.mkdir()
+        (d / "f.txt").write_text("x", encoding="utf-8")
+        with patch("agent_windows.core.filesystem._recycle_path") as m:
+            delete_path(str(d), recursive=True)
+        m.assert_called_once()
+
+    def test_non_empty_dir_not_recycled_without_recursive(self, tmp_path):
+        from unittest.mock import patch
+        from agent_windows.core.filesystem import delete_path
+        d = tmp_path / "d"
+        d.mkdir()
+        (d / "f.txt").write_text("x", encoding="utf-8")
+        with patch("agent_windows.core.filesystem._recycle_path") as m:
+            with pytest.raises(ValueError, match="not empty"):
+                delete_path(str(d))
+        m.assert_not_called()
 
 
 class TestSearchFiles:

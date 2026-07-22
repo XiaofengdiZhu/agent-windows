@@ -949,36 +949,54 @@ def move_path(source: str, destination: str, overwrite: bool = False) -> dict[st
 
 
 @_with_elevation_hint
-def delete_path(path: str, recursive: bool = False) -> dict[str, Any]:
+def delete_path(path: str, recursive: bool = False,
+                permanent: bool = False) -> dict[str, Any]:
     """Delete a file or directory (TODO #4).
+
+    By default the target is sent to the Recycle Bin (reversible);
+    ``permanent=True`` force-deletes (irreversible). Non-empty directories
+    require ``recursive=True``.
 
     The target is write-validated (treated as a write — so the blacklist AND
     the agent's install/data-tree protection both apply: a prompt-injected
     delete can't remove the agent's own source, config, or blacklisted files).
-    A non-empty directory requires ``recursive=True``; otherwise it's refused.
 
     Operates on the LITERAL path: deleting a symlink or junction removes the
     link itself, not its target (G8 — matches ``rm``/``Remove-Item``). The
     resolved path is still checked above for blacklist/install-tree safety.
+
+    Recycling is best-effort: ``FOF_ALLOWUNDO`` is a hint, and SHFileOperation
+    permanently deletes when the file is too large or the Recycle Bin is
+    unavailable. Symlinks/junctions are always detached (permanent), never
+    recycled — a reparse point has no meaningful recycle semantics.
     """
     recursive = _as_bool(recursive)
+    permanent = _as_bool(permanent)
     # Safety check on the resolved path; operation on the literal path (G8).
     _validate_write_path(_resolve_user_path(path))
     p = _literal_path(path)
     if not p.exists() and not p.is_symlink() and not p.is_junction():
         raise FileNotFoundError(f"Path not found: {path}")
-    # A symlink/junction is reported distinctly; _remove_path detaches the link
-    # without touching its target (G8).
-    if p.is_symlink() or p.is_junction():
+
+    is_link = p.is_symlink() or p.is_junction()
+    # A symlink/junction is detached as a LINK (permanent) — a reparse point
+    # can't be meaningfully recycled, so it ignores the recycle/permanent knob.
+    if is_link:
         _remove_path(p)
         return {"output": f"## File Delete\nDeleted link: {p}"}
     if p.is_file():
-        p.unlink()
+        if permanent:
+            p.unlink()
+        else:
+            _recycle_path(p)
         return {"output": f"## File Delete\nDeleted file: {p}"}
     if p.is_dir():
         if not recursive and any(p.iterdir()):
             raise ValueError(f"Directory is not empty: {path}. Set recursive=True to delete non-empty directories.")
-        shutil.rmtree(p)
+        if permanent:
+            shutil.rmtree(p)
+        else:
+            _recycle_path(p)
         return {"output": f"## File Delete\nDeleted directory: {p}"}
     raise ValueError(f"Unsupported file type: {path}")
 
