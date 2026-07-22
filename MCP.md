@@ -173,6 +173,8 @@ A bare `mcp serve --transport streamable-http --host 0.0.0.0` with no `auth_key`
 
 > **These filters are enforced, not just hidden.** A filtered-out tool is genuinely blocked — the `batch` tool applies the same filter to its `commands[].method` sub-calls, so excluding `shell` also blocks `batch({"method":"shell"})` (the whole batch aborts with the offenders named). Enforcement runs in two layers: this MCP server process (discovery trim + the `batch` gate), **and** the daemon itself — at startup the daemon reads `[tools] include/exclude` from config and rejects any filtered method at the router (`PERMISSION_DENIED`), so even a process connecting *directly* to the named pipe (bypassing this server) is bound by the policy. Note the daemon honors the **config** `[tools]` section, not the `--tools`/`--exclude-tools` flags (those are process-local to this MCP server and never written to config); to lock the daemon, set `[tools]` in `config.toml`. `ping`/`shutdown` are always exempt. See [SECURITY.md](SECURITY.md). Use the valid tool names from [manifest.json](https://github.com/XiaofengdiZhu/agent-windows/blob/main/manifest.json) (`tools[].name`) or the catalog below.
 | `--stateless-http` | Run streamable-http without `Mcp-Session-Id` / per-connection state — reconnecting clients survive a server restart, and the server scales behind a load balancer. Streamable-http only. |
+| `--file-transfer` / `--no-file-transfer` | Enable or kill-switch the HTTP `/files` file-bridge endpoints (host↔Windows). Default on; `--no-file-transfer` unmounts them (`/files` → 404). HTTP only. |
+| `--max-upload-mb 512` | Max `/files` PUT body size in MiB (`0` = unlimited); oversize → 413. Default 512. |
 
 Config equivalents (in `~/.agent-windows/config.toml`):
 
@@ -180,6 +182,8 @@ Config equivalents (in `~/.agent-windows/config.toml`):
 [mcp]
 allow_insecure_remote = false   # opt into an insecure non-loopback bind
 stateless_http = false          # stateless streamable-http
+file_transfer = true            # enable the HTTP /files file-bridge endpoints
+max_upload_mb = 512             # /files PUT size cap in MiB (0 = unlimited)
 
 [security]
 ip_allowlist = ["10.0.0.0/8"]   # CIDR/IP list; empty = no restriction
@@ -191,6 +195,46 @@ exclude = ["shell", "registry"]        # blacklist
 ```
 
 > The daemon honors this `[tools]` section using **daemon method names** (write it as a TOML array — `config set` only writes scalars, so a comma-joined value matches nothing). The names match the MCP tool names above except for `ask-vision`/`wait_check`/`wait_for_check` (the daemon uses the hyphenated/poll names); the high-risk names (`shell`, `registry`, `fs_delete`, `process_kill`, …) are identical.
+
+## File transfer over HTTP (`/files`)
+
+On an HTTP transport the server also exposes three **file-transfer** endpoints on the *same listener* — the host↔Windows file bridge. They are plain HTTP (not MCP/JSON-RPC): an agent running elsewhere uses `curl` (or any HTTP client) to push/pull files to/from the Windows box. This fills a gap the `fs_*` MCP tools can't — those are text-only and local-only, so without `/files` you'd shell out to `scp`/`Invoke-WebRequest` by hand to move a binary blob.
+
+The endpoints ride the **entire `/mcp` security stack** — bearer auth, IP allowlist, TLS, DNS-rebinding. They are intentionally *not* in the public-path set, so every request is authenticated exactly like a tool call. Set an auth key first (`mcp auth`).
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/files?path=<abs>` | Stream a file **down** (Windows → host). |
+| `HEAD` | `/files?path=<abs>` | Headers only — size + `X-SHA256` for integrity checking, no body. |
+| `PUT` | `/files?path=<abs>&overwrite=true` | Stream a file **up** (host → Windows); raw octet-stream body. |
+
+`path` is a URL-encoded absolute path. Directories return `400` (zip first, or use `fs_list`). Uploads create parent dirs as needed (`mkdir -p`, like `fs_write`). The path blacklist is the same `fs_*` one (`.ssh`, install trees, …) via `validate_read_path` / `validate_write_path`.
+
+**Download + verify** (HEAD carries `X-SHA256`; GET does not, to avoid reading a large file twice):
+
+```bash
+# HEAD first to get the size + sha256, then download
+curl -sI -H "Authorization: Bearer $KEY" \
+  "http://host:8000/files?path=C%3A%5CUsers%5Cme%5Cbig.bin"
+# → x-size: 10485760 ; x-sha256: 9f86d081…
+
+curl -fsS -H "Authorization: Bearer $KEY" \
+  "http://host:8000/files?path=C%3A%5CUsers%5Cme%5Cbig.bin" -o big.bin
+sha256sum big.bin   # must match x-sha256
+```
+
+**Upload:**
+
+```bash
+curl -fsS -X PUT -H "Authorization: Bearer $KEY" \
+  --data-binary @local.bin \
+  "http://host:8000/files?path=C%3A%5CUsers%5Cme%5Cdest.bin&overwrite=true"
+# → {"path":"C:\\Users\\me\\dest.bin","bytes":10485760,"sha256":"9f86d081…"}
+```
+
+Status codes: `200` (GET body / PUT JSON `{path, bytes, sha256}`), `400` (missing/relative path, directory), `403` (path blacklist / IP allowlist), `404` (not found), `409` (PUT target exists without `overwrite=true`), `413` (body exceeds `max_upload_mb`).
+
+> **Kill-switch:** `--no-file-transfer` (or `[mcp] file_transfer = false`) leaves the routes unmounted — `/files` returns `404`. Never mounted on `stdio` (no listener). `max_upload_mb = 0` removes the upload cap.
 
 ## Transports
 
