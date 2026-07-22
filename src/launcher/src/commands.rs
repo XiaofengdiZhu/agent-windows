@@ -1055,7 +1055,9 @@ fn parse_fs(rest: &[String]) -> Result<Action, ParseError> {
             }
             Ok(Action::Call { method: method.into(), params: Value::Object(params) })
         }
-        // `delete PATH [--recursive]` (non-empty dirs need recursive).
+        // `delete PATH [--recursive] [--permanent] [--dry-run]`.
+        // Default recycles (daemon permanent=False); --permanent force-deletes;
+        // --dry-run previews. All three are bool flags (no value_opts).
         "delete" => {
             let p = ParsedArgs::parse(args, &[]);
             let path = p.pos(0, "path")?;
@@ -1063,6 +1065,12 @@ fn parse_fs(rest: &[String]) -> Result<Action, ParseError> {
             params.insert("path".into(), path.into());
             if p.flag(&["recursive"]) {
                 params.insert("recursive".into(), true.into());
+            }
+            if p.flag(&["permanent"]) {
+                params.insert("permanent".into(), true.into());
+            }
+            if p.flag(&["dry-run"]) {
+                params.insert("dry_run".into(), true.into());
             }
             Ok(Action::Call { method: "fs_delete".into(), params: Value::Object(params) })
         }
@@ -1658,6 +1666,17 @@ mod tests {
         }
         match parse(&argv(&["fs", "delete", "d", "--recursive"]), &g) {
             Ok(Action::Call { params, .. }) => assert_eq!(params["recursive"], true),
+            other => panic!("got {:?}", other),
+        }
+        match parse(&argv(&["fs", "delete", "d", "--permanent"]), &g) {
+            Ok(Action::Call { method, params }) => {
+                assert_eq!(method, "fs_delete");
+                assert_eq!(params["permanent"], true);
+            }
+            other => panic!("got {:?}", other),
+        }
+        match parse(&argv(&["fs", "delete", "d", "--dry-run"]), &g) {
+            Ok(Action::Call { params, .. }) => assert_eq!(params["dry_run"], true),
             other => panic!("got {:?}", other),
         }
         // search PATH PATTERN [--no-recursive]: inverted — recursive=false only
