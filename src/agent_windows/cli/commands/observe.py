@@ -264,6 +264,38 @@ def diff_screenshot(
     _cmd(ctx, "diff", **params)
 
 
+@app.command(name="snapshot-diff")
+def snapshot_diff(
+    ctx: typer.Context,
+    save: bool = typer.Option(False, "--save", help="Capture the current tree as the diff baseline"),
+    clear: bool = typer.Option(False, "--clear", help="Drop the stored baseline"),
+    window: str = typer.Option(
+        None, "--window",
+        help="Scope to one top-level window: HWND (int or 0xHEX), title substring, or process name"),
+    active: bool = typer.Option(False, "--active", help="Scope to the foreground window"),
+    display: list[int] = typer.Option(
+        None, "--display", "-d",
+        help="Limit to display index(es), e.g. -d 0 -d 1 (repeatable)"),
+) -> None:
+    """Diff a stored baseline UIA snapshot against the current desktop.
+
+    Use --save to capture a baseline, perform your action, then run
+    snapshot-diff (no flags) to see added/removed/changed elements.
+    --clear drops the baseline. Scope flags are reused on diff.
+    """
+    if save and clear:
+        raise typer.BadParameter("--save and --clear are mutually exclusive")
+    action = "save" if save else ("clear" if clear else "diff")
+    params: dict = {"action": action}
+    if window:
+        params["window"] = window
+    if active:
+        params["active"] = True
+    if display:
+        params["display"] = display
+    _cmd(ctx, "snapshot_diff", **params)
+
+
 @app.command(name="get-text")
 def get_text(
     ctx: typer.Context,

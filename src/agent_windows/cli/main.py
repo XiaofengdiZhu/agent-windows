@@ -96,7 +96,7 @@ def global_options(
 # ── Register top-level commands ───────────────────────────────────
 # Commands defined in individual modules, added here to the main app.
 
-from agent_windows.cli.commands.observe import observe, snapshot, screenshot, ground, ask_vision, detect, cleanup, highlight, diff_screenshot, get_text, is_cmd, find_image, pixel_at, list_displays  # noqa: E402
+from agent_windows.cli.commands.observe import observe, snapshot, screenshot, ground, ask_vision, detect, cleanup, highlight, diff_screenshot, snapshot_diff, get_text, is_cmd, find_image, pixel_at, list_displays  # noqa: E402
 from agent_windows.cli.commands.input import click, type_text, scroll, move, dblclick, hover, mouse_down, mouse_up, drag, shortcut, key_down, key_up, expand, collapse  # noqa: E402
 from agent_windows.cli.commands.system import (  # noqa: E402
     shell, batch, notify,
@@ -118,6 +118,7 @@ app.command(name="pixel-at")(pixel_at)
 app.command()(cleanup)
 app.command()(highlight)
 app.command(name="diff")(diff_screenshot)
+app.command(name="snapshot-diff")(snapshot_diff)
 app.command()(get_text)
 app.command()(click)
 app.command(name="type")(type_text)

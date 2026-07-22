@@ -511,6 +511,78 @@ class TestObserveCommands:
         assert kwargs == {}
 
 
+# ── snapshot-diff command (save/diff/clear + scope flags) ─────────────
+
+
+class TestSnapshotDiffCommand:
+    @patch("agent_windows.cli.commands.observe._cmd")
+    def test_save_forwards_action_save(self, mock_cmd):
+        """--save → method=snapshot_diff, params={action: save}."""
+        result = runner.invoke(app, ["snapshot-diff", "--save"])
+        assert result.exit_code == 0
+        method, params = _cmd_calls(mock_cmd)[0]
+        assert method == "snapshot_diff"
+        assert params == {"action": "save"}
+
+    @patch("agent_windows.cli.commands.observe._cmd")
+    def test_no_flags_defaults_to_diff(self, mock_cmd):
+        """Bare `snapshot-diff` → action=diff (no baseline/scope keys)."""
+        result = runner.invoke(app, ["snapshot-diff"])
+        assert result.exit_code == 0
+        method, params = _cmd_calls(mock_cmd)[0]
+        assert method == "snapshot_diff"
+        assert params == {"action": "diff"}
+
+    @patch("agent_windows.cli.commands.observe._cmd")
+    def test_clear_forwards_action_clear(self, mock_cmd):
+        """--clear → action=clear."""
+        result = runner.invoke(app, ["snapshot-diff", "--clear"])
+        assert result.exit_code == 0
+        method, params = _cmd_calls(mock_cmd)[0]
+        assert method == "snapshot_diff"
+        assert params == {"action": "clear"}
+
+    @patch("agent_windows.cli.commands.observe._cmd")
+    def test_window_option_forwards_with_default_diff(self, mock_cmd):
+        """--window X → params.window=X, action still defaults to diff."""
+        runner.invoke(app, ["snapshot-diff", "--window", "notepad"])
+        method, params = _cmd_calls(mock_cmd)[0]
+        assert method == "snapshot_diff"
+        assert params == {"action": "diff", "window": "notepad"}
+
+    @patch("agent_windows.cli.commands.observe._cmd")
+    def test_active_flag_forwards_true(self, mock_cmd):
+        """--active → params.active=True (plus default action=diff)."""
+        runner.invoke(app, ["snapshot-diff", "--active"])
+        method, params = _cmd_calls(mock_cmd)[0]
+        assert method == "snapshot_diff"
+        assert params["active"] is True
+        assert params["action"] == "diff"
+
+    @patch("agent_windows.cli.commands.observe._cmd")
+    def test_display_option_forwards_list(self, mock_cmd):
+        """--display 0 → params.display=[0] (Typer list[int], repeatable)."""
+        runner.invoke(app, ["snapshot-diff", "-d", "0"])
+        method, params = _cmd_calls(mock_cmd)[0]
+        assert method == "snapshot_diff"
+        assert params["display"] == [0]
+        assert params["action"] == "diff"
+
+    @patch("agent_windows.cli.commands.observe._cmd")
+    def test_display_option_repeatable(self, mock_cmd):
+        """`-d 0 -d 1` → params.display=[0, 1]."""
+        runner.invoke(app, ["snapshot-diff", "-d", "0", "-d", "1"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params["display"] == [0, 1]
+
+    @patch("agent_windows.cli.commands.observe._cmd")
+    def test_save_and_clear_mutually_exclusive(self, mock_cmd):
+        """--save + --clear → usage error, _cmd never called."""
+        result = runner.invoke(app, ["snapshot-diff", "--save", "--clear"])
+        assert result.exit_code != 0
+        mock_cmd.assert_not_called()
+
+
 # ── find-image command (template matching) ───────────────────────────
 
 
