@@ -822,6 +822,58 @@ def _remove_path(p: Path) -> None:
         p.unlink()
 
 
+def _recycle_path(p: Path) -> None:
+    """Send a literal path to the Recycle Bin via SHFileOperationW (best-effort).
+
+    ``FOF_ALLOWUNDO`` is a hint: a too-large file, a network/non-NTFS volume,
+    or a disabled Recycle Bin makes SHFileOperation permanently delete instead.
+    The API does not report which happened, so callers must not promise
+    recoverability. Raises :class:`RuntimeError` on a non-zero return or abort.
+
+    ``pFrom`` is double-NUL terminated (``str(p) + "\\0"`` plus the buffer's
+    implicit terminator). ``import ctypes`` stays local — core is lazy-loaded
+    by the daemon handler, mirroring ``_desktop_dir``'s local ctypes import.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    FO_DELETE = 0x0003
+    FOF_ALLOWUNDO = 0x0040
+    FOF_NOCONFIRMATION = 0x0010
+    FOF_SILENT = 0x0004
+    FOF_NOERRORUI = 0x0400
+    FOF_NO_NINQUIREUNDO = 0x0100
+
+    class SHFILEOPSTRUCTW(ctypes.Structure):
+        _fields_ = [
+            ("hwnd", wintypes.HWND),
+            ("wFunc", wintypes.UINT),
+            ("pFrom", wintypes.LPCWSTR),
+            ("pTo", wintypes.LPCWSTR),
+            ("fFlags", ctypes.c_uint16),
+            ("fAnyOperationsAborted", wintypes.BOOL),
+            ("hNameMappings", ctypes.c_void_p),
+            ("lpszProgressTitle", wintypes.LPCWSTR),
+        ]
+
+    buf = ctypes.create_unicode_buffer(str(p) + "\0")  # double-NUL terminated
+    op = SHFILEOPSTRUCTW()
+    op.hwnd = None
+    op.wFunc = FO_DELETE
+    op.pFrom = ctypes.cast(buf, wintypes.LPCWSTR)
+    op.pTo = None
+    op.fFlags = (FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT
+                 | FOF_NOERRORUI | FOF_NO_NINQUIREUNDO)
+    op.fAnyOperationsAborted = False
+    op.hNameMappings = None
+    op.lpszProgressTitle = None
+    rc = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op))
+    if op.fAnyOperationsAborted:
+        raise RuntimeError("Recycle operation aborted")
+    if rc != 0:
+        raise RuntimeError(f"SHFileOperationW failed (rc={rc})")
+
+
 @_with_elevation_hint
 def copy_path(source: str, destination: str, overwrite: bool = False) -> dict[str, Any]:
     """Copy a file or directory to ``destination`` (TODO #4).

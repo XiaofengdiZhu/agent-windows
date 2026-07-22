@@ -1119,6 +1119,29 @@ class TestMovePath:
         assert (target / "keep.txt").exists()
 
 
+class TestRecyclePath:
+    """_recycle_path wraps SHFileOperationW — patched so tests never touch the
+    host's real Recycle Bin."""
+
+    def test_recycle_calls_shfileoperation(self, tmp_path):
+        from unittest.mock import patch
+        from agent_windows.core.filesystem import _recycle_path
+        f = tmp_path / "x.txt"
+        f.write_text("x", encoding="utf-8")
+        with patch("ctypes.windll.shell32.SHFileOperationW", return_value=0) as m:
+            _recycle_path(f)
+        m.assert_called_once()
+
+    def test_recycle_raises_on_nonzero_return(self, tmp_path):
+        from unittest.mock import patch
+        from agent_windows.core.filesystem import _recycle_path
+        f = tmp_path / "x.txt"
+        f.write_text("x", encoding="utf-8")
+        with patch("ctypes.windll.shell32.SHFileOperationW", return_value=123):
+            with pytest.raises(RuntimeError, match="SHFileOperationW failed"):
+                _recycle_path(f)
+
+
 class TestDeletePath:
     def test_delete_file(self, tmp_path):
         from agent_windows.core.filesystem import delete_path
