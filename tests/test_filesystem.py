@@ -1485,6 +1485,16 @@ class TestFsHandlers:
         HANDLERS["fs_copy"]({"path": str(src), "destination": str(tmp_path / "b.txt")})
         assert (tmp_path / "b.txt").read_text(encoding="utf-8") == "d"
 
+    def test_fs_delete_forwards_permanent_dry_run(self, tmp_path):
+        from unittest.mock import patch
+        from agent_windows.daemon.router import HANDLERS
+        f = tmp_path / "a.txt"
+        f.write_text("x", encoding="utf-8")
+        with patch("agent_windows.core.filesystem.delete_path",
+                   return_value={"output": "ok"}) as m:
+            HANDLERS["fs_delete"]({"path": str(f), "permanent": True, "dry_run": True})
+        m.assert_called_once_with(str(f), recursive=False, permanent=True, dry_run=True)
+
     def test_fs_search_requires_pattern(self):
         from agent_windows.daemon.router import HANDLERS
         with pytest.raises(ValueError, match="missing required parameter 'pattern'"):

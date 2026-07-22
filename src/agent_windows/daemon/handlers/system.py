@@ -149,11 +149,14 @@ def _fs_move(params: dict) -> dict[str, Any]:
 
 @handler("fs_delete")
 def _fs_delete(params: dict) -> dict[str, Any]:
-    """Delete a file or directory. Non-empty dirs require ``recursive=True``."""
+    """Delete a file or directory. Default recycles; permanent=True force-deletes.
+    dry_run=True previews without deleting. Non-empty dirs need recursive=True."""
     from agent_windows.core.filesystem import delete_path
     return delete_path(
         require(params, "path", str),
         recursive=params.get("recursive", False),
+        permanent=params.get("permanent", False),
+        dry_run=params.get("dry_run", False),
     )
 
 
