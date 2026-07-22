@@ -1966,12 +1966,52 @@ def test_diff_changed_fields_and_move():
 
 def test_diff_windows_add_remove():
     from agent_windows.core.tree import diff_snapshots, WindowInfo, BoundingBox
-    def w(t, p): return WindowInfo(t, p, 1, BoundingBox(0, 0, 1, 1))
+    def w(t, p, h): return WindowInfo(t, p, h, BoundingBox(0, 0, 1, 1))
     d = diff_snapshots(
-        {"interactive_elements": [], "windows": [w("A", "a.exe"), w("B", "b.exe")]},
-        {"interactive_elements": [], "windows": [w("B", "b.exe"), w("C", "c.exe")]})
+        {"interactive_elements": [],
+         "windows": [w("A", "a.exe", 1), w("B", "b.exe", 2)]},
+        {"interactive_elements": [],
+         "windows": [w("B", "b.exe", 2), w("C", "c.exe", 3)]})
     assert [x.title for x in d["windows_added"]] == ["C"]
     assert [x.title for x in d["windows_removed"]] == ["A"]
+
+
+def test_diff_window_title_change_does_not_flood_added_removed():
+    # Regression: a window-title change (load done, tab switch) used to shift
+    # every element's (control_type, window_name) identity key -> all unpaired
+    # -> Added+Removed flooded. control_type-only identity pairs them; the title
+    # change surfaces as changed:window.
+    from agent_windows.core.tree import diff_snapshots
+    base = {"interactive_elements": [
+        _el("Submit", ctype="ButtonControl", window="Login", bbox=(10, 10, 60, 40)),
+        _el("", ctype="EditControl", window="Login", bbox=(10, 50, 200, 70)),
+    ], "windows": []}
+    cur = {"interactive_elements": [
+        _el("Submit", ctype="ButtonControl", window="Login - Success",
+            bbox=(10, 10, 60, 40)),
+        _el("", ctype="EditControl", window="Login - Success",
+            bbox=(10, 50, 200, 70)),
+    ], "windows": []}
+    d = diff_snapshots(base, cur)
+    assert d["added"] == [] and d["removed"] == []
+    assert len(d["changed"]) == 2
+    for c in d["changed"]:
+        fields = {f for f, _, _ in c["deltas"]}
+        assert "window" in fields
+
+
+def test_diff_windows_title_change_pairs_by_handle():
+    # Windows identity is (process_name, handle) — stable across a title change.
+    from agent_windows.core.tree import diff_snapshots, WindowInfo, BoundingBox
+    def w(t, p, h): return WindowInfo(t, p, h, BoundingBox(0, 0, 1, 1))
+    d = diff_snapshots(
+        {"interactive_elements": [], "windows": [w("Loading", "app.exe", 4242)]},
+        {"interactive_elements": [], "windows": [w("Ready", "app.exe", 4242)]})
+    assert d["windows_added"] == [] and d["windows_removed"] == []
+    d2 = diff_snapshots(
+        {"interactive_elements": [], "windows": [w("A", "app.exe", 4242)]},
+        {"interactive_elements": [], "windows": [w("A", "app.exe", 8888)]})
+    assert len(d2["windows_added"]) == 1 and len(d2["windows_removed"]) == 1
 
 
 def test_diff_identical_is_empty():

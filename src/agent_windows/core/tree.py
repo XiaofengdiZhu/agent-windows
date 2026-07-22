@@ -1616,9 +1616,19 @@ _SNAPSHOT_DIFF_MATCH_RADIUS = 60.0
 _SNAPSHOT_DIFF_MOVE_THRESHOLD = 10.0
 
 
-def _element_identity(el: "ElementInfo") -> tuple[str, str]:
-    """Pairing key: (control_type, window_name). Name intentionally excluded."""
-    return (el.control_type, el.window_name or "")
+def _element_identity(el: "ElementInfo") -> tuple[str]:
+    """Pairing key: control_type only.
+
+    Both ``name`` and ``window_name`` are intentionally excluded. ``name``: a
+    label/text change should surface as ``changed``, not add+remove. ``window_name``:
+    it mirrors the owning window's *title*, which shifts on common events (page
+    load done, tab switch, status change) — including it would shift every
+    element's key at once and flood Added/Removed. Same-type elements (same or
+    different windows) disambiguate by bbox within MATCH_RADIUS; ``window_name``
+    is still shown in render, and a title change surfaces as ``changed:window``
+    (see _diff_element).
+    """
+    return (el.control_type,)
 
 
 def _element_center(el: "ElementInfo") -> tuple[float, float] | None:
@@ -1720,6 +1730,8 @@ def _diff_element(a: "ElementInfo", b: "ElementInfo") -> list[tuple[str, str, st
         deltas.append(("offscreen", str(a.is_offscreen), str(b.is_offscreen)))
     if a.is_modal != b.is_modal:
         deltas.append(("modal", str(a.is_modal), str(b.is_modal)))
+    if (a.window_name or "") != (b.window_name or ""):
+        deltas.append(("window", a.window_name or "", b.window_name or ""))
     av = a.metadata.get("value") if a.metadata else None
     bv = b.metadata.get("value") if b.metadata else None
     if av != bv:
@@ -1739,9 +1751,12 @@ def diff_snapshots(baseline: dict, current: dict) -> dict:
     Returns ``{added, removed, changed, windows_added, windows_removed, stats}``.
     ``changed`` entries are ``{"element": <current ElementInfo>, "deltas": [...]}``.
 
-    Windows are identity-keyed by ``(title, process_name)`` — ``handle`` is
-    deliberately excluded (unstable across captures). Only window add/remove
-    is reported; changed windows are rare and omitted.
+    Windows are identity-keyed by ``(process_name, handle)`` — ``handle`` is
+    stable for a window's lifetime (only a close+reopen changes it), unlike
+    ``title`` which shifts on load/tab/state. A title change thus pairs the
+    window (no add/remove noise). Only window add/remove is reported; changed
+    windows are rare and omitted (a title change surfaces per-element as
+    ``changed:window``, not as a changed window).
     """
     base_els = baseline.get("interactive_elements", [])
     cur_els = current.get("interactive_elements", [])
@@ -1752,8 +1767,8 @@ def diff_snapshots(baseline: dict, current: dict) -> dict:
         if deltas:
             changed.append({"element": c_el, "deltas": deltas})
 
-    base_w = {(w.title, w.process_name): w for w in baseline.get("windows", [])}
-    cur_w = {(w.title, w.process_name): w for w in current.get("windows", [])}
+    base_w = {(w.process_name, w.handle): w for w in baseline.get("windows", [])}
+    cur_w = {(w.process_name, w.handle): w for w in current.get("windows", [])}
     win_added = [cur_w[k] for k in cur_w if k not in base_w]
     win_removed = [base_w[k] for k in base_w if k not in cur_w]
 
