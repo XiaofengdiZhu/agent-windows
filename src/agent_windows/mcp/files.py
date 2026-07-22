@@ -14,6 +14,7 @@ identical to the fs_* tools.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from pathlib import Path
 from typing import Any
@@ -74,7 +75,6 @@ async def head(request: Request) -> Response:
         return _err(400, "path is a directory; directories are not supported (v1)")
     if not target.exists():
         return _err(404, f"not found: {raw}")
-    import asyncio
     size = target.stat().st_size
     digest = await asyncio.to_thread(_sha256_file, target)
     return Response(status_code=200, headers={
@@ -96,6 +96,29 @@ def _safe_unlink(p: Path) -> None:
         p.unlink()
     except OSError:
         pass
+
+
+# Per-target-path serialization for uploads. asyncio is single-threaded within
+# one event loop, so the get-or-create below is atomic (no await between the
+# check and the insert) — no guard lock needed, which also sidesteps the
+# cross-loop-binding hazard a module-level asyncio.Lock would hit across
+# multiple asyncio.run() test loops. The dict holds one small lock per distinct
+# upload path ever seen; bounded by real filesystem usage behind auth.
+_path_locks: dict[str, asyncio.Lock] = {}
+
+
+def _get_path_lock(key: str) -> asyncio.Lock:
+    """Return the per-path upload lock, creating it on first use.
+
+    Same target path → same lock (uploads serialize: deterministic 409, no
+    silent clobber); different paths → different locks (unrelated uploads stay
+    parallel).
+    """
+    lock = _path_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _path_locks[key] = lock
+    return lock
 
 
 async def upload(request: Request, *, cap: int | None) -> Response:
@@ -125,31 +148,39 @@ async def upload(request: Request, *, cap: int | None) -> Response:
         cl = request.headers.get("content-length")
         if cl and cl.isascii() and cl.isdigit() and int(cl) > cap:
             return _err(413, f"upload exceeds max_upload_mb cap ({cap} bytes)")
-    if target.exists() and not overwrite:
-        return _err(409, f"target exists; pass overwrite=true to replace: {raw}")
-    tmp = target.parent / f".awpart-{secrets.token_hex(8)}"
-    h = hashlib.sha256()
-    size = 0
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        with open(tmp, "wb") as f:
-            async for chunk in request.stream():
-                if not chunk:
-                    continue
-                if cap is not None and size + len(chunk) > cap:
-                    raise _SizeExceeded(cap)
-                f.write(chunk)
-                h.update(chunk)
-                size += len(chunk)
-        os.replace(tmp, target)
-    except _SizeExceeded:
-        _safe_unlink(tmp)
-        return _err(413, f"upload exceeded max_upload_mb cap ({cap} bytes)")
-    except Exception as exc:  # noqa: BLE001 — cleanup, then honest 500
-        _safe_unlink(tmp)
-        return _err(500, f"upload failed: {exc}")
-    return JSONResponse({"path": str(target), "bytes": size,
-                         "sha256": h.hexdigest()}, status_code=200)
+    # Per-path serialization: exists-check → stream → os.replace must be atomic
+    # w.r.t. other uploads to the SAME path. uvicorn runs these coroutines
+    # concurrently on one event loop (they interleave at every `async for`
+    # boundary), so without this lock two concurrent PUTs to a new path both
+    # pass the 409 guard and the second silently clobbers the first. Different
+    # paths get separate locks, so unrelated uploads stay parallel.
+    lock = _get_path_lock(str(target))
+    async with lock:
+        if target.exists() and not overwrite:
+            return _err(409, f"target exists; pass overwrite=true to replace: {raw}")
+        tmp = target.parent / f".awpart-{secrets.token_hex(8)}"
+        h = hashlib.sha256()
+        size = 0
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with open(tmp, "wb") as f:
+                async for chunk in request.stream():
+                    if not chunk:
+                        continue
+                    if cap is not None and size + len(chunk) > cap:
+                        raise _SizeExceeded(cap)
+                    f.write(chunk)
+                    h.update(chunk)
+                    size += len(chunk)
+            os.replace(tmp, target)
+        except _SizeExceeded:
+            _safe_unlink(tmp)
+            return _err(413, f"upload exceeded max_upload_mb cap ({cap} bytes)")
+        except Exception as exc:  # noqa: BLE001 — cleanup, then honest 500
+            _safe_unlink(tmp)
+            return _err(500, f"upload failed: {exc}")
+        return JSONResponse({"path": str(target), "bytes": size,
+                             "sha256": h.hexdigest()}, status_code=200)
 
 
 def register_file_endpoints(mcp: Any, *, max_upload_mb: int = 512) -> None:

@@ -234,6 +234,8 @@ curl -fsS -X PUT -H "Authorization: Bearer $KEY" \
 
 Status codes: `200` (GET body / PUT JSON `{path, bytes, sha256}`), `400` (missing/relative path, directory), `403` (path blacklist / IP allowlist), `404` (not found), `409` (PUT target exists without `overwrite=true`), `413` (body exceeds `max_upload_mb`).
 
+> **Concurrency:** concurrent PUTs to the *same* path serialize — the first creates/overwrites, a later one without `overwrite=true` gets `409`. PUTs to *different* paths run in parallel.
+
 > **Kill-switch:** `--no-file-transfer` (or `[mcp] file_transfer = false`) leaves the routes unmounted — `/files` returns `404`. Never mounted on `stdio` (no listener). `max_upload_mb = 0` removes the upload cap.
 
 ## Transports

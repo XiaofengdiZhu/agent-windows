@@ -171,6 +171,65 @@ def test_upload_rejects_directory(tmp_path):
     assert r.status_code == 400
 
 
+def test_get_path_lock_same_key_shares_different_key_distinct():
+    from agent_windows.mcp.files import _get_path_lock
+    a1 = _get_path_lock("C:\\same.bin")
+    a2 = _get_path_lock("C:\\same.bin")
+    b = _get_path_lock("C:\\other.bin")
+    assert a1 is a2          # same path -> one lock (serializes uploads to it)
+    assert a1 is not b       # different path -> separate lock (parallel)
+
+
+class _FakeUploadRequest:
+    """Minimal stand-in for starlette.Request to drive upload() directly.
+
+    Lets a concurrency test interleave two uploads on one event loop without a
+    real HTTP server. ``chunks`` is an async iterable yielded by ``stream()``.
+    """
+
+    def __init__(self, path, chunks, content_length=None):
+        self.query_params = {"path": path}
+        self.headers = ({} if content_length is None
+                        else {"content-length": str(content_length)})
+        self._chunks = chunks
+
+    async def stream(self):
+        async for c in self._chunks:
+            yield c
+
+
+def test_upload_concurrent_same_path_one_wins_one_409(tmp_path):
+    # Two PUTs to the SAME new path on one event loop must serialize: one
+    # creates the file (200), the other then sees it exist (409). Without the
+    # per-path lock both would pass the exists-check while interleaved at the
+    # async-for boundaries and both return 200 (silent clobber). Driven
+    # directly (no uvicorn) so the test has no network/timing flake.
+    import asyncio
+    from agent_windows.mcp.files import upload
+    dest = tmp_path / "race.bin"
+
+    async def slow_chunks():
+        # Yield control between chunks to widen the race window; the first
+        # uploader holds the per-path lock across these awaits.
+        for _ in range(3):
+            await asyncio.sleep(0.01)
+            yield b"data-"
+
+    async def fast_chunks():
+        yield b"x"
+
+    async def race():
+        big = 512 * 1024 * 1024
+        req_a = _FakeUploadRequest(str(dest), slow_chunks())
+        req_b = _FakeUploadRequest(str(dest), fast_chunks())
+        return await asyncio.gather(upload(req_a, cap=big), upload(req_b, cap=big))
+
+    ra, rb = asyncio.run(race())
+    assert sorted((ra.status_code, rb.status_code)) == [200, 409]
+    # Exactly one writer won; the file holds the winner's content.
+    assert dest.read_bytes() in (b"data-data-data-", b"x")
+
+
 def test_register_file_endpoints_mounts_three_routes():
     from agent_windows.mcp.files import register_file_endpoints
     mounted = []
