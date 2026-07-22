@@ -366,7 +366,9 @@ agent-windows fs read legacy.txt --encoding gbk        # legacy codepage (defaul
 agent-windows fs write C:\Users\test\out.txt "Hello"
 agent-windows fs copy C:\a.txt C:\bak\a.txt            # --overwrite to replace
 agent-windows fs move C:\old.txt C:\new.txt
-agent-windows fs delete C:\temp\junk --recursive       # non-empty dirs need --recursive
+agent-windows fs delete C:\temp\junk --recursive       # → Recycle Bin by default (reversible); non-empty dirs need --recursive
+agent-windows fs delete C:\temp\junk --permanent        # force-delete, bypass Recycle Bin
+agent-windows fs delete C:\temp\junk --dry-run          # preview what would be deleted; nothing removed
 agent-windows fs search C:\Projects "*.py"             # glob, recursive by default
 agent-windows fs info C:\Users\test\file.txt           # size/timestamps/attrs
 

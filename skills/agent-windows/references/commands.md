@@ -672,7 +672,7 @@ agent-windows shell "Get-Process" --timeout 60     # override default 30s
 
 ### fs read / fs write / fs list / fs copy / fs move / fs delete / fs search / fs info
 
-File system operations. `read`/`write`/`list` cover the common cases; `copy`/`move`/`delete`/`search`/`info` handle the rest — prefer these over shelling out to `Copy-Item`/`Remove-Item` (they round-trip through the daemon in one call).
+File system operations. `read`/`write`/`list` cover the common cases; `copy`/`move`/`delete`/`search`/`info` handle the rest — prefer these over shelling out to `Copy-Item`/`Remove-Item` (they round-trip through the daemon in one call). `fs delete` sends to the **Recycle Bin** by default (reversible); use `--permanent` to force-delete or `--dry-run` to preview what would go.
 
 ```bash
 agent-windows fs read C:\Users\test\file.txt
@@ -683,7 +683,9 @@ agent-windows fs list C:\Users
 agent-windows fs list C:\Users --pattern *.py --recursive --show-hidden
 agent-windows fs copy C:\a.txt C:\backup\a.txt --overwrite
 agent-windows fs move C:\old.txt C:\new.txt
-agent-windows fs delete C:\temp\junk --recursive
+agent-windows fs delete C:\temp\junk --recursive          # → Recycle Bin (default, reversible)
+agent-windows fs delete C:\temp\junk --permanent --recursive  # → gone for good
+agent-windows fs delete C:\temp\junk --dry-run            # preview; nothing deleted
 agent-windows fs search C:\Projects "*.py"
 agent-windows fs info C:\Users\test\file.txt
 ```
@@ -695,7 +697,7 @@ agent-windows fs info C:\Users\test\file.txt
 | `fs list` | `path` (str, **required**), `--pattern` (str, default `""` — name glob filter), `--recursive` (bool, default `false` — walk subdirectories), `--show-hidden` (bool, default `false` — include dotfiles) |
 | `fs copy` | `path` (str, **required**), `destination` (str, **required**), `--overwrite` (bool, default `false` — replace existing destination) |
 | `fs move` | `path` (str, **required**), `destination` (str, **required**), `--overwrite` (bool, default `false`) |
-| `fs delete` | `path` (str, **required**), `--recursive` (bool, default `false` — required to delete non-empty directories) |
+| `fs delete` | `path` (str, **required**), `--recursive` (bool, default `false` — required to delete non-empty directories), `--permanent` (bool, default `false` — force-delete, bypass Recycle Bin), `--dry-run` (bool, default `false` — preview without deleting) |
 | `fs search` | `path` (str, **required**), `pattern` (str, **required** — glob, e.g. `*.py`), `--no-recursive` (bool, default `false` — search top level only) |
 | `fs info` | `path` (str, **required**) — returns metadata (size, timestamps, attributes) |
 
