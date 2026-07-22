@@ -188,6 +188,40 @@ def test_snapshot_fn_forwards_all_combined():
     m.assert_called_once_with("snapshot", display=[0], window="note")
 
 
+def test_snapshot_diff_fn_forwards_action_save():
+    with patch.object(obs, "_call", return_value={"output": "saved"}) as m:
+        out = obs.snapshot_diff_fn(action="save")
+    m.assert_called_once_with("snapshot_diff", action="save")
+    assert out == "saved"
+
+
+def test_snapshot_diff_fn_defaults_to_diff_action():
+    # action defaults to "diff" and is always sent; no optional keys when
+    # window/active/display are all falsy.
+    with patch.object(obs, "_call", return_value={"output": "x"}) as m:
+        obs.snapshot_diff_fn()
+    m.assert_called_once_with("snapshot_diff", action="diff")
+
+
+def test_snapshot_diff_fn_forwards_combined_params():
+    # window/active/display are only injected when non-default (mirrors
+    # snapshot_fn: a falsy active must not send active=False).
+    with patch.object(obs, "_call", return_value={"output": "x"}) as m:
+        obs.snapshot_diff_fn(action="diff", window="note", active=True,
+                             display=[0, 1])
+    m.assert_called_once_with("snapshot_diff", action="diff", window="note",
+                              active=True, display=[0, 1])
+
+
+def test_snapshot_diff_fn_returns_retryable_text_on_failure():
+    with patch.object(obs, "_call",
+                      side_effect=RuntimeError("UIA failed [-1003]")):
+        out = obs.snapshot_diff_fn()
+    assert isinstance(out, str)
+    assert "Please try again" in out
+    assert "UIA failed" in out
+
+
 def test_observe_fn_defaults_to_snapshot_plus_screenshot():
     with patch.object(obs, "_call", return_value={"output": "x"}) as m:
         out = obs.observe_fn()
@@ -724,9 +758,9 @@ def test_register_all_registers_every_domain_on_a_fake_mcp():
     # every expected tool name registered
     expected = {
         # observation
-        "screenshot", "snapshot", "observe", "get_text", "element_state",
-        "highlight", "diff", "cleanup_screenshots", "find_image", "pixel_at",
-        "list_displays",
+        "screenshot", "snapshot", "snapshot_diff", "observe", "get_text",
+        "element_state", "highlight", "diff", "cleanup_screenshots",
+        "find_image", "pixel_at", "list_displays",
         # vision
         "ground", "detect", "ask_vision",
         # input

@@ -156,6 +156,39 @@ def snapshot_fn(
         return f"Error capturing desktop state: {e}. Please try again."
 
 
+def snapshot_diff_fn(
+    action: str = "diff",
+    window: str | None = None,
+    active: bool = False,
+    display: list[int] | None = None,
+) -> str:
+    """Diff a stored baseline UIA snapshot against the current desktop.
+
+    Reports added/removed/changed UIA elements. ``action='save'`` captures a
+    baseline, ``action='diff'`` (default) reports deltas, ``action='clear'``
+    drops it. On failure returns a retryable error string instead of raising.
+    (TODO #12)
+
+    ``window``/``active``/``display`` scope the snapshot the diff is computed
+    against, mirroring ``snapshot_fn`` (window/active are mutually exclusive;
+    display composes with either). Scoping must match between the ``save`` and
+    ``diff`` calls for the comparison to be meaningful.
+    """
+    params: dict[str, Any] = {"action": action}
+    if window:
+        params["window"] = window
+    if active:
+        params["active"] = True
+    if display:
+        params["display"] = display
+    try:
+        result = _call("snapshot_diff", **params)
+        return str(result.get("output", result))
+    except (RuntimeError, OSError) as e:
+        logger.warning("snapshot_diff tool failed", exc_info=True)
+        return f"Error diffing desktop state: {e}. Please try again."
+
+
 def observe_fn(
     snapshot: bool = False,
     screenshot: bool = False,
@@ -335,6 +368,21 @@ def register(mcp) -> None:
     def _snapshot(display: list[int] | None = None,
                   window: str | None = None, active: bool = False) -> str:
         return snapshot_fn(display=display, window=window, active=active)
+
+    @mcp.tool(name="snapshot_diff", description=(
+        "Diff a stored baseline UIA snapshot against the current desktop: "
+        "report added/removed/changed UIA elements. action=save captures a "
+        "baseline, action=diff (default) reports deltas, action=clear drops "
+        "it. Keywords: snapshot diff, UI diff, what changed, accessibility "
+        "diff, detect changes, baseline diff. Use window/active to scope to "
+        "one top-level window, display to filter to specific displays."
+    ), annotations=ToolAnnotations(title="Snapshot Diff", readOnlyHint=True,
+                                   idempotentHint=True, openWorldHint=False))
+    def _snapshot_diff(action: str = "diff", window: str | None = None,
+                       active: bool = False,
+                       display: list[int] | None = None) -> str:
+        return snapshot_diff_fn(action=action, window=window, active=active,
+                                display=display)
 
     @mcp.tool(name="observe", description=(
         "Combined observation: snapshot + screenshot (+ optional visual "

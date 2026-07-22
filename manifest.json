@@ -101,6 +101,7 @@
     { "name": "shutdown", "description": "Shut down the system. --delay N schedules (0=immediate, max 600); --force closes apps without saving." },
     { "name": "sleep", "description": "Suspend the system to sleep (S3)." },
     { "name": "snapshot", "description": "Return a semantic snapshot of the UIA accessibility tree: focused window, open windows, and interactive/scrollable elements with their bounding boxes and @eN labels. Use window/active to scope to one top-level window." },
+    { "name": "snapshot_diff", "description": "Diff a stored baseline UIA snapshot against the current desktop: report added/removed/changed UIA elements. action=save captures a baseline, action=diff (default) reports deltas, action=clear drops it." },
     { "name": "type", "description": "Type text using Unicode direct input (bypasses IME)." },
     { "name": "wait", "description": "Wait for a duration, an element (@eN selector) to appear, or text to appear in an interactive element's name." },
     { "name": "wait_for", "description": "Wait until a UI condition holds." }
