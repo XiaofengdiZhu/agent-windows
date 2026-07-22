@@ -1730,8 +1730,6 @@ def _diff_element(a: "ElementInfo", b: "ElementInfo") -> list[tuple[str, str, st
         deltas.append(("offscreen", str(a.is_offscreen), str(b.is_offscreen)))
     if a.is_modal != b.is_modal:
         deltas.append(("modal", str(a.is_modal), str(b.is_modal)))
-    if (a.window_name or "") != (b.window_name or ""):
-        deltas.append(("window", a.window_name or "", b.window_name or ""))
     av = a.metadata.get("value") if a.metadata else None
     bv = b.metadata.get("value") if b.metadata else None
     if av != bv:
@@ -1754,9 +1752,11 @@ def diff_snapshots(baseline: dict, current: dict) -> dict:
     Windows are identity-keyed by ``(process_name, handle)`` — ``handle`` is
     stable for a window's lifetime (only a close+reopen changes it), unlike
     ``title`` which shifts on load/tab/state. A title change thus pairs the
-    window (no add/remove noise). Only window add/remove is reported; changed
-    windows are rare and omitted (a title change surfaces per-element as
-    ``changed:window``, not as a changed window).
+    window: it is NOT add/remove noise, but reported ONCE as ``windows_changed``
+    (window level), not per-element — a title change shifts every element's
+    ``window_name``, so a per-element delta would flood the element Changed
+    list. Element identity excludes ``window_name`` for the same reason (see
+    ``_element_identity``).
     """
     base_els = baseline.get("interactive_elements", [])
     cur_els = current.get("interactive_elements", [])
@@ -1771,6 +1771,15 @@ def diff_snapshots(baseline: dict, current: dict) -> dict:
     cur_w = {(w.process_name, w.handle): w for w in current.get("windows", [])}
     win_added = [cur_w[k] for k in cur_w if k not in base_w]
     win_removed = [base_w[k] for k in base_w if k not in cur_w]
+    # A paired window whose title changed (same process+handle). Reported ONCE
+    # at window level — a title change shifts every element's window_name, so a
+    # per-element changed:window would flood the element Changed list.
+    win_changed = []
+    for key, c_win in cur_w.items():
+        b_win = base_w.get(key)
+        if b_win is not None and (b_win.title or "") != (c_win.title or ""):
+            win_changed.append({"window": c_win,
+                                "title": (b_win.title or "", c_win.title or "")})
 
     return {
         "added": added,
@@ -1778,6 +1787,7 @@ def diff_snapshots(baseline: dict, current: dict) -> dict:
         "changed": changed,
         "windows_added": win_added,
         "windows_removed": win_removed,
+        "windows_changed": win_changed,
         "stats": {"baseline_n": len(base_els), "current_n": len(cur_els)},
     }
 
@@ -1832,6 +1842,8 @@ def render_snapshot_diff(diff: dict, current: dict) -> str:
         summary.append(f'~{len(diff["changed"])} changed')
     if diff["windows_added"]:
         summary.append(f'+{len(diff["windows_added"])} window')
+    if diff.get("windows_changed"):
+        summary.append(f'~{len(diff["windows_changed"])} window title')
     parts.append("  ".join(summary) if summary else "no changes")
     parts.append("")
 
@@ -1862,5 +1874,12 @@ def render_snapshot_diff(diff: dict, current: dict) -> str:
         parts.append(f'### Windows -{len(diff["windows_removed"])}')
         for w in diff["windows_removed"]:
             parts.append(f'"{w.title}" ({w.process_name})')
+        parts.append("")
+    if diff.get("windows_changed"):
+        parts.append(f'### Windows ~{len(diff["windows_changed"])} title')
+        for c in diff["windows_changed"]:
+            w = c["window"]
+            old_t, new_t = c["title"]
+            parts.append(f'"{old_t}" → "{new_t}" ({w.process_name})')
         parts.append("")
     return "\n".join(parts).rstrip() + "\n"
