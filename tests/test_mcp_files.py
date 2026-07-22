@@ -144,6 +144,33 @@ def test_upload_aborts_midstream_over_cap_no_temp(tmp_path):
     assert not any(p.name.startswith(".awpart-") for p in tmp_path.iterdir())
 
 
+def test_download_rejects_relative_path():
+    # Relative paths must 400 (spec: absolute only) — they would otherwise
+    # CWD-anchor via validate_read_path's .resolve(), an undocumented surface.
+    app = _app([Route("/files", download, methods=["GET"])])
+    r = TestClient(app).get("/files?path=relative.bin")
+    assert r.status_code == 400
+    assert "absolute" in r.json()["error"]
+
+
+def test_head_rejects_relative_path():
+    app = _app([Route("/files", head, methods=["HEAD"])])
+    r = TestClient(app).head("/files?path=sub/relative.bin")
+    assert r.status_code == 400
+
+
+def test_upload_rejects_relative_path():
+    r = TestClient(_upload_app(512)).put("/files?path=relative.bin", content=b"x")
+    assert r.status_code == 400
+    assert "absolute" in r.json()["error"]
+
+
+def test_upload_rejects_directory(tmp_path):
+    # PUT to an existing directory must 400 (spec §4), not 409/500.
+    r = TestClient(_upload_app(512)).put(f"/files?path={tmp_path}", content=b"x")
+    assert r.status_code == 400
+
+
 def test_register_file_endpoints_mounts_three_routes():
     from agent_windows.mcp.files import register_file_endpoints
     mounted = []

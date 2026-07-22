@@ -21,7 +21,7 @@ from typing import Any
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
 
-_CHUNK = 64 * 1024  # read granularity for hashing / (upload in Task 3)
+_CHUNK = 64 * 1024  # read granularity for hashing
 
 
 def _err(status: int, message: str, **extra: Any) -> JSONResponse:
@@ -43,6 +43,8 @@ async def download(request: Request) -> Response:
     raw = request.query_params.get("path")
     if not raw:
         return _err(400, "missing required query param 'path'")
+    if not Path(raw).is_absolute():
+        return _err(400, "path must be absolute (relative paths are not supported)")
     from agent_windows.core.filesystem import validate_read_path
     try:
         target = validate_read_path(raw)
@@ -61,6 +63,8 @@ async def head(request: Request) -> Response:
     raw = request.query_params.get("path")
     if not raw:
         return _err(400, "missing required query param 'path'")
+    if not Path(raw).is_absolute():
+        return _err(400, "path must be absolute (relative paths are not supported)")
     from agent_windows.core.filesystem import validate_read_path
     try:
         target = validate_read_path(raw)
@@ -105,6 +109,8 @@ async def upload(request: Request, *, cap: int | None) -> Response:
     raw = request.query_params.get("path")
     if not raw:
         return _err(400, "missing required query param 'path'")
+    if not Path(raw).is_absolute():
+        return _err(400, "path must be absolute (relative paths are not supported)")
     overwrite = str(request.query_params.get("overwrite", "")).strip().lower() in (
         "1", "true", "yes", "on")
     from agent_windows.core.filesystem import validate_write_path
@@ -112,10 +118,12 @@ async def upload(request: Request, *, cap: int | None) -> Response:
         target = validate_write_path(raw)
     except ValueError as exc:
         return _err(403, str(exc))
+    if target.is_dir():
+        return _err(400, "path is a directory; directories are not supported (v1)")
     # Early reject on declared Content-Length (don't read an oversized body).
     if cap is not None:
         cl = request.headers.get("content-length")
-        if cl and cl.isdigit() and int(cl) > cap:
+        if cl and cl.isascii() and cl.isdigit() and int(cl) > cap:
             return _err(413, f"upload exceeds max_upload_mb cap ({cap} bytes)")
     if target.exists() and not overwrite:
         return _err(409, f"target exists; pass overwrite=true to replace: {raw}")
