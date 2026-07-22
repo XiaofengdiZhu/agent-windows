@@ -68,6 +68,8 @@ def _parse_edit_locs(locs: Any) -> list[tuple[int, int, str]]:
     if not isinstance(locs, list) or not locs:
         raise ValueError("locs must be a non-empty list of [x, y, text] triples")
     triples: list[tuple[int, int, str]] = []
+    from agent_windows.utils.config import load_config
+    max_text = load_config().get("input", {}).get("type_text_len", MAX_TYPE_TEXT_LEN)
     for i, entry in enumerate(locs):
         if not isinstance(entry, (list, tuple)) or len(entry) != 3:
             raise ValueError(
@@ -76,9 +78,9 @@ def _parse_edit_locs(locs: Any) -> list[tuple[int, int, str]]:
         text = entry[2]
         if not isinstance(text, str):
             raise ValueError(f"locs[{i}] text must be a string, got {text!r}")
-        if len(text) > MAX_TYPE_TEXT_LEN:
+        if len(text) > max_text:
             raise ValueError(
-                f"locs[{i}] text exceeds the {MAX_TYPE_TEXT_LEN}-character maximum")
+                f"locs[{i}] text exceeds the {max_text}-character maximum")
         triples.append((x, y, text))
     return triples
 
@@ -90,6 +92,8 @@ def _parse_edit_selectors(items: Any) -> list[tuple[int, int, str]]:
     from agent_windows.core.tree import resolve_element_center
 
     triples: list[tuple[int, int, str]] = []
+    from agent_windows.utils.config import load_config
+    max_text = load_config().get("input", {}).get("type_text_len", MAX_TYPE_TEXT_LEN)
     for i, entry in enumerate(items):
         if not isinstance(entry, (list, tuple)) or len(entry) != 2:
             raise ValueError(
@@ -99,9 +103,9 @@ def _parse_edit_selectors(items: Any) -> list[tuple[int, int, str]]:
             raise ValueError(f"selectors[{i}] element ref must be a string, got {sel!r}")
         if not isinstance(text, str):
             raise ValueError(f"selectors[{i}] text must be a string, got {text!r}")
-        if len(text) > MAX_TYPE_TEXT_LEN:
+        if len(text) > max_text:
             raise ValueError(
-                f"selectors[{i}] text exceeds the {MAX_TYPE_TEXT_LEN}-character maximum")
+                f"selectors[{i}] text exceeds the {max_text}-character maximum")
         try:
             x, y = resolve_element_center(sel)
         except CoordinateRangeError:

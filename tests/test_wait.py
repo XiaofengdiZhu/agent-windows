@@ -243,6 +243,23 @@ def test_wait_seconds_at_cap_allowed():
         HANDLERS["wait"]({"seconds": tree_mod.MAX_WAIT_SECONDS})
 
 
+def test_wait_seconds_cap_reads_config():
+    """wait seconds cap reads wait.max_seconds from config, not just the
+    module constant."""
+    from agent_windows.daemon.router import HANDLERS
+    with patch("agent_windows.utils.config.load_config",
+               return_value={"wait": {"max_seconds": 5}}), \
+         patch("agent_windows.daemon.handlers.tree.time") as mt:
+        mt.time.side_effect = [0.0, 1.0]
+        # timeout defaults to 30, which would trip the 5s cap before the
+        # seconds check; pass an in-cap timeout so the seconds-at-cap path runs.
+        HANDLERS["wait"]({"seconds": 5, "timeout": 5})
+    with patch("agent_windows.utils.config.load_config",
+               return_value={"wait": {"max_seconds": 5}}):
+        with pytest.raises(ValueError, match="exceeds the"):
+            HANDLERS["wait"]({"seconds": 6})  # over → rejected
+
+
 # ── wait: interval DoS bound (G14) ─────────────────────────────────
 
 

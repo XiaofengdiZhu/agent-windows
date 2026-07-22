@@ -216,3 +216,27 @@ class TestKeyHoldRange:
         with patch("agent_windows.core.input_controller.key_down") as m:
             HANDLERS["key_down"]({"keys": "a"})
         m.assert_called_once_with("a", hold=None)
+
+
+# ── DoS caps read [input] from config (fallback to module constants) ──
+
+
+class TestInputCapsConfigOverride:
+    """type / key_down DoS caps read [input] from config, falling back to the
+    module constants only when the section is absent."""
+
+    def test_type_cap_reads_config(self):
+        with patch("agent_windows.core.input_controller.type_text"), \
+             patch("agent_windows.utils.config.load_config",
+                   return_value={"input": {"type_text_len": 5}}):
+            HANDLERS["type"]({"text": "x" * 5})  # at cap → ok
+            with pytest.raises(ValueError, match="exceeds the"):
+                HANDLERS["type"]({"text": "x" * 6})  # over → rejected
+
+    def test_key_hold_cap_reads_config(self):
+        with patch("agent_windows.core.input_controller.key_down"), \
+             patch("agent_windows.utils.config.load_config",
+                   return_value={"input": {"key_hold_seconds": 5}}):
+            HANDLERS["key_down"]({"keys": "a", "hold": 5})  # at cap → ok
+            with pytest.raises(ValueError, match="hold must be in"):
+                HANDLERS["key_down"]({"keys": "a", "hold": 5.1})

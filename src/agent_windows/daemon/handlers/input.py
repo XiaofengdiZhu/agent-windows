@@ -104,9 +104,11 @@ def _type(params: dict) -> dict[str, Any]:
     )
 
     text = require(params, "text", str)
-    if len(text) > MAX_TYPE_TEXT_LEN:
+    from agent_windows.utils.config import load_config
+    max_text = load_config().get("input", {}).get("type_text_len", MAX_TYPE_TEXT_LEN)
+    if len(text) > max_text:
         raise ValueError(
-            f"text length {len(text)} exceeds the {MAX_TYPE_TEXT_LEN}-character maximum")
+            f"text length {len(text)} exceeds the {max_text}-character maximum")
     at_x = params.get("at_x")
     at_y = params.get("at_y")
     enter = params.get("enter", False)
@@ -242,9 +244,12 @@ def _key_down(params: dict) -> dict[str, Any]:
             hold = float(hold)
         except (TypeError, ValueError):
             raise ValueError(f"hold must be a number of seconds; got {hold!r}")
-        if not (0 <= hold <= MAX_KEY_HOLD_SECONDS):
+        from agent_windows.utils.config import load_config
+        max_hold = load_config().get("input", {}).get(
+            "key_hold_seconds", MAX_KEY_HOLD_SECONDS)
+        if not (0 <= hold <= max_hold):
             raise ValueError(
-                f"hold must be in [0, {MAX_KEY_HOLD_SECONDS}] seconds; got {hold}")
+                f"hold must be in [0, {max_hold}] seconds; got {hold}")
     key_down(keys, hold=hold)
     return {"output": f"## Key Down\nKeys: {keys}"
             + (f"\nHeld: {hold}s (auto-release)" if hold is not None else "\nHeld: until key-up")}

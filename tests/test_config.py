@@ -355,6 +355,17 @@ class TestSetConfigAllowlist:
         # Optional key read with a fallback, not in DEFAULT_CONFIG.
         assert "screenshot.dir" in keys
 
+    def test_wait_max_seconds_and_input_section(self):
+        from agent_windows.utils.config import DEFAULT_CONFIG, _settable_config_keys
+        assert DEFAULT_CONFIG["wait"]["max_seconds"] == 300
+        inp = DEFAULT_CONFIG["input"]
+        assert inp["type_text_len"] == 10000
+        assert inp["key_hold_seconds"] == 60
+        keys = _settable_config_keys()
+        assert "wait.max_seconds" in keys
+        assert "input.type_text_len" in keys
+        assert "input.key_hold_seconds" in keys
+
     def test_section_names_are_not_settable(self):
         """Setting a bare section name would clobber the whole section."""
         from agent_windows.utils.config import _settable_config_keys

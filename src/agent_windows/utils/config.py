@@ -190,8 +190,21 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "clipboard": {
         "method": "system",  # "system" (PowerShell) or "keyboard" (simulate Ctrl+C/V)
     },
+    "input": {
+        # DoS bounds for keyboard input on the single serial STA worker. type
+        # sleeps per char (~0.02s), so an oversized string blocks for hours;
+        # key_down --hold sleeps for the hold duration. Both caps reject the
+        # over-limit param at the handler edge (INVALID_PARAMS). The module
+        # constants (MAX_TYPE_TEXT_LEN / MAX_KEY_HOLD_SECONDS) stay as fallback.
+        "type_text_len": 10000,  # type / multi_edit text length (SEC3-05)
+        "key_hold_seconds": 60,  # key_down --hold duration (F11)
+    },
     "wait": {
         "poll_interval": 0.5,  # seconds between polls when waiting for element/text
+        # DoS cap: max seconds for wait / wait_for / wait_for_check. An unbounded
+        # value would sleep on the single STA worker (the submit timeout only
+        # reports WAIT_TIMEOUT, it can't interrupt the sleep). (SEC3-01)
+        "max_seconds": 300,
     },
     "shell": {
         # M-05: optional command blacklist — list of case-insensitive regex

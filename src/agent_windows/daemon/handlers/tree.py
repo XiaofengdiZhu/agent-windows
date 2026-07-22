@@ -313,13 +313,14 @@ def _wait(params: dict) -> dict[str, Any]:
 
     # SEC3-01: clamp both bounds so a single wait can't monopolize the STA
     # worker. Values above the cap are rejected (not silently truncated) so the
-    # caller knows the limit applied.
-    if timeout > MAX_WAIT_SECONDS:
+    # caller knows the limit applied. Cap is configurable (wait.max_seconds).
+    max_wait = load_config().get("wait", {}).get("max_seconds", MAX_WAIT_SECONDS)
+    if timeout > max_wait:
         raise ValueError(
-            f"timeout {timeout}s exceeds the {MAX_WAIT_SECONDS}s maximum")
-    if seconds > MAX_WAIT_SECONDS:
+            f"timeout {timeout}s exceeds the {max_wait}s maximum")
+    if seconds > max_wait:
         raise ValueError(
-            f"seconds {seconds}s exceeds the {MAX_WAIT_SECONDS}s maximum")
+            f"seconds {seconds}s exceeds the {max_wait}s maximum")
 
     poll_interval = float(params.get("interval", 0)) or (
         load_config().get("wait", {}).get("poll_interval", 0.5)
@@ -443,9 +444,10 @@ def _wait_for(params: dict) -> dict[str, Any]:
     # resolved below — validate with None here so the bounds check is skipped,
     # then re-check after the fallback resolves (a bad config value must still
     # surface as INVALID_PARAMS rather than a tight busy-loop).
+    max_wait = load_config().get("wait", {}).get("max_seconds", MAX_WAIT_SECONDS)
     condition = validate_wait_for(
         condition, text, window_name, timeout=timeout, interval=None,
-        max_timeout=MAX_WAIT_SECONDS,
+        max_timeout=max_wait,
     )
 
     poll_interval = interval or (
@@ -496,9 +498,10 @@ def _wait_for_check(params: dict) -> dict[str, Any]:
     # Normalize + validate the condition (bad condition → INVALID_PARAMS). Skip
     # the interval check (None) — a single probe has no poll interval — and use
     # a nominal in-range timeout so the timeout bounds check passes.
+    max_wait = load_config().get("wait", {}).get("max_seconds", MAX_WAIT_SECONDS)
     condition = validate_wait_for(
         condition, text, window_name, timeout=1.0, interval=None,
-        max_timeout=MAX_WAIT_SECONDS,
+        max_timeout=max_wait,
     )
 
     cfg = load_config().get("tree", {})
