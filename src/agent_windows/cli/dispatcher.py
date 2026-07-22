@@ -47,6 +47,29 @@ def _ensure_telemetry_configured() -> None:
     _telemetry_configured = True
 
 
+def _stamp_caller_local(params: dict[str, Any] | None) -> dict[str, Any]:
+    """Inject the daemon-internal ``__caller='local'`` envelope (CLI attribution).
+
+    The audit engine attributes each destructive op to a caller; the CLI path
+    is always the local operator, so we stamp ``__caller='local'`` here. The
+    daemon router pops it before handler dispatch (handlers never observe it),
+    and the no-daemon path's ``route_request`` does the same — mirroring the MCP
+    edge (``mcp/_call.py``), which resolves the caller from the live ASGI scope.
+
+    Idempotent and safe to call on both paths: ``dispatch`` stamps before
+    forwarding (covering ``call_daemon``), and ``_dispatch_no_daemon`` stamps
+    again because it is also reachable directly (e.g. tests), so the injection
+    must not depend on passing through ``dispatch``.
+
+    No ``core.audit`` import here — the value is just a string, and importing
+    audit would regress the CLI import-latency guard (M-12). (audit)
+    """
+    if params is None:
+        params = {}
+    params["__caller"] = "local"
+    return params
+
+
 def dispatch(
     method: str,
     params: dict[str, Any] | None = None,
@@ -70,6 +93,7 @@ def dispatch(
         fmt = ctx.obj.get("format", "text")
 
     _ensure_telemetry_configured()
+    params = _stamp_caller_local(params)
 
     # Local-only telemetry: time the tool call and record it (best-effort, off
     # by default). ``time`` is stdlib and the record import is lazy so this
@@ -108,6 +132,11 @@ def _dispatch_no_daemon(method: str, params: dict[str, Any] | None) -> dict[str,
     """
     import ctypes
     import pythoncom
+
+    # _dispatch_no_daemon is also reachable directly (not only via dispatch),
+    # so stamp __caller here too — the injection must not depend on having gone
+    # through dispatch(). Idempotent with dispatch()'s stamp. (audit)
+    params = _stamp_caller_local(params)
 
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(2)

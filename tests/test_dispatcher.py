@@ -9,13 +9,18 @@ class TestDispatch:
 
     @patch("agent_windows.cli.dispatcher.call_daemon")
     def test_daemon_mode_calls_call_daemon(self, mock_call):
-        """In daemon mode, dispatch should forward to call_daemon."""
+        """In daemon mode, dispatch should forward to call_daemon.
+
+        The CLI path stamps the daemon-internal ``__caller='local'`` envelope
+        on every forwarded request (audit attribution), so even an empty params
+        dict reaches the daemon carrying it.
+        """
         from agent_windows.cli.dispatcher import dispatch
         mock_call.return_value = {"output": "ok"}
         ctx = MagicMock()
         ctx.obj = {"no_daemon": False, "debug": False, "format": "text"}
         result = dispatch("ping", {}, ctx=ctx)
-        mock_call.assert_called_once_with("ping", {})
+        mock_call.assert_called_once_with("ping", {"__caller": "local"})
         assert result == {"output": "ok"}
 
     @patch("agent_windows.daemon.router.HANDLERS", {"ping": lambda p: {"status": "ok"}})
@@ -79,13 +84,13 @@ class TestDispatch:
 
     @patch("agent_windows.cli.dispatcher.call_daemon")
     def test_daemon_mode_defaults_params(self, mock_call):
-        """When params is None, dispatch should pass None to call_daemon."""
+        """When params is None, dispatch still injects __caller (never None)."""
         from agent_windows.cli.dispatcher import dispatch
         mock_call.return_value = {"status": "ok"}
         ctx = MagicMock()
         ctx.obj = {"no_daemon": False, "debug": False, "format": "text"}
         dispatch("ping", None, ctx=ctx)
-        mock_call.assert_called_once_with("ping", None)
+        mock_call.assert_called_once_with("ping", {"__caller": "local"})
 
     @patch("agent_windows.cli.dispatcher.call_daemon")
     def test_no_ctx_defaults_to_daemon_mode(self, mock_call):
@@ -93,7 +98,7 @@ class TestDispatch:
         from agent_windows.cli.dispatcher import dispatch
         mock_call.return_value = {"status": "ok"}
         result = dispatch("ping")
-        mock_call.assert_called_once_with("ping", None)
+        mock_call.assert_called_once_with("ping", {"__caller": "local"})
         assert result == {"status": "ok"}
 
     @patch("agent_windows.cli.dispatcher.call_daemon")
@@ -104,7 +109,7 @@ class TestDispatch:
         ctx = MagicMock()
         ctx.obj = None
         result = dispatch("ping", ctx=ctx)
-        mock_call.assert_called_once_with("ping", None)
+        mock_call.assert_called_once_with("ping", {"__caller": "local"})
 
 
 class TestPrintResult:

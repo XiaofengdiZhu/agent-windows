@@ -201,3 +201,48 @@ class TestMcpCallerSpawnsAcrossTaskBoundary:
         # _call read the LIVE per-request scope (IP_B), not the stale
         # contextvar (IP_A). This is the fix.
         assert captured["p"]["__caller"] == f"oauth:{ip_b}"
+
+
+class TestCliCallerInject:
+    def test_dispatch_injects_local(self):
+        """The CLI path stamps __caller='local' on every forwarded request."""
+        from agent_windows.cli import dispatcher
+        captured = {}
+        with patch("agent_windows.cli.dispatcher.call_daemon",
+                   lambda method, params: captured.update(m=method, p=params) or {}):
+            dispatcher.dispatch("fs_delete", {"path": "C:/x"})
+        assert captured["p"]["__caller"] == "local"
+        assert captured["m"] == "fs_delete"
+
+    def test_dispatch_none_params_handled(self):
+        """dispatch(method, None) still injects local without a TypeError."""
+        from agent_windows.cli import dispatcher
+        captured = {}
+        with patch("agent_windows.cli.dispatcher.call_daemon",
+                   lambda method, params: captured.update(p=params) or {}):
+            dispatcher.dispatch("screenshot", None)
+        assert captured["p"] == {"__caller": "local"}
+
+    def test_no_daemon_path_injects_local(self):
+        """The --no-daemon path also carries __caller through route_request.
+
+        ``_dispatch_no_daemon`` is reachable directly (not only via
+        :func:`dispatch`), so it must inject ``__caller`` itself. The COM/DPI
+        calls are mocked at the real modules — ``pythoncom``/``ctypes`` are
+        lazy-imported inside the function body (CLI import-latency guard), so
+        there is no ``dispatcher.pythoncom`` attribute to patch.
+        """
+        from agent_windows.cli import dispatcher
+        captured = {}
+
+        def fake_route(req):
+            captured["params"] = dict(req.params or {})
+            from agent_windows.ipc.protocol import JSONRPCResponse
+            return JSONRPCResponse(id=req.id, result={"output": "ok"})
+
+        with patch("agent_windows.daemon.router.route_request", fake_route), \
+             patch("pythoncom.CoInitialize"), \
+             patch("pythoncom.CoUninitialize"), \
+             patch("ctypes.windll"):
+            dispatcher._dispatch_no_daemon("screenshot", {"x": 1, "y": 2})
+        assert captured["params"]["__caller"] == "local"
