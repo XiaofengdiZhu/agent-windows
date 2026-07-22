@@ -78,23 +78,23 @@ def _snapshot(params: dict) -> dict[str, Any]:
 _snapshot_diff_baseline: dict | None = None
 
 
-def _capture_for_diff(
-    window: str | None, active: bool, display, cfg: dict,
-) -> dict:
-    """Resolve scope + capture a fresh tree via ``traverse_tree`` DIRECTLY.
+def _capture_for_diff(window: str | None, active: bool, cfg: dict) -> dict:
+    """Resolve scope + capture a fresh, UNFILTERED tree via ``traverse_tree``.
 
     Never ``get_tree_snapshot``: the 2s single-slot cache is keyed only by
     TTL, so a save→diff within 2s would return the same cached dict and
     self-diff to a no-op.
+
+    Returns the UNFILTERED snapshot (no display clipping) so the diff path can
+    prime the tree cache with the full tree — ``resolve_element('@eN')`` aligns
+    to the unfiltered snapshot (display survivors carry ``_orig_idx`` pointing
+    into it). Display filtering is a separate step: see :func:`_filter_for_diff`.
     """
     from agent_windows.core.tree import traverse_tree, resolve_window
-    from agent_windows.core.display import (
-        parse_display_selection, filter_snapshot_to_displays,
-    )
     only_window = None
     if active or window:
         only_window, _warning = resolve_window(value=window, active=active)
-    data = traverse_tree(
+    return traverse_tree(
         max_depth=cfg.get("max_depth", 15),
         include_invisible=cfg.get("include_invisible", False),
         include_offscreen=cfg.get("include_offscreen", False),
@@ -102,16 +102,32 @@ def _capture_for_diff(
         timeout=cfg.get("timeout", 10),
         only_window=only_window,
     )
+
+
+def _filter_for_diff(data: dict, display) -> dict:
+    """Apply the optional multi-display clip filter to a captured tree.
+
+    No display param → ``data`` unchanged. A bad selection raises ``ValueError``
+    (→ INVALID_PARAMS at the router). Kept separate from :func:`_capture_for_diff`
+    so the UNFILTERED tree is still available to prime the cache.
+    """
+    from agent_windows.core.display import (
+        parse_display_selection, filter_snapshot_to_displays,
+    )
     sel = parse_display_selection(display)
-    if sel is not None:
-        data = filter_snapshot_to_displays(data, sel)
-    return data
+    return filter_snapshot_to_displays(data, sel) if sel is not None else data
 
 
 def _scope_label(scope: dict) -> str:
-    """Human label for a stored baseline scope (shown in the diff header)."""
+    """Human label for a stored baseline scope (shown in the diff header).
+
+    Window titles are quoted (``"Notepad"``); the generic scopes read as bare
+    phrases so the header renders ``(scope: "Notepad")`` / ``(scope: active
+    window)`` / ``(scope: full desktop)``. The quoting lives here, not in
+    ``render_snapshot_diff``, because only the handler knows the scope kind.
+    """
     if scope.get("window"):
-        return str(scope["window"])
+        return f'"{scope["window"]}"'
     if scope.get("active"):
         return "active window"
     return "full desktop"
@@ -152,14 +168,15 @@ def _snapshot_diff(params: dict) -> dict[str, Any]:
     cfg = load_config().get("tree", {})
 
     if action == "save":
-        data = _capture_for_diff(window, active, display, cfg)
+        raw = _capture_for_diff(window, active, cfg)
+        filtered = _filter_for_diff(raw, display)
         _snapshot_diff_baseline = {
             "scope": {"window": window, "active": active, "display": display},
-            "windows": data.get("windows", []),
-            "interactive_elements": data.get("interactive_elements", []),
+            "windows": filtered.get("windows", []),
+            "interactive_elements": filtered.get("interactive_elements", []),
         }
         n = len(_snapshot_diff_baseline["interactive_elements"])
-        aw = data.get("active_window")
+        aw = filtered.get("active_window")
         scope = f', window: "{aw.title}"' if aw and getattr(aw, "title", None) else ""
         return {"output": f"## Snapshot Diff\nbaseline saved: {n} elements{scope}"}
 
@@ -171,11 +188,15 @@ def _snapshot_diff(params: dict) -> dict[str, Any]:
         window = base["scope"]["window"]
         active = base["scope"]["active"]
         display = base["scope"]["display"]
-    cur = _capture_for_diff(window, active, display, cfg)
-    prime_tree_cache(cur)  # report @eN aligns with the next resolve_element/click
-    diff = diff_snapshots(base, cur)
+    raw = _capture_for_diff(window, active, cfg)
+    filtered = _filter_for_diff(raw, display)
+    # Prime the UNFILTERED tree: resolve_element aligns @eN to the unfiltered
+    # snapshot (display survivors carry _orig_idx into it). Priming filtered
+    # would make @eN refs resolve out-of-bounds / misaligned.
+    prime_tree_cache(raw)
+    diff = diff_snapshots(base, filtered)
     diff["stats"]["scope"] = _scope_label(base["scope"])
-    return {"output": render_snapshot_diff(diff, cur)}
+    return {"output": render_snapshot_diff(diff, filtered)}
 
 
 @handler("get_text")

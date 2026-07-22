@@ -1989,13 +1989,15 @@ def test_render_snapshot_diff_shows_scope_in_header():
     cur = {"interactive_elements": [_el("A", bbox=(0, 0, 10, 10))], "windows": []}
     d = diff_snapshots(base, cur)
     # Scope is injected by the Task 2 handler before render; core never sets it.
-    d["stats"]["scope"] = "Login"
+    # The handler's _scope_label quotes window titles, so the value carries
+    # its own quotes — render just interpolates into `(scope: {scope})`.
+    d["stats"]["scope"] = '"Login"'
     out = render_snapshot_diff(d, cur)
-    assert '(window: "Login")' in out
+    assert '(scope: "Login")' in out
     # Without scope, no parenthetical appears, but the element-count line does.
     del d["stats"]["scope"]
     out_noscope = render_snapshot_diff(d, cur)
-    assert "(window:" not in out_noscope
+    assert "(scope:" not in out_noscope
     assert "elements → current:" in out_noscope
 
 

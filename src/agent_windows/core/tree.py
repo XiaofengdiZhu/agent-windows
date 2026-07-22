@@ -1786,9 +1786,11 @@ def render_snapshot_diff(diff: dict, current: dict) -> str:
     ref_by_id = {id(el): _diff_ref(el, i) for i, el in enumerate(cur_els, 1)}
     stats = diff["stats"]
     # Scope (e.g. the selected window title) is injected by the handler before
-    # render — core has no view of it. Optional: absent → no parenthetical.
+    # render — core has no view of it. The handler's _scope_label carries any
+    # quoting (window titles are quoted; "active window"/"full desktop" are
+    # not), so render interpolates verbatim. Optional: absent → no parenthetical.
     scope = stats.get("scope")
-    scope_part = f' (window: "{scope}")' if scope else ""
+    scope_part = f' (scope: {scope})' if scope else ""
     base_str = f'baseline: {stats["baseline_n"]} elements{scope_part}'
     parts = ["## Snapshot Diff",
              f'{base_str} → current: {stats["current_n"]}']

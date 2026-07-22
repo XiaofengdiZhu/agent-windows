@@ -257,4 +257,52 @@ def test_snapshot_diff_injects_scope_into_header(monkeypatch):
     monkeypatch.setattr("agent_windows.core.tree.prime_tree_cache", lambda d: None)
     HANDLERS["snapshot_diff"]({"action": "save", "window": "Notepad"})
     out = HANDLERS["snapshot_diff"]({"action": "diff"})
-    assert '(window: "Notepad")' in out["output"]
+    assert '(scope: "Notepad")' in out["output"]
+
+
+def test_snapshot_diff_display_primes_unfiltered_tree(monkeypatch):
+    """Lock #1: with --display, prime_tree_cache must receive the UNFILTERED
+    tree. resolve_element aligns @eN to the unfiltered snapshot (display
+    survivors carry _orig_idx pointing into it); priming the filtered tree
+    would make @eN refs resolve out-of-bounds / misaligned. The diff/render
+    path still walks the filtered tree (scope-consistent with the baseline)."""
+    import agent_windows.daemon.handlers.tree as h
+    from agent_windows.core.tree import ElementInfo, BoundingBox
+    unfiltered = _fake_snapshot_data([
+        ElementInfo("A", "ButtonControl", BoundingBox(0, 0, 1, 1)),
+        ElementInfo("B", "ButtonControl", BoundingBox(2, 2, 3, 3)),
+        ElementInfo("C", "ButtonControl", BoundingBox(4, 4, 5, 5)),
+    ])
+    filtered = _fake_snapshot_data([
+        ElementInfo("A", "ButtonControl", BoundingBox(0, 0, 1, 1)),
+    ])
+    primed = {}
+    monkeypatch.setattr(h, "_snapshot_diff_baseline", None, raising=False)
+    _patch_diff_common(monkeypatch)
+    monkeypatch.setattr("agent_windows.core.tree.traverse_tree",
+                        lambda **k: unfiltered)
+    monkeypatch.setattr(
+        "agent_windows.core.display.filter_snapshot_to_displays",
+        lambda data, indices: filtered)
+    monkeypatch.setattr("agent_windows.core.tree.resolve_window",
+                        lambda value=None, active=False: (None, ""))
+    monkeypatch.setattr("agent_windows.core.tree.prime_tree_cache",
+                        lambda d: primed.__setitem__("data", d))
+    # save stores the FILTERED baseline (1 el); display scope is consistent.
+    HANDLERS["snapshot_diff"]({"action": "save", "display": [1]})
+    assert len(h._snapshot_diff_baseline["interactive_elements"]) == 1
+    HANDLERS["snapshot_diff"]({"action": "diff", "display": [1]})
+    # prime must receive the UNFILTERED tree (3 els), not the filtered (1 el).
+    assert len(primed["data"]["interactive_elements"]) == 3
+
+
+def test_snapshot_diff_window_and_active_mutually_exclusive(monkeypatch):
+    _patch_diff_common(monkeypatch)
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        HANDLERS["snapshot_diff"]({"window": "x", "active": True})
+
+
+def test_snapshot_diff_unknown_action_is_invalid_params(monkeypatch):
+    _patch_diff_common(monkeypatch)
+    with pytest.raises(ValueError, match="action must be"):
+        HANDLERS["snapshot_diff"]({"action": "foo"})
