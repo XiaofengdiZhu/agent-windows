@@ -28,7 +28,7 @@ class TestDestructiveAudit:
         with patch("agent_windows.core.filesystem.delete_path",
                    return_value={"output": "ok"}) as m, self._audited() as aud:
             HANDLERS["fs_delete"]({"path": "C:/x", "permanent": True, "recursive": True})
-        m.assert_called_once()
+        m.assert_called_once_with("C:/x", recursive=True, permanent=True, dry_run=False)
         aud.assert_called_once_with(
             "fs_delete", {"path": "C:/x", "permanent": True, "recursive": True}, "ok")
 
@@ -71,6 +71,7 @@ class TestDestructiveAudit:
         assert _method == "registry_set"
         assert subset == {"path": "HKCU:\\S", "name": "Lic", "type": "String"}
         assert "value" not in subset  # value never recorded (secret risk)
+        assert _status == "ok"
 
     def test_registry_delete_whole_key(self):
         with patch("agent_windows.core.registry.delete_entry",
@@ -79,6 +80,18 @@ class TestDestructiveAudit:
         _method, subset, _status = aud.call_args.args
         assert _method == "registry_delete"
         assert subset == {"path": "HKCU:\\S", "name": "<whole key>"}
+        assert _status == "ok"
+
+    def test_registry_delete_default_value(self):
+        """name='' targets the unnamed (default) value, NOT the whole key (BUG-B)."""
+        with patch("agent_windows.core.registry.delete_entry",
+                   return_value={"output": "ok"}) as m, self._audited() as aud:
+            HANDLERS["registry"]({"mode": "delete", "path": "HKCU:\\S", "name": ""})
+        m.assert_called_once_with("HKCU:\\S", name="")
+        _method, subset, _status = aud.call_args.args
+        assert _method == "registry_delete"
+        assert subset == {"path": "HKCU:\\S", "name": ""}  # explicit "" ≠ "<whole key>"
+        assert _status == "ok"
 
     def test_system_shutdown_ok(self):
         with patch("agent_windows.core.power.shutdown_system",

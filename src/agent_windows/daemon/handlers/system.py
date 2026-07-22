@@ -1,19 +1,29 @@
 """System handlers: app management, shell, filesystem, clipboard, process."""
 
-from typing import Any
+from typing import Any, Callable
 
 from agent_windows.daemon.router import handler, require
 
 
-def _run_audited(method: str, subset: dict, fn, *args, **kwargs):
+def _run_audited(
+    method: str,
+    subset: dict[str, Any],
+    fn: Callable[..., Any],
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
     """Run ``fn(*args, **kwargs)`` with destructive-op audit wrapped around it.
 
-    Records the audit status: ``"blocked"`` for a pre-effect
-    :class:`ValueError` / :class:`PermissionError` (e.g. filesystem blacklist or
-    an INVALID_PARAMS validation — the call was rejected before any destructive
-    effect), ``"fail"`` for any other exception, ``"ok"`` on success. The
-    original exception is always re-raised so :func:`route_request` still maps it
-    to the right JSON-RPC code. (audit)
+    Records the audit status: ``"blocked"`` for a rejection raised *by the
+    wrapped core function* before any destructive effect (e.g. a filesystem
+    blacklist :class:`PermissionError` or a "directory not empty"
+    :class:`ValueError`); ``"fail"`` for any other exception; ``"ok"`` on
+    success. The original exception is always re-raised so
+    :func:`route_request` still maps it to the right JSON-RPC code. (audit)
+
+    Note: handler-level param validation (``require``) runs before this helper
+    and raises without producing an audit line — such rejections surface as the
+    JSON-RPC ``INVALID_PARAMS`` reply.
 
     ``method`` is the name recorded in the log; ``subset`` is the already
     privacy-scrubbed param subset (registry ``value`` must be excluded by the
