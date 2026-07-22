@@ -133,3 +133,128 @@ class TestSnapshotWindowScope:
             "snapshot --window must populate _tree_cache via get_tree_snapshot "
             "so resolve_element('@eN') aligns to the subtree, not the full desktop")
         assert tm._tree_cache["windows"] == [target]
+
+
+# ── snapshot-diff handler ────────────────────────────────────────────
+
+
+def _fake_snapshot_data(els=None, wins=None):
+    """Minimal traverse_tree-shaped dict for diff_snapshots/render_snapshot_diff."""
+    return {"interactive_elements": els or [], "windows": wins or [],
+            "active_window": None, "semantic_tree": ""}
+
+
+def _patch_diff_common(monkeypatch):
+    """Patch load_config (deterministic, no file I/O) for snapshot-diff tests."""
+    monkeypatch.setattr("agent_windows.utils.config.load_config", lambda: {})
+
+
+def test_snapshot_diff_save_stores_slot_and_confirms(monkeypatch):
+    import agent_windows.daemon.handlers.tree as h
+    from agent_windows.core.tree import ElementInfo, BoundingBox
+    monkeypatch.setattr(h, "_snapshot_diff_baseline", None, raising=False)
+    _patch_diff_common(monkeypatch)
+    monkeypatch.setattr("agent_windows.core.tree.traverse_tree",
+                        lambda **k: _fake_snapshot_data(
+                            [ElementInfo("A", "ButtonControl", BoundingBox(0, 0, 1, 1))]))
+    monkeypatch.setattr("agent_windows.core.tree.resolve_window",
+                        lambda value=None, active=False: (None, ""))
+    out = HANDLERS["snapshot_diff"]({"action": "save"})
+    assert "baseline saved: 1 elements" in out["output"]
+    assert h._snapshot_diff_baseline is not None
+    assert len(h._snapshot_diff_baseline["interactive_elements"]) == 1
+
+
+def test_snapshot_diff_diff_empty_slot_is_invalid_params(monkeypatch):
+    import agent_windows.daemon.handlers.tree as h
+    monkeypatch.setattr(h, "_snapshot_diff_baseline", None, raising=False)
+    _patch_diff_common(monkeypatch)
+    with pytest.raises(ValueError, match="baseline"):
+        HANDLERS["snapshot_diff"]({"action": "diff"})
+
+
+def test_snapshot_diff_save_then_diff_then_clear(monkeypatch):
+    import agent_windows.daemon.handlers.tree as h
+    from agent_windows.core.tree import ElementInfo, BoundingBox
+    seq = iter([
+        _fake_snapshot_data([ElementInfo("A", "ButtonControl", BoundingBox(0, 0, 1, 1))]),
+        _fake_snapshot_data([ElementInfo("A", "ButtonControl", BoundingBox(0, 0, 1, 1)),
+                             ElementInfo("B", "ButtonControl", BoundingBox(500, 500, 501, 501))]),
+    ])
+    monkeypatch.setattr(h, "_snapshot_diff_baseline", None, raising=False)
+    _patch_diff_common(monkeypatch)
+    monkeypatch.setattr("agent_windows.core.tree.traverse_tree", lambda **k: next(seq))
+    monkeypatch.setattr("agent_windows.core.tree.resolve_window",
+                        lambda value=None, active=False: (None, ""))
+    monkeypatch.setattr("agent_windows.core.tree.prime_tree_cache", lambda d: None)
+    HANDLERS["snapshot_diff"]({"action": "save"})
+    out = HANDLERS["snapshot_diff"]({"action": "diff"})
+    assert "Added" in out["output"]
+    clr = HANDLERS["snapshot_diff"]({"action": "clear"})
+    assert "cleared" in clr["output"]
+    assert h._snapshot_diff_baseline is None
+
+
+def test_snapshot_diff_bypasses_2s_cache(monkeypatch):
+    import agent_windows.daemon.handlers.tree as h
+    calls = {"traverse": 0, "cached": 0}
+    monkeypatch.setattr(h, "_snapshot_diff_baseline", None, raising=False)
+    _patch_diff_common(monkeypatch)
+    monkeypatch.setattr("agent_windows.core.tree.traverse_tree",
+                        lambda **k: (calls.__setitem__("traverse", calls["traverse"] + 1)
+                                     or _fake_snapshot_data()))
+    monkeypatch.setattr("agent_windows.core.tree.get_tree_snapshot",
+                        lambda **k: (calls.__setitem__("cached", calls["cached"] + 1)
+                                     or _fake_snapshot_data()))
+    monkeypatch.setattr("agent_windows.core.tree.resolve_window",
+                        lambda value=None, active=False: (None, ""))
+    monkeypatch.setattr("agent_windows.core.tree.prime_tree_cache", lambda d: None)
+    HANDLERS["snapshot_diff"]({"action": "save"})
+    HANDLERS["snapshot_diff"]({"action": "diff"})
+    assert calls["traverse"] == 2 and calls["cached"] == 0
+
+
+def test_snapshot_diff_reuses_scope_from_slot(monkeypatch):
+    import agent_windows.daemon.handlers.tree as h
+    seen = {}
+    monkeypatch.setattr(h, "_snapshot_diff_baseline", None, raising=False)
+    _patch_diff_common(monkeypatch)
+    monkeypatch.setattr("agent_windows.core.tree.resolve_window",
+                        lambda value=None, active=False: (seen.__setitem__("value", value) or (None, "")))
+    monkeypatch.setattr("agent_windows.core.tree.traverse_tree",
+                        lambda **k: _fake_snapshot_data())
+    monkeypatch.setattr("agent_windows.core.tree.prime_tree_cache", lambda d: None)
+    HANDLERS["snapshot_diff"]({"action": "save", "window": "Notepad"})
+    HANDLERS["snapshot_diff"]({"action": "diff"})
+    assert seen["value"] == "Notepad"
+
+
+def test_snapshot_diff_primes_cache_with_current(monkeypatch):
+    import agent_windows.daemon.handlers.tree as h
+    primed = {}
+    monkeypatch.setattr(h, "_snapshot_diff_baseline", None, raising=False)
+    _patch_diff_common(monkeypatch)
+    monkeypatch.setattr("agent_windows.core.tree.traverse_tree",
+                        lambda **k: _fake_snapshot_data())
+    monkeypatch.setattr("agent_windows.core.tree.resolve_window",
+                        lambda value=None, active=False: (None, ""))
+    monkeypatch.setattr("agent_windows.core.tree.prime_tree_cache",
+                        lambda d: primed.__setitem__("data", d))
+    HANDLERS["snapshot_diff"]({"action": "save"})
+    assert "data" not in primed          # save must NOT prime
+    HANDLERS["snapshot_diff"]({"action": "diff"})
+    assert "data" in primed              # diff primes with current
+
+
+def test_snapshot_diff_injects_scope_into_header(monkeypatch):
+    import agent_windows.daemon.handlers.tree as h
+    monkeypatch.setattr(h, "_snapshot_diff_baseline", None, raising=False)
+    _patch_diff_common(monkeypatch)
+    monkeypatch.setattr("agent_windows.core.tree.traverse_tree",
+                        lambda **k: _fake_snapshot_data())
+    monkeypatch.setattr("agent_windows.core.tree.resolve_window",
+                        lambda value=None, active=False: (None, ""))
+    monkeypatch.setattr("agent_windows.core.tree.prime_tree_cache", lambda d: None)
+    HANDLERS["snapshot_diff"]({"action": "save", "window": "Notepad"})
+    out = HANDLERS["snapshot_diff"]({"action": "diff"})
+    assert '(window: "Notepad")' in out["output"]

@@ -72,6 +72,112 @@ def _snapshot(params: dict) -> dict[str, Any]:
     return {"output": output}
 
 
+# In-memory baseline slot for snapshot-diff. The daemon is serial (one command
+# at a time on one STA worker), so a single module-level slot needs no lock.
+# Daemon restart clears it — verify loops are seconds-long.
+_snapshot_diff_baseline: dict | None = None
+
+
+def _capture_for_diff(
+    window: str | None, active: bool, display, cfg: dict,
+) -> dict:
+    """Resolve scope + capture a fresh tree via ``traverse_tree`` DIRECTLY.
+
+    Never ``get_tree_snapshot``: the 2s single-slot cache is keyed only by
+    TTL, so a save→diff within 2s would return the same cached dict and
+    self-diff to a no-op.
+    """
+    from agent_windows.core.tree import traverse_tree, resolve_window
+    from agent_windows.core.display import (
+        parse_display_selection, filter_snapshot_to_displays,
+    )
+    only_window = None
+    if active or window:
+        only_window, _warning = resolve_window(value=window, active=active)
+    data = traverse_tree(
+        max_depth=cfg.get("max_depth", 15),
+        include_invisible=cfg.get("include_invisible", False),
+        include_offscreen=cfg.get("include_offscreen", False),
+        max_elements=cfg.get("max_elements", 200),
+        timeout=cfg.get("timeout", 10),
+        only_window=only_window,
+    )
+    sel = parse_display_selection(display)
+    if sel is not None:
+        data = filter_snapshot_to_displays(data, sel)
+    return data
+
+
+def _scope_label(scope: dict) -> str:
+    """Human label for a stored baseline scope (shown in the diff header)."""
+    if scope.get("window"):
+        return str(scope["window"])
+    if scope.get("active"):
+        return "active window"
+    return "full desktop"
+
+
+@handler("snapshot_diff")
+def _snapshot_diff(params: dict) -> dict[str, Any]:
+    """Diff a stored baseline UIA snapshot against the current desktop.
+
+    action=save: capture current tree (cache-bypassed) into the in-memory
+    baseline slot, storing its scope (window/active/display). action=clear:
+    drop the slot. action=diff (default): re-capture same-scope current,
+    prime the tree cache with it (so report @eN align with the next
+    resolve_element/click — decision D), and diff against the slot; an
+    explicit --window/--active/--display overrides the current-side scope.
+    Returns a markdown digest.
+    """
+    from agent_windows.core.tree import (
+        diff_snapshots, prime_tree_cache, render_snapshot_diff,
+    )
+    from agent_windows.utils.config import load_config
+
+    global _snapshot_diff_baseline
+    action = params.get("action") or "diff"
+    if action not in ("save", "diff", "clear"):
+        raise ValueError("action must be 'save', 'diff', or 'clear'")
+
+    if action == "clear":
+        _snapshot_diff_baseline = None
+        return {"output": "## Snapshot Diff\nbaseline cleared"}
+
+    window = params.get("window")
+    active = bool(params.get("active"))
+    if window and active:
+        raise ValueError(
+            "snapshot_diff: --window and --active are mutually exclusive")
+    display = params.get("display")
+    cfg = load_config().get("tree", {})
+
+    if action == "save":
+        data = _capture_for_diff(window, active, display, cfg)
+        _snapshot_diff_baseline = {
+            "scope": {"window": window, "active": active, "display": display},
+            "windows": data.get("windows", []),
+            "interactive_elements": data.get("interactive_elements", []),
+        }
+        n = len(_snapshot_diff_baseline["interactive_elements"])
+        aw = data.get("active_window")
+        scope = f', window: "{aw.title}"' if aw and getattr(aw, "title", None) else ""
+        return {"output": f"## Snapshot Diff\nbaseline saved: {n} elements{scope}"}
+
+    # action == "diff"
+    if _snapshot_diff_baseline is None:
+        raise ValueError("no baseline; run 'snapshot-diff --save' first")
+    base = _snapshot_diff_baseline
+    if window is None and not active and display is None:
+        window = base["scope"]["window"]
+        active = base["scope"]["active"]
+        display = base["scope"]["display"]
+    cur = _capture_for_diff(window, active, display, cfg)
+    prime_tree_cache(cur)  # report @eN aligns with the next resolve_element/click
+    diff = diff_snapshots(base, cur)
+    diff["stats"]["scope"] = _scope_label(base["scope"])
+    return {"output": render_snapshot_diff(diff, cur)}
+
+
 @handler("get_text")
 def _get_text(params: dict) -> dict[str, Any]:
     """Get text content of a UIA element."""

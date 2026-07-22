@@ -84,6 +84,21 @@ def get_tree_snapshot(ttl: float = _TREE_CACHE_TTL, **kwargs) -> dict[str, Any]:
     return data
 
 
+def prime_tree_cache(data: dict[str, Any]) -> None:
+    """Replace the 2s tree cache with ``data``, timestamped now.
+
+    Used by snapshot-diff so a freshly captured CURRENT tree becomes the cache
+    that ``resolve_element('@eN')`` / ``click @eN`` read next — keeping the
+    report's refs valid (decision D: baseline bypasses the cache, current
+    primes it). Mirrors the write side of ``get_tree_snapshot`` under the same
+    lock.
+    """
+    global _tree_cache, _tree_cache_ts
+    with _tree_cache_lock:
+        _tree_cache = data
+        _tree_cache_ts = time.time()
+
+
 # ── Control type classification ───────────────────────────────────
 
 INTERACTIVE_TYPES = {
