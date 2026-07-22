@@ -12,6 +12,7 @@ import sys
 from unittest.mock import patch, MagicMock
 
 import pytest
+import typer
 from typer.testing import CliRunner
 
 from agent_windows.cli.main import app, main, _preprocess_argv, _COORD_CMDS
@@ -1414,3 +1415,41 @@ class TestConfigGlobalFlag:
         result = runner.invoke(app, ["config", "show"])
         assert result.exit_code == 0, result.output
         assert cfg.get_config_override() is None
+
+
+# ── audit verify ───────────────────────────────────────────────────────
+
+
+class TestAuditVerifyCommand:
+    def test_verify_all_ok_exit0(self):
+        from agent_windows.cli.commands.audit import verify
+        from agent_windows.core.audit import VerifyReport
+        report = VerifyReport(total=3, verified=3)
+        with patch("agent_windows.core.audit.verify_log", return_value=report):
+            # No raise → exit 0.
+            verify()
+
+    def test_verify_mismatch_exit1(self):
+        from agent_windows.cli.commands.audit import verify
+        from agent_windows.core.audit import VerifyReport
+        report = VerifyReport(total=2, verified=1, mismatched=[2])
+        with patch("agent_windows.core.audit.verify_log", return_value=report):
+            with pytest.raises(typer.Exit) as exc:
+                verify()
+        assert exc.value.exit_code == 1
+
+    def test_verify_missing_file_exit0(self):
+        from agent_windows.cli.commands.audit import verify
+        from agent_windows.core.audit import VerifyReport
+        report = VerifyReport()  # total 0, no malformed
+        with patch("agent_windows.core.audit.verify_log", return_value=report):
+            verify()  # no raise → exit 0
+
+    def test_verify_malformed_exit1(self):
+        from agent_windows.cli.commands.audit import verify
+        from agent_windows.core.audit import VerifyReport
+        report = VerifyReport(malformed=[5])
+        with patch("agent_windows.core.audit.verify_log", return_value=report):
+            with pytest.raises(typer.Exit) as exc:
+                verify()
+        assert exc.value.exit_code == 1

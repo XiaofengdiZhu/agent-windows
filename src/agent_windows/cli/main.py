@@ -160,6 +160,7 @@ app.add_typer(registry_cmd, name="registry")
 from agent_windows.cli.commands.daemon_cmd import app as daemon_app, ping  # noqa: E402
 from agent_windows.cli.commands.config_cmd import app as config_app  # noqa: E402
 from agent_windows.cli.commands.mcp_cmd import app as mcp_app  # noqa: E402
+from agent_windows.cli.commands.audit import app as audit_app  # noqa: E402
 
 # `ping` is a top-level command (README/launcher expose it there), defined in
 # daemon_cmd.py alongside start/stop/status but registered at the root rather
@@ -169,3 +170,4 @@ app.command()(ping)
 app.add_typer(daemon_app, name="daemon")
 app.add_typer(config_app, name="config")
 app.add_typer(mcp_app, name="mcp")
+app.add_typer(audit_app, name="audit")
