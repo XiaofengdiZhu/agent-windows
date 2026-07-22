@@ -37,6 +37,24 @@ def tmp_dir():
 
 
 @pytest.fixture
+def tmp_config(tmp_path, monkeypatch):
+    """Isolate config.py reads/writes at a temp path for one test.
+
+    Patches ``get_config_path`` to a temp file, clears the in-memory cache and
+    any --config override, and unsets the api-key env var so each test starts
+    from clean DEFAULT_CONFIG. Yields the temp config Path. Used by the
+    [audit]-section tests (and any later test that wants a clean config file).
+    """
+    import agent_windows.utils.config as cfg
+
+    cfg.set_config_override(None)
+    cfg._config_cache = None
+    monkeypatch.setattr(cfg, "get_config_path", lambda: tmp_path / "config.toml")
+    monkeypatch.delenv("AGENT_WINDOWS_VLM_API_KEY", raising=False)
+    yield tmp_path / "config.toml"
+
+
+@pytest.fixture
 def mock_config():
     """Provide a mock for load_config returning a standard config."""
     with patch("agent_windows.utils.config.load_config") as m:

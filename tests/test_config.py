@@ -10,6 +10,8 @@ from agent_windows.utils.config import (
     _encrypt_secret,
     _parse_value,
     DEFAULT_CONFIG,
+    load_config,
+    set_config_value,
 )
 
 
@@ -938,3 +940,56 @@ class TestResolveConfigRelative:
             lambda p: str(tmp_path / "tls" / "c.pem") if p == "~/tls/c.pem" else p)
         result = _resolve_config_relative("~/tls/c.pem", tmp_path / "other")
         assert result == str((tmp_path / "tls" / "c.pem").resolve())
+
+
+# ── [audit] section (destructive-op audit) ─────────────────────────────
+
+
+class TestAuditConfig:
+    def test_audit_enabled_default_true(self, tmp_config):
+        """[audit] enabled defaults True (audit is default-on, unlike telemetry)."""
+        cfg = load_config()
+        assert cfg["audit"]["enabled"] is True
+
+    def test_audit_enabled_settable(self, tmp_config):
+        """audit.enabled is a settable leaf; kill-switch for operators."""
+        set_config_value("audit.enabled", "false")
+        assert load_config()["audit"]["enabled"] is False
+
+    def test_audit_key_not_settable(self, tmp_config):
+        """audit.key is NOT in DEFAULT_CONFIG (optional, like oauth_client_secret),
+        so it is not advertised by `config set` and not type-validated."""
+        from agent_windows.utils.config import _settable_config_keys
+        keys = _settable_config_keys()
+        assert "audit.key" not in keys
+        assert "audit.enabled" in keys
+
+    def test_audit_key_dpapi_roundtrip(self, tmp_config):
+        """A lazily-written audit.key is DPAPI-encrypted on disk and decrypted on read."""
+        from agent_windows.utils.config import save_config
+        cfg = load_config()
+        cfg.setdefault("audit", {})["key"] = "test-hmac-secret-1234567890"
+        save_config(cfg)
+        # tmp_config is the patched config path (a Path yielded by the fixture).
+        # Reading it directly — NOT via the top-level get_config_path() import,
+        # which captures the original function at import time and would read the
+        # real ~/.agent-windows/config.toml instead of the temp file.
+        raw = tmp_config.read_text(encoding="utf-8")
+        assert "test-hmac-secret-1234567890" not in raw  # never plaintext on disk
+        assert "dpapi:" in raw
+        # Decrypted back on load.
+        assert load_config()["audit"]["key"] == "test-hmac-secret-1234567890"
+
+
+class TestAuditConfigMask:
+    def test_config_show_masks_audit_key(self, tmp_config, capsys):
+        """`config show` masks audit.key like the other two secrets."""
+        from agent_windows.utils.config import save_config
+        cfg = load_config()
+        cfg.setdefault("audit", {})["key"] = "verylongsecretkeyvalue1234"
+        save_config(cfg)
+        from agent_windows.cli.commands.config_cmd import config_show
+        config_show()
+        out = capsys.readouterr().out
+        assert "verylongsecretkeyvalue1234" not in out
+        assert "..." in out  # masked

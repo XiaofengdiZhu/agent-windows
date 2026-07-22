@@ -46,6 +46,7 @@ def config_show() -> None:
     _mask("vlm", "api_key")
     _mask("mcp", "auth_key")
     _mask("security", "oauth_client_secret")
+    _mask("audit", "key")
     path = get_config_path()
     typer.echo(f"# Config file: {path}")
     typer.echo(toml.dumps(display_config))

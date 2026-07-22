@@ -206,6 +206,16 @@ DEFAULT_CONFIG: dict[str, Any] = {
         # reports WAIT_TIMEOUT, it can't interrupt the sleep). (SEC3-01)
         "max_seconds": 300,
     },
+    "audit": {
+        # Default-on audit log for destructive ops (fs_delete / fs_move /
+        # process_kill / registry set|delete / system_shutdown / system_restart
+        # / sleep): low-frequency / high-harm → record the target. Inverse of
+        # telemetry's opt-in. The kill-switch for operators who want it off.
+        # The HMAC key lives under `key` but is NOT a schema leaf here (it is
+        # lazily generated + DPAPI-encrypted, like oauth_client_secret) so it is
+        # not `config set`-able and not type-validated. (audit)
+        "enabled": True,
+    },
     "shell": {
         # M-05: optional command blacklist — list of case-insensitive regex
         # patterns. A `shell` command matching any pattern is rejected with
@@ -485,6 +495,14 @@ def load_config() -> dict[str, Any]:
             if isinstance(raw_mkey, str) and raw_mkey.startswith("dpapi:"):
                 m["auth_key"] = _decrypt_secret(raw_mkey)
 
+        # Same DPAPI treatment for audit.key (the destructive-op HMAC key),
+        # lazily generated + persisted by core/audit._get_key.
+        a = merged.get("audit")
+        if isinstance(a, dict):
+            raw_akey = a.get("key", "")
+            if isinstance(raw_akey, str) and raw_akey.startswith("dpapi:"):
+                a["key"] = _decrypt_secret(raw_akey)
+
         # Environment variable overrides API key
         env_key = os.environ.get("AGENT_WINDOWS_VLM_API_KEY", "")
         if env_key:
@@ -531,13 +549,15 @@ def _trim_to_non_defaults(config: dict, reference: dict = None) -> dict:
 
 
 def _encrypt_for_write(config: dict) -> dict:
-    """Shallow-copy *config* and DPAPI-encrypt ``vlm.api_key`` / ``mcp.auth_key``
-    for serialization. A key that is empty or already ``dpapi:``-prefixed, or a
-    non-string value, is passed through unchanged. The caller's dict is not
-    mutated (it keeps usable plaintext). Shared by write_config and full-write.
+    """Shallow-copy *config* and DPAPI-encrypt ``vlm.api_key`` /
+    ``mcp.auth_key`` / ``audit.key`` for serialization. A key that is empty or
+    already ``dpapi:``-prefixed, or a non-string value, is passed through
+    unchanged. The caller's dict is not mutated (it keeps usable plaintext).
+    Shared by write_config and full-write.
     """
     to_write = dict(config)
-    for section, field in (("vlm", "api_key"), ("mcp", "auth_key")):
+    for section, field in (("vlm", "api_key"), ("mcp", "auth_key"),
+                           ("audit", "key")):
         sub = to_write.get(section)
         if isinstance(sub, dict):
             sub = dict(sub)
@@ -583,9 +603,10 @@ def write_config(config: dict, path: Path) -> None:
 def save_config(config: dict[str, Any]) -> None:
     """Save config dict to TOML file, writing only non-default values (TODO #10).
 
-    The ``vlm.api_key`` and ``mcp.auth_key`` are DPAPI-encrypted at rest (handled
-    inside :func:`write_config`); all other values are non-secret. The file is
-    restricted to its owner via an ACL. The caller's dict is not mutated.
+    The ``vlm.api_key``, ``mcp.auth_key`` and ``audit.key`` are DPAPI-encrypted
+    at rest (handled inside :func:`write_config`); all other values are
+    non-secret. The file is restricted to its owner via an ACL. The caller's
+    dict is not mutated.
     """
     global _config_cache
     config_path = get_config_path()
