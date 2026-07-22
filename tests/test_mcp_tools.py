@@ -35,7 +35,10 @@ def test_call_forwards_method_and_params_and_returns_result():
     """_call builds a JSONRPCRequest-shaped call and returns the result dict."""
     with patch("agent_windows.mcp._call.call_daemon", return_value={"output": "ok", "path": "x"}) as m:
         result = _call._call("screenshot", output="foo.png", monitor=0)
-    m.assert_called_once_with("screenshot", {"output": "foo.png", "monitor": 0})
+    # __caller is the daemon-internal audit envelope (defaults to "stdio" when
+    # the audit_caller contextvar is unset; popped by the router pre-dispatch).
+    m.assert_called_once_with("screenshot", {"output": "foo.png", "monitor": 0,
+                                             "__caller": "stdio"})
     assert result == {"output": "ok", "path": "x"}
 
 
@@ -43,7 +46,9 @@ def test_call_strips_none_params():
     """Optional args omitted by the caller must not be sent as null."""
     with patch("agent_windows.mcp._call.call_daemon", return_value={"output": "ok"}) as m:
         _call._call("ground", description="taskbar", single_pass=None)
-    m.assert_called_once_with("ground", {"description": "taskbar"})
+    # single_pass=None dropped; __caller still injected after the None-drop.
+    m.assert_called_once_with("ground", {"description": "taskbar",
+                                         "__caller": "stdio"})
 
 
 def test_call_propagates_daemon_error():

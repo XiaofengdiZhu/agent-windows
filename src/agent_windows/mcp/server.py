@@ -143,9 +143,11 @@ class AuthKeyMiddleware:
         # the same way a wrong token does — 401.
         token = auth[7:] if auth[:7].lower() == "bearer " else ""
         if token and secrets.compare_digest(token, self._expected):
+            scope["audit_auth"] = "auth_key"
             await self.app(scope, receive, send)
             return
         if token and self._oauth_validator and self._oauth_validator(token):
+            scope["audit_auth"] = "oauth"
             await self.app(scope, receive, send)
             return
         await send({"type": "http.response.start", "status": 401,
@@ -182,12 +184,38 @@ class OAuthOnlyMiddleware:
         auth = headers.get("authorization", "")
         token = auth[7:] if auth[:7].lower() == "bearer " else ""
         if token and self._oauth_validator(token):
+            scope["audit_auth"] = "oauth"
             await self.app(scope, receive, send)
             return
         await send({"type": "http.response.start", "status": 401,
                     "headers": [[b"content-length", b"0"],
                                 [b"www-authenticate", b"Bearer"]]})
         await send({"type": "http.response.body", "body": b"Unauthorized"})
+
+
+class AuditCallerMiddleware:
+    """ASGI middleware: set the ``audit_caller`` contextvar for the request.
+
+    Combines the remote IP (``scope["client"][0]``) with the auth tag the auth
+    middlewares leave on the scope (``"auth_key"`` / ``"oauth"`` / default
+    ``"anon"``) into ``"<tag>:<ip>"`` (e.g. ``"oauth:10.0.0.4"``). Mounted only
+    on HTTP transports, AFTER the auth gate, so the tag is already set; the
+    contextvar is then read by ``mcp/_call.py`` to inject ``__caller`` into the
+    daemon request. No-op for non-http scopes and requests without a client
+    address (best-effort attribution, not an authz boundary). (audit)
+    """
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope.get("type") == "http":
+            from agent_windows.core.audit import audit_caller
+            client = scope.get("client")
+            ip = client[0] if client else "unknown"
+            tag = scope.get("audit_auth", "anon")
+            audit_caller.set(f"{tag}:{ip}")
+        await self.app(scope, receive, send)
 
 
 def parse_ip_allowlist(raw_entries: list[str]) -> list[ipaddress._BaseNetwork]:
@@ -624,6 +652,11 @@ def run(
             AuthKeyMiddleware, auth_key=auth_key, oauth_validator=oauth_validator))
     elif oauth_validator:
         middleware.append(Middleware(OAuthOnlyMiddleware, oauth_validator=oauth_validator))
+    # AuditCallerMiddleware is always present on HTTP (even anon callers get
+    # "anon:<ip>" attribution). Sits AFTER the auth gate so the auth tag the
+    # auth middlewares leave on the scope is already set. stdio ignores the
+    # middleware list entirely. (audit)
+    middleware.append(Middleware(AuditCallerMiddleware))
     uvicorn_config: dict = {}
     if ssl_certfile and ssl_keyfile:
         uvicorn_config["ssl_certfile"] = ssl_certfile

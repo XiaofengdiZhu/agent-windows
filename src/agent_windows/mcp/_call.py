@@ -32,8 +32,15 @@ def _call(method: str, **params: Any) -> dict[str, Any]:
     unchanged: FastMCP surfaces it as a tool error, and the message already
     carries the JSON-RPC code. The MCP layer does not map ``.code`` itself;
     typed handling lives at the CLI boundary (cli/dispatcher._print_error).
+
+    The daemon-internal ``__caller`` envelope param carries the audit caller
+    identity (read from the ``audit_caller`` contextvar set by
+    ``AuditCallerMiddleware``; defaults to ``"stdio"`` for the stdio transport).
+    The daemon router pops it before dispatch so handlers never observe it. (audit)
     """
+    from agent_windows.core.audit import audit_caller
     clean = {k: v for k, v in params.items() if v is not None}
+    clean["__caller"] = audit_caller.get() or "stdio"
     return call_daemon(method, clean)
 
 
