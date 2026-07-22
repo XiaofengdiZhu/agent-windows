@@ -184,71 +184,83 @@ def route_request(request: JSONRPCRequest) -> JSONRPCResponse:
             request.id,
         )
 
+    # Thread caller identity for the audit log: pop the daemon-internal
+    # ``__caller`` envelope param BEFORE dispatch (no handler ever sees it),
+    # and stash it on the ``audit_caller`` contextvar for this request. The
+    # daemon is single-threaded (one STA worker), so a contextvar set/reset
+    # around dispatch is safe. Default "pipe" = a direct named-pipe client that
+    # injected nothing (best-effort attribution, not an authz boundary). (audit)
+    from agent_windows.core.audit import audit_caller
+    params = dict(request.params or {})
+    caller_token = audit_caller.set(params.pop("__caller", "pipe"))
     try:
-        result = handler_func(request.params or {})
-        return JSONRPCResponse(id=request.id, result=result)
-    except CoordinateRangeError as e:
-        # Out-of-screen coordinates → COORDINATE_OUT_OF_RANGE (-1002), a more
-        # specific code than the generic INVALID_PARAMS. Must be caught before
-        # the ValueError clause below since it's a subclass. (SEC3-02/QUAL3-05)
-        return make_error(COORDINATE_OUT_OF_RANGE, str(e), request.id)
-    except (ValueError, IndexError) as e:
-        return make_error(INVALID_PARAMS, str(e), request.id)
-    except FileNotFoundError as e:
-        # Missing file/dir (and missing UIA element) → ELEMENT_NOT_FOUND (-1001),
-        # a more specific code than the generic DAEMON_INTERNAL_ERROR and without
-        # the logger.exception log spam a routine "file not found" would cause.
-        return make_error(ELEMENT_NOT_FOUND, str(e), request.id)
-    except TimeoutError as e:
-        return make_error(WAIT_TIMEOUT, str(e), request.id)
-    except PermissionError as e:
-        # M-05: shell blacklist (and any other policy denial) → PERMISSION_DENIED,
-        # not the generic DAEMON_INTERNAL_ERROR.
-        return make_error(PERMISSION_DENIED, str(e), request.id)
-    except UIADeadElementError as e:
-        # Element/window gone or its process disconnected (UIA_E_ELEMENTNOT-
-        # AVAILABLE / RPC_E_DISCONNECTED / …). The desired action can no longer
-        # succeed, so ELEMENT_NOT_FOUND (-1001) is the actionable signal for a
-        # client to re-snapshot and retry. (TODO #6 decision 2)
-        return make_error(ELEMENT_NOT_FOUND, str(e), request.id)
-    except UIAInvalidOperationError as e:
-        # UIA_E_INVALIDOPERATION — the element is live but the call is invalid
-        # in its current state (e.g. expand on a control that can't now). Maps
-        # to INVALID_PARAMS rather than a generic internal error.
-        return make_error(INVALID_PARAMS, str(e), request.id)
-    except (UIANotEnabledError, UIANotSupportedError) as e:
-        # Both = "request is valid JSON-RPC but the element can't satisfy it"
-        # (disabled element, or unsupported property/pattern) → INVALID_PARAMS.
-        return make_error(INVALID_PARAMS, str(e), request.id)
-    except UIATimeoutError as e:
-        # UIA/RPC timeout — the typed mirror of the stdlib TimeoutError clause
-        # above: WAIT_TIMEOUT (-1003). (TODO #6 decision 2)
-        return make_error(WAIT_TIMEOUT, str(e), request.id)
-    except UIAAccessDeniedError as e:
-        # E_ACCESSDENIED / RPC_E_ACCESS_DENIED (e.g. elevated target from a
-        # non-elevated daemon) — the typed mirror of the stdlib PermissionError
-        # clause above: PERMISSION_DENIED (-1004). (TODO #6 decision 2)
-        return make_error(PERMISSION_DENIED, str(e), request.id)
-    except UIARetryableError as e:
-        # Target process is busy (RPC_E_CALL_REJECTED / …SERVERCALL_RETRY…).
-        # This is transient, not a dead element — the client may retry the very
-        # same request. The protocol has no SERVICE_BUSY code, so this surfaces
-        # as DAEMON_INTERNAL_ERROR with the typed reason (RPC_E_CALL_REJECTED
-        # reaches the client); logged at info (expected under load) rather than
-        # .exception (which implies a crash). (TODO #6 decision 2) — a future
-        # -1006 SERVICE_BUSY code would let clients retry programmatically.
-        logger.info("Retryable UIA error for %s: %s", request.method, e)
-        return make_error(DAEMON_INTERNAL_ERROR, str(e), request.id)
-    except UIAException as e:
-        # Any other typed UIA error (timeout / access-denied / thread / unknown)
-        # — log at debug (mostly transient or environmental) and let the typed
-        # message surface instead of the bare COMError. Must come AFTER the
-        # specific subclasses above. (TODO #6 decision 2)
-        logger.debug("UIA error for %s: %s", request.method, e)
-        return make_error(DAEMON_INTERNAL_ERROR, str(e), request.id)
-    except Exception as e:
-        logger.exception("Handler error for %s", request.method)
-        return make_error(DAEMON_INTERNAL_ERROR, str(e), request.id)
+        try:
+            result = handler_func(params)
+            return JSONRPCResponse(id=request.id, result=result)
+        except CoordinateRangeError as e:
+            # Out-of-screen coordinates → COORDINATE_OUT_OF_RANGE (-1002), a more
+            # specific code than the generic INVALID_PARAMS. Must be caught before
+            # the ValueError clause below since it's a subclass. (SEC3-02/QUAL3-05)
+            return make_error(COORDINATE_OUT_OF_RANGE, str(e), request.id)
+        except (ValueError, IndexError) as e:
+            return make_error(INVALID_PARAMS, str(e), request.id)
+        except FileNotFoundError as e:
+            # Missing file/dir (and missing UIA element) → ELEMENT_NOT_FOUND (-1001),
+            # a more specific code than the generic DAEMON_INTERNAL_ERROR and without
+            # the logger.exception log spam a routine "file not found" would cause.
+            return make_error(ELEMENT_NOT_FOUND, str(e), request.id)
+        except TimeoutError as e:
+            return make_error(WAIT_TIMEOUT, str(e), request.id)
+        except PermissionError as e:
+            # M-05: shell blacklist (and any other policy denial) → PERMISSION_DENIED,
+            # not the generic DAEMON_INTERNAL_ERROR.
+            return make_error(PERMISSION_DENIED, str(e), request.id)
+        except UIADeadElementError as e:
+            # Element/window gone or its process disconnected (UIA_E_ELEMENTNOT-
+            # AVAILABLE / RPC_E_DISCONNECTED / …). The desired action can no longer
+            # succeed, so ELEMENT_NOT_FOUND (-1001) is the actionable signal for a
+            # client to re-snapshot and retry. (TODO #6 decision 2)
+            return make_error(ELEMENT_NOT_FOUND, str(e), request.id)
+        except UIAInvalidOperationError as e:
+            # UIA_E_INVALIDOPERATION — the element is live but the call is invalid
+            # in its current state (e.g. expand on a control that can't now). Maps
+            # to INVALID_PARAMS rather than a generic internal error.
+            return make_error(INVALID_PARAMS, str(e), request.id)
+        except (UIANotEnabledError, UIANotSupportedError) as e:
+            # Both = "request is valid JSON-RPC but the element can't satisfy it"
+            # (disabled element, or unsupported property/pattern) → INVALID_PARAMS.
+            return make_error(INVALID_PARAMS, str(e), request.id)
+        except UIATimeoutError as e:
+            # UIA/RPC timeout — the typed mirror of the stdlib TimeoutError clause
+            # above: WAIT_TIMEOUT (-1003). (TODO #6 decision 2)
+            return make_error(WAIT_TIMEOUT, str(e), request.id)
+        except UIAAccessDeniedError as e:
+            # E_ACCESSDENIED / RPC_E_ACCESS_DENIED (e.g. elevated target from a
+            # non-elevated daemon) — the typed mirror of the stdlib PermissionError
+            # clause above: PERMISSION_DENIED (-1004). (TODO #6 decision 2)
+            return make_error(PERMISSION_DENIED, str(e), request.id)
+        except UIARetryableError as e:
+            # Target process is busy (RPC_E_CALL_REJECTED / …SERVERCALL_RETRY…).
+            # This is transient, not a dead element — the client may retry the very
+            # same request. The protocol has no SERVICE_BUSY code, so this surfaces
+            # as DAEMON_INTERNAL_ERROR with the typed reason (RPC_E_CALL_REJECTED
+            # reaches the client); logged at info (expected under load) rather than
+            # .exception (which implies a crash). (TODO #6 decision 2) — a future
+            # -1006 SERVICE_BUSY code would let clients retry programmatically.
+            logger.info("Retryable UIA error for %s: %s", request.method, e)
+            return make_error(DAEMON_INTERNAL_ERROR, str(e), request.id)
+        except UIAException as e:
+            # Any other typed UIA error (timeout / access-denied / thread / unknown)
+            # — log at debug (mostly transient or environmental) and let the typed
+            # message surface instead of the bare COMError. Must come AFTER the
+            # specific subclasses above. (TODO #6 decision 2)
+            logger.debug("UIA error for %s: %s", request.method, e)
+            return make_error(DAEMON_INTERNAL_ERROR, str(e), request.id)
+        except Exception as e:
+            logger.exception("Handler error for %s", request.method)
+            return make_error(DAEMON_INTERNAL_ERROR, str(e), request.id)
+    finally:
+        audit_caller.reset(caller_token)
 
 
 # ── Built-in handlers ─────────────────────────────────────────────
