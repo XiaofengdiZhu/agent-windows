@@ -22,6 +22,39 @@ def _as_bool(value: Any) -> bool:
     return value is True or (isinstance(value, str) and value.lower() == "true")
 
 
+def _resolve_audit_caller() -> str:
+    """Audit caller identity for the daemon request, or ``"stdio"``.
+
+    Reads the LIVE per-request HTTP scope via FastMCP's ``get_http_request`` so
+    mid-session IP/auth changes are attributed correctly. A contextvar approach
+    breaks in stateful streamable-http: the long-lived ``run_server`` task the
+    SDK spawns once per session (via ``TaskGroup.start``) COPIES the
+    session-creator's context at spawn, so every later request's middleware
+    ``contextvar.set`` is invisible to it. The ASGI scope, by contrast, is the
+    real per-request object — the SDK carries the live ``Request`` in each
+    message's metadata and binds it into ``request_ctx`` inside ``run_server``,
+    so ``get_http_request`` always returns the current request. (audit)
+
+    Returns ``"<tag>:<ip>"`` (tag = ``auth_key``/``oauth``/``anon`` from
+    ``scope["audit_auth"]``, set by the auth middlewares on their success
+    branches) for HTTP, or ``"stdio"`` when there is no active HTTP request
+    (stdio transport, or a background task with no bound request).
+    ``get_http_request`` raises ``RuntimeError`` (never returns ``None``) when
+    no request is bound; that is caught so a tool call never breaks over an
+    audit-attribution failure.
+    """
+    try:
+        from fastmcp.server.dependencies import get_http_request
+        req = get_http_request()
+    except Exception:  # noqa: BLE001 — audit attribution must never break a call
+        return "stdio"
+    scope = req.scope
+    client = scope.get("client")
+    ip = client[0] if client else "unknown"
+    tag = scope.get("audit_auth", "anon")
+    return f"{tag}:{ip}"
+
+
 def _call(method: str, **params: Any) -> dict[str, Any]:
     """Forward a daemon method call and return its result dict.
 
@@ -34,13 +67,14 @@ def _call(method: str, **params: Any) -> dict[str, Any]:
     typed handling lives at the CLI boundary (cli/dispatcher._print_error).
 
     The daemon-internal ``__caller`` envelope param carries the audit caller
-    identity (read from the ``audit_caller`` contextvar set by
-    ``AuditCallerMiddleware``; defaults to ``"stdio"`` for the stdio transport).
-    The daemon router pops it before dispatch so handlers never observe it. (audit)
+    identity, read from the LIVE HTTP request scope via
+    :func:`_resolve_audit_caller` (the contextvar approach is wrong in stateful
+    streamable-http — see that function's docstring). Defaults to ``"stdio"``
+    for the stdio transport / when no HTTP request is active. The daemon router
+    pops it before dispatch so handlers never observe it. (audit)
     """
-    from agent_windows.core.audit import audit_caller
     clean = {k: v for k, v in params.items() if v is not None}
-    clean["__caller"] = audit_caller.get() or "stdio"
+    clean["__caller"] = _resolve_audit_caller()
     return call_daemon(method, clean)
 
 

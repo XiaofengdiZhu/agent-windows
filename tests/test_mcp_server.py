@@ -152,13 +152,13 @@ def test_run_http_without_auth_key_only_has_options_middleware():
         server.run(transport="streamable-http", host="127.0.0.1", port=9000,
                    auth_key=None)
     kwargs = fake.run.call_args.kwargs
-    # No auth_key and no CORS → only OptionsMiddleware (preflight gate) and the
-    # always-on AuditCallerMiddleware (audit attribution; anon:<ip> with no auth
-    # tag) are present. AuthKeyMiddleware / IPAllowlistMiddleware / CORSMiddleware
-    # are absent.
+    # No auth_key and no CORS → only OptionsMiddleware (preflight gate) is
+    # present. Audit caller attribution is read from the live per-request HTTP
+    # scope at tool-dispatch time in mcp/_call.py (no middleware), so no
+    # AuditCallerMiddleware is mounted. AuthKeyMiddleware / IPAllowlistMiddleware
+    # / CORSMiddleware are absent too.
     kinds = [mw.cls for mw in kwargs["middleware"]]
-    from agent_windows.mcp.server import AuditCallerMiddleware
-    assert kinds == [OptionsMiddleware, AuditCallerMiddleware]
+    assert kinds == [OptionsMiddleware]
 
 
 # ── /files endpoint mount gating ─────────────────────────────────────────
@@ -921,16 +921,18 @@ def test_run_http_mounts_trustedhost_when_allowed_hosts_set():
 
 
 def test_run_full_middleware_ordering():
-    """All six middlewares assemble in the documented order when configured.
+    """All five middlewares assemble in the documented order when configured.
 
-    Options → TrustedHost → CORS → IPAllowlist → AuthKey → AuditCaller. Pairwise
-    tests leave the TrustedHost↔CORS adjacency unverified; this locks the whole
-    chain. AuditCallerMiddleware is innermost (last) so it runs after the auth
-    gate and the auth tag the gate leaves on the scope is already set. (audit)
+    Options → TrustedHost → CORS → IPAllowlist → AuthKey. Pairwise tests leave
+    the TrustedHost↔CORS adjacency unverified; this locks the whole chain. Audit
+    caller attribution is no longer a middleware — it is read from the live
+    per-request HTTP scope at tool-dispatch time in mcp/_call.py (the old
+    AuditCallerMiddleware set a contextvar that was stale across the stateful
+    session task boundary). (audit)
     """
     from agent_windows.mcp import server
     from agent_windows.mcp.server import (OptionsMiddleware,
-        IPAllowlistMiddleware, AuthKeyMiddleware, AuditCallerMiddleware)
+        IPAllowlistMiddleware, AuthKeyMiddleware)
     from starlette.middleware.trustedhost import TrustedHostMiddleware
     from starlette.middleware.cors import CORSMiddleware
     import ipaddress
@@ -942,14 +944,13 @@ def test_run_full_middleware_ordering():
                    allowed_hosts=["localhost", "127.0.0.1", "[::1]"])
     kinds = [mw.cls for mw in fake.run.call_args.kwargs["middleware"]]
     assert kinds == [OptionsMiddleware, TrustedHostMiddleware,
-                     CORSMiddleware, IPAllowlistMiddleware, AuthKeyMiddleware,
-                     AuditCallerMiddleware]
+                     CORSMiddleware, IPAllowlistMiddleware, AuthKeyMiddleware]
 
 
 def test_run_http_omits_trustedhost_when_allowed_hosts_none():
-    """No allowed_hosts → no TrustedHostMiddleware (Options + AuditCaller only)."""
+    """No allowed_hosts → no TrustedHostMiddleware (Options only)."""
     from agent_windows.mcp import server
-    from agent_windows.mcp.server import OptionsMiddleware, AuditCallerMiddleware
+    from agent_windows.mcp.server import OptionsMiddleware
     from starlette.middleware.trustedhost import TrustedHostMiddleware
     fake = MagicMock()
     with patch.object(server, "build_server", return_value=fake):
@@ -957,7 +958,7 @@ def test_run_http_omits_trustedhost_when_allowed_hosts_none():
                    allowed_hosts=None)
     kinds = [mw.cls for mw in fake.run.call_args.kwargs["middleware"]]
     assert TrustedHostMiddleware not in kinds
-    assert kinds == [OptionsMiddleware, AuditCallerMiddleware]
+    assert kinds == [OptionsMiddleware]
 
 
 def test_serve_forwards_allowed_hosts_for_loopback_http_bind():
@@ -1027,22 +1028,21 @@ def test_serve_allow_insecure_remote_forwards_none_allowed_hosts():
 
 def test_run_http_forwards_ip_allowlist_as_middleware():
     from agent_windows.mcp import server
-    from agent_windows.mcp.server import (IPAllowlistMiddleware, AuthKeyMiddleware,
-                                          AuditCallerMiddleware)
+    from agent_windows.mcp.server import IPAllowlistMiddleware, AuthKeyMiddleware
     import ipaddress
     fake = MagicMock()
     nets = [ipaddress.ip_network("10.0.0.0/8")]
     # Pass both ip_allowlist and auth_key so both middlewares are assembled and
     # we can assert ordering: OptionsMiddleware (always outermost), then
     # IPAllowlistMiddleware, then AuthKeyMiddleware — a blocked IP never reaches
-    # the auth challenge. AuditCallerMiddleware trails (always-on, post-auth). (audit)
+    # the auth challenge. Audit attribution needs no middleware (read from the
+    # live scope in mcp/_call.py). (audit)
     with patch.object(server, "build_server", return_value=fake):
         server.run(transport="streamable-http", host="127.0.0.1", port=9000,
                    auth_key="k", ip_allowlist=nets)
     kwargs = fake.run.call_args.kwargs
     kinds = [mw.cls for mw in kwargs["middleware"]]
-    assert kinds[1:] == [IPAllowlistMiddleware, AuthKeyMiddleware,
-                         AuditCallerMiddleware]
+    assert kinds[1:] == [IPAllowlistMiddleware, AuthKeyMiddleware]
 
 
 def test_mcp_serve_forwards_ip_allowlist_flag():

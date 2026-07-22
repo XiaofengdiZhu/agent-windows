@@ -1,5 +1,6 @@
 """Tests for __caller envelope threading: router pop + MCP/CLI injection."""
 import asyncio
+import types
 from unittest.mock import patch
 
 from agent_windows.daemon.router import route_request
@@ -54,93 +55,149 @@ class TestRouterCallerPop:
         assert audit_caller.get() is None  # reset after dispatch
 
 
-class TestMcpCallerInject:
-    def test_call_injects_caller_from_contextvar(self):
-        """_call injects __caller from audit_caller (HTTP edge sets it)."""
-        from agent_windows.core.audit import audit_caller
+class TestResolveAuditCaller:
+    """Unit tests for mcp/_call.py::_resolve_audit_caller.
+
+    The helper reads the LIVE per-request HTTP scope via FastMCP's
+    ``get_http_request`` (falling back to ``"stdio"`` when there is no active
+    request). These tests monkeypatch ``get_http_request`` directly.
+    """
+
+    def test_returns_stdio_when_get_http_request_raises(self):
+        """No active HTTP request (stdio / unit test) → 'stdio'.
+
+        get_http_request() RAISES RuntimeError when no request is bound (it
+        does not return None); the helper must catch that and fall back.
+        """
+        from agent_windows.mcp._call import _resolve_audit_caller
+        with patch("fastmcp.server.dependencies.get_http_request",
+                   side_effect=RuntimeError("No active HTTP request found.")):
+            assert _resolve_audit_caller() == "stdio"
+
+    def test_returns_tag_and_ip_from_live_scope(self):
+        """A live request scope yields '<tag>:<ip>' from audit_auth + client."""
+        from agent_windows.mcp._call import _resolve_audit_caller
+        fake = types.SimpleNamespace(scope={
+            "type": "http", "client": ("10.0.0.4", 5000), "audit_auth": "oauth"})
+        with patch("fastmcp.server.dependencies.get_http_request",
+                   return_value=fake):
+            assert _resolve_audit_caller() == "oauth:10.0.0.4"
+
+    def test_anon_default_when_no_audit_auth_tag(self):
+        """Missing audit_auth tag → 'anon' (auth middlewares tag on success)."""
+        from agent_windows.mcp._call import _resolve_audit_caller
+        fake = types.SimpleNamespace(scope={
+            "type": "http", "client": ("203.0.113.9", 5000)})
+        with patch("fastmcp.server.dependencies.get_http_request",
+                   return_value=fake):
+            assert _resolve_audit_caller() == "anon:203.0.113.9"
+
+    def test_unknown_ip_when_no_client(self):
+        """A scope without a client tuple → 'unknown' IP (best-effort)."""
+        from agent_windows.mcp._call import _resolve_audit_caller
+        fake = types.SimpleNamespace(scope={
+            "type": "http", "audit_auth": "auth_key"})
+        with patch("fastmcp.server.dependencies.get_http_request",
+                   return_value=fake):
+            assert _resolve_audit_caller() == "auth_key:unknown"
+
+    def test_call_injects_resolved_caller(self):
+        """_call injects __caller from _resolve_audit_caller (live scope)."""
         from agent_windows.mcp._call import _call
-        token = audit_caller.set("oauth:10.0.0.4")
+        fake = types.SimpleNamespace(scope={
+            "type": "http", "client": ("10.0.0.4", 5000), "audit_auth": "oauth"})
         captured = {}
-        try:
-            with patch("agent_windows.mcp._call.call_daemon",
-                       lambda method, params: captured.update(m=method, p=params) or {}):
-                _call("fs_delete", path="C:/x")
-        finally:
-            audit_caller.reset(token)
+        with patch("agent_windows.mcp._call.call_daemon",
+                   lambda method, params: captured.update(m=method, p=params) or {}), \
+             patch("fastmcp.server.dependencies.get_http_request",
+                   return_value=fake):
+            _call("fs_delete", path="C:/x")
         assert captured["p"]["__caller"] == "oauth:10.0.0.4"
         assert captured["m"] == "fs_delete"
 
-    def test_call_defaults_stdio(self):
-        """No contextvar set (stdio transport) → __caller = 'stdio'."""
-        from agent_windows.core.audit import audit_caller
+    def test_call_defaults_stdio_without_http_request(self):
+        """No HTTP request active → __caller = 'stdio' (stdio transport)."""
         from agent_windows.mcp._call import _call
-        token = audit_caller.set(None)
         captured = {}
-        try:
-            with patch("agent_windows.mcp._call.call_daemon",
-                       lambda method, params: captured.update(p=params) or {}):
-                _call("fs_delete", path="C:/x")
-        finally:
-            audit_caller.reset(token)
+        with patch("agent_windows.mcp._call.call_daemon",
+                   lambda method, params: captured.update(p=params) or {}), \
+             patch("fastmcp.server.dependencies.get_http_request",
+                   side_effect=RuntimeError("No active HTTP request found.")):
+            _call("fs_delete", path="C:/x")
         assert captured["p"]["__caller"] == "stdio"
 
 
-class TestAuditCallerMiddleware:
-    """The middleware sets audit_caller from scope client IP + auth tag.
+class TestMcpCallerSpawnsAcrossTaskBoundary:
+    """Integration proof: _call reads the LIVE request scope, not a stale
+    contextvar, across the stateful streamable-http task boundary.
 
-    Drives the raw-ASGI middleware with ``asyncio.run`` in a sync test, matching
-    the suite's convention (see ``tests/test_mcp_server._drive``); no
-    pytest-asyncio plugin is on the dev path.
+    The bug (commit 3d59d31): ``AuditCallerMiddleware`` set ``audit_caller``
+    in the request task, but the tool handler runs inside a long-lived
+    ``run_server`` task that the SDK spawned via ``TaskGroup.start`` at session
+    creation — which COPIES the parent (session-creator) context. The later
+    request's contextvar ``.set()`` is invisible to that already-running task,
+    so every mid-session IP/auth change was mis-attributed.
+
+    This test reproduces that task topology with ``anyio`` (the same library
+    the SDK uses): a long-lived task spawned via ``tg.start()`` (copy-on-spawn
+    context) runs ``_call``, while the live per-request identity comes from
+    ``get_http_request`` (the real path the SDK sets per-request via message
+    metadata → ``request_ctx``). It asserts BOTH that the contextvar is stale
+    (proving the old approach mis-attributes) AND that ``_call`` still returns
+    the live IP (proving the fix).
     """
 
-    def test_oauth_tag(self):
-        from agent_windows.mcp.server import AuditCallerMiddleware
+    def test_call_reads_live_scope_not_stale_contextvar(self):
+        """_call attributes to the live scope (IP_B), not stale contextvar."""
+        import anyio
         from agent_windows.core.audit import audit_caller
-        inner_called = {}
+        from agent_windows.mcp._call import _call
 
-        async def app(scope, receive, send):
-            inner_called["caller"] = audit_caller.get()
+        ip_a = "10.0.0.1"   # session-creator IP (stale contextvar)
+        ip_b = "10.0.0.2"   # second-request IP (live scope)
+        captured: dict = {}
 
-        asyncio.run(AuditCallerMiddleware(app)(
-            {"type": "http", "client": ("10.0.0.4", 5000),
-             "audit_auth": "oauth"}, None, None))
-        assert inner_called["caller"] == "oauth:10.0.0.4"
+        async def main() -> None:
+            # Session-creator context: the old AuditCallerMiddleware would set
+            # audit_caller here, on the session-creating request.
+            token = audit_caller.set(f"oauth:{ip_a}")
+            try:
+                async def run_server(*, task_status) -> None:
+                    # Inside the spawned task: context was COPIED at spawn, so
+                    # audit_caller still reads the session-creator's IP_A. This
+                    # is exactly the run_server task the SDK spawns once per
+                    # session. A later request arrives: the SDK carries the live
+                    # Request in message metadata and sets request_ctx from it
+                    # inside this task; get_http_request reads that live scope.
+                    task_status.started()
+                    live_scope = {
+                        "type": "http",
+                        "client": (ip_b, 5000),
+                        "audit_auth": "oauth",
+                    }
+                    fake_req = types.SimpleNamespace(scope=live_scope)
+                    # Prove the contextvar is STALE inside the spawned task —
+                    # the old approach (audit_caller.get()) would mis-attribute.
+                    captured["stale_contextvar"] = audit_caller.get()
+                    with patch("agent_windows.mcp._call.call_daemon",
+                               lambda method, params: (
+                                   captured.update(p=params) or {})), \
+                         patch(
+                             "fastmcp.server.dependencies.get_http_request",
+                             return_value=fake_req):
+                        # _call runs here, INSIDE the spawned run_server task.
+                        _call("fs_delete", path="C:/x")
 
-    def test_auth_key_tag(self):
-        from agent_windows.mcp.server import AuditCallerMiddleware
-        from agent_windows.core.audit import audit_caller
-        inner_called = {}
+                async with anyio.create_task_group() as tg:
+                    await tg.start(run_server)
+            finally:
+                audit_caller.reset(token)
 
-        async def app(scope, receive, send):
-            inner_called["caller"] = audit_caller.get()
+        asyncio.run(main())
 
-        asyncio.run(AuditCallerMiddleware(app)(
-            {"type": "http", "client": ("203.0.113.9", 5000),
-             "audit_auth": "auth_key"}, None, None))
-        assert inner_called["caller"] == "auth_key:203.0.113.9"
-
-    def test_anon_default(self):
-        from agent_windows.mcp.server import AuditCallerMiddleware
-        from agent_windows.core.audit import audit_caller
-        inner_called = {}
-
-        async def app(scope, receive, send):
-            inner_called["caller"] = audit_caller.get()
-
-        asyncio.run(AuditCallerMiddleware(app)(
-            {"type": "http", "client": ("1.2.3.4", 5000)}, None, None))
-        assert inner_called["caller"] == "anon:1.2.3.4"
-
-    def test_non_http_no_set(self):
-        from agent_windows.mcp.server import AuditCallerMiddleware
-        from agent_windows.core.audit import audit_caller
-        token = audit_caller.set(None)
-
-        async def app(scope, receive, send):
-            pass
-
-        try:
-            asyncio.run(AuditCallerMiddleware(app)({"type": "lifespan"}, None, None))
-            assert audit_caller.get() is None  # lifespan doesn't set it
-        finally:
-            audit_caller.reset(token)
+        # The contextvar is stale (IP_A) inside the spawned task — this is the
+        # bug. The old _call read audit_caller.get() and would emit IP_A here.
+        assert captured["stale_contextvar"] == f"oauth:{ip_a}"
+        # _call read the LIVE per-request scope (IP_B), not the stale
+        # contextvar (IP_A). This is the fix.
+        assert captured["p"]["__caller"] == f"oauth:{ip_b}"
