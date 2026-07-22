@@ -443,6 +443,26 @@ def reset_server() -> None:
     _mcp = None
 
 
+def maybe_mount_file_endpoints(
+    mcp: Any, *, transport: str, file_transfer: bool, max_upload_mb: int,
+) -> None:
+    """Mount the /files GET/HEAD/PUT HTTP endpoints on the server.
+
+    No-op on the stdio transport (no HTTP listener) and when ``file_transfer``
+    is False (the kill-switch). On an HTTP transport with file transfer on,
+    delegates to ``mcp.files.register_file_endpoints``. The endpoints ride the
+    same uvicorn listener + ASGI middleware chain (bearer auth, IP allowlist,
+    TLS, DNS-rebinding) as the /mcp endpoint — ``/files`` is intentionally NOT
+    in ``_PUBLIC_PATHS``, so it inherits authentication like any other route.
+    """
+    if transport == "stdio":
+        return
+    if not file_transfer:
+        return
+    from agent_windows.mcp.files import register_file_endpoints
+    register_file_endpoints(mcp, max_upload_mb=max_upload_mb)
+
+
 def run(
     transport: str = "stdio",
     host: str = "127.0.0.1",
@@ -455,6 +475,8 @@ def run(
     tools: list[str] | None = None,
     exclude_tools: list[str] | None = None,
     stateless_http: bool = False,
+    file_transfer: bool = True,
+    max_upload_mb: int = 512,
     oauth_client_id: str | None = None,
     oauth_client_secret: str | None = None,
     allowed_hosts: list[str] | None = None,
@@ -478,6 +500,12 @@ def run(
     per-connection session state, so a reconnecting client survives a server
     restart and the server scales behind a load balancer; only meaningful for
     streamable-http, ignored otherwise.
+    file_transfer (default True) mounts the HTTP /files GET/HEAD/PUT endpoints —
+    the host<->Windows file bridge — on sse/streamable-http. False is a kill-switch
+    (no route mounted, /files 404s). Ignored for stdio. ``/files`` is NOT in
+    _PUBLIC_PATHS, so it inherits bearer/IP/TLS auth like /mcp. See mcp.files.
+    max_upload_mb (default 512, 0 = unlimited) bounds PUT body size for /files;
+    oversized uploads are rejected with 413. Ignored for stdio.
     oauth_client_id / oauth_client_secret (when both set) enable the OAuth
     2.0 authorization-code + PKCE flow on HTTP transports: the 4 OAuth
     endpoints are mounted and an OAuth token becomes a valid credential
@@ -548,6 +576,15 @@ def run(
         ).items():
             mcp.custom_route(path, methods=methods)(handler)
         oauth_validator = lambda tok: validate_oauth_token(_oauth_store, tok)  # noqa: E731
+
+    # /files HTTP endpoints (host<->Windows file bridge). HTTP transport only;
+    # they reuse the same listener + auth/IP/TLS middleware chain as /mcp.
+    # file_transfer=False is the kill-switch. /files is not in _PUBLIC_PATHS, so
+    # it inherits auth. mcp.files is imported lazily here (never on the stdio/CLI
+    # cold path).
+    maybe_mount_file_endpoints(mcp, transport=transport,
+                               file_transfer=file_transfer,
+                               max_upload_mb=max_upload_mb)
 
     middleware: list = []
     # OptionsMiddleware is always present: with an empty allowlist (the default)

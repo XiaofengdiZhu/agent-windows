@@ -159,6 +159,50 @@ def test_run_http_without_auth_key_only_has_options_middleware():
     assert kinds == [OptionsMiddleware]
 
 
+# ── /files endpoint mount gating ─────────────────────────────────────────
+
+def test_run_stdio_does_not_mount_file_endpoints():
+    """stdio transport never mounts /files (no HTTP listener)."""
+    from agent_windows.mcp import server
+    fake = MagicMock()
+    with patch.object(server, "build_server", return_value=fake):
+        server.run(transport="stdio", file_transfer=True, max_upload_mb=512)
+    fake.custom_route.assert_not_called()
+
+
+def test_run_http_file_transfer_disabled_mounts_nothing():
+    """file_transfer=False is the kill-switch: no /files route on HTTP either."""
+    from agent_windows.mcp import server
+    fake = MagicMock()
+    with patch.object(server, "build_server", return_value=fake):
+        server.run(transport="streamable-http", host="127.0.0.1", port=9000,
+                   auth_key="k", file_transfer=False)
+    fake.custom_route.assert_not_called()
+
+
+def test_run_http_file_transfer_enabled_mounts_files_routes():
+    """file_transfer=True on HTTP mounts GET/HEAD/PUT /files."""
+    from agent_windows.mcp import server
+    fake = MagicMock()
+    with patch.object(server, "build_server", return_value=fake):
+        server.run(transport="streamable-http", host="127.0.0.1", port=9000,
+                   auth_key="k", file_transfer=True, max_upload_mb=64)
+    calls = [(c.args[0], c.kwargs.get("methods"))
+             for c in fake.custom_route.call_args_list]
+    assert ("/files", ["GET"]) in calls
+    assert ("/files", ["HEAD"]) in calls
+    assert ("/files", ["PUT"]) in calls
+
+
+def test_files_path_inherits_auth_not_public():
+    """/files is NOT in _PUBLIC_PATHS, so AuthKeyMiddleware 401s it without a bearer."""
+    from agent_windows.mcp.server import _PUBLIC_PATHS
+    assert "/files" not in _PUBLIC_PATHS
+    called, sent = _run_middleware(_http_scope(path="/files"), "s3cret")
+    assert called is False
+    assert sent[0]["status"] == 401
+
+
 def test_run_rejects_unknown_transport():
     from agent_windows.mcp import server
     with pytest.raises(ValueError):
@@ -617,7 +661,8 @@ def test_run_oauth_mounts_routes_and_oauthonly_middleware():
     fake.custom_route = MagicMock()
     with patch.object(server, "build_server", return_value=fake):
         server.run(transport="streamable-http", host="localhost", port=8000,
-                   oauth_client_id="cid", oauth_client_secret="sec")
+                   oauth_client_id="cid", oauth_client_secret="sec",
+                   file_transfer=False)
     # 4 OAuth routes mounted via custom_route
     paths = {c.args[0] for c in fake.custom_route.call_args_list}
     assert paths == {"/.well-known/oauth-authorization-server",
@@ -647,7 +692,8 @@ def test_run_oauth_routes_not_mounted_when_not_configured():
     from agent_windows.mcp import server
     fake = MagicMock()
     with patch.object(server, "build_server", return_value=fake):
-        server.run(transport="streamable-http", host="localhost", port=8000)
+        server.run(transport="streamable-http", host="localhost", port=8000,
+                   file_transfer=False)
     # No OAuth configured → no custom_route calls, no OAuthOnlyMiddleware.
     fake.custom_route.assert_not_called()
     from agent_windows.mcp.server import OAuthOnlyMiddleware
