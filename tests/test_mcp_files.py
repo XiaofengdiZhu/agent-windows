@@ -115,9 +115,9 @@ def test_upload_rejects_oversize_via_content_length(tmp_path):
     # Bytes body -> httpx sends an accurate Content-Length, so the EARLY guard
     # fires before any streaming begins. Provable via the "exceeds" wording
     # (distinct from the mid-stream branch's "exceeded" wording).
-    cap = 1  # 1 MiB
+    cap = 1 * 1024 * 1024  # upload cap, bytes (1 MiB)
     dest = tmp_path / "big.bin"
-    body = b"z" * (int(cap * 1024 * 1024) + 10)
+    body = b"z" * (cap + 10)  # 10 bytes over cap
     r = TestClient(_upload_app(cap)).put(f"/files?path={dest}", content=body)
     assert r.status_code == 413
     assert "exceeds" in r.json()["error"] and "exceeded" not in r.json()["error"]
@@ -131,12 +131,11 @@ def test_upload_aborts_midstream_over_cap_no_temp(tmp_path):
     # MID-STREAM path: the first chunk raises _SizeExceeded, the except branch
     # _safe_unlink()s the temp, and the response carries the "exceeded"
     # wording. Proves temp cleanup runs on the streaming-abort path.
-    cap = 1  # 1 MiB
+    cap = 1 * 1024 * 1024  # upload cap, bytes (1 MiB)
     dest = tmp_path / "big.bin"
-    cap_bytes = int(cap * 1024 * 1024)
 
     def body_chunks():
-        yield b"z" * (cap_bytes + 10)  # single chunk > cap, no Content-Length
+        yield b"z" * (cap + 10)  # single chunk > cap, no Content-Length
 
     r = TestClient(_upload_app(cap)).put(f"/files?path={dest}", content=body_chunks())
     assert r.status_code == 413

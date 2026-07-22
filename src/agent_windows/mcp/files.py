@@ -87,7 +87,7 @@ class _SizeExceeded(Exception):
     """Internal: upload body surpassed the configured cap mid-stream."""
 
 
-def _safe_unlink(p) -> None:
+def _safe_unlink(p: Path) -> None:
     try:
         p.unlink()
     except OSError:
@@ -119,11 +119,11 @@ async def upload(request: Request, *, cap: int | None) -> Response:
             return _err(413, f"upload exceeds max_upload_mb cap ({cap} bytes)")
     if target.exists() and not overwrite:
         return _err(409, f"target exists; pass overwrite=true to replace: {raw}")
-    target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.parent / f".awpart-{secrets.token_hex(8)}"
     h = hashlib.sha256()
     size = 0
     try:
+        target.parent.mkdir(parents=True, exist_ok=True)
         with open(tmp, "wb") as f:
             async for chunk in request.stream():
                 if not chunk:
