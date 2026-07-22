@@ -192,7 +192,16 @@ def route_request(request: JSONRPCRequest) -> JSONRPCResponse:
     # injected nothing (best-effort attribution, not an authz boundary). (audit)
     from agent_windows.core.audit import audit_caller
     params = dict(request.params or {})
-    caller_token = audit_caller.set(params.pop("__caller", "pipe"))
+    # An explicit __caller (CLI="local", MCP=resolved "<tag>:<ip>" scope) wins;
+    # otherwise INHERIT the outer contextvar when one is set (a batch
+    # sub-dispatch re-entering route_request — batch.py builds sub-params from
+    # commands[] without __caller, so without this inherit the outer caller
+    # would be clobbered to "pipe" and destructive ops inside batch
+    # mis-attributed); otherwise "pipe" (a top-level direct named-pipe client
+    # that injects nothing — the original default, unchanged).
+    explicit_caller = params.pop("__caller", None)
+    caller = explicit_caller or audit_caller.get() or "pipe"
+    caller_token = audit_caller.set(caller)
     try:
         try:
             result = handler_func(params)

@@ -55,6 +55,49 @@ class TestRouterCallerPop:
         assert audit_caller.get() is None  # reset after dispatch
 
 
+class TestBatchInheritsCaller:
+    """A batch sub-dispatch (nested route_request) inherits the outer caller.
+
+    ``batch.py`` re-dispatches each sub-command via ``route_request(req)``,
+    where ``req.params`` comes from the batch's ``commands[]`` and does NOT
+    carry ``__caller``. Without inheritance, the inner ``route_request`` would
+    reset the contextvar to ``"pipe"``, clobbering the outer request's caller —
+    so a destructive op run via MCP ``batch`` (e.g. "delete these 5 files in
+    one call") would be mis-attributed as ``"pipe"`` instead of the real
+    authenticated caller. The fix: when no explicit ``__caller`` is injected,
+    inherit the already-set contextvar (the outer caller).
+    """
+
+    def test_inner_dispatch_inherits_outer_caller(self):
+        """A nested route_request with no __caller inherits the outer caller.
+
+        This mimics batch exactly: the outer route_request (for the batch
+        method) has set ``audit_caller`` from the batch request's ``__caller``
+        and has not yet reset it (we are inside the batch handler's
+        re-dispatch). The inner sub-command params do NOT carry ``__caller``.
+        On the old code the inner caller was reset to ``"pipe"``; the fix
+        inherits the outer value.
+        """
+        from agent_windows.core.audit import audit_caller, current_caller
+        from agent_windows.daemon.router import handler as handler_dec
+        seen = {}
+
+        @handler_dec("__test_batch_inner__")
+        def _probe(params):
+            seen["caller"] = current_caller()
+            return {"output": "ok"}
+
+        token = audit_caller.set("oauth:1.2.3.4")
+        try:
+            resp = route_request(JSONRPCRequest(
+                id=1, method="__test_batch_inner__", params={}))
+        finally:
+            audit_caller.reset(token)
+        assert resp.error is None
+        # Inherited from the outer caller, NOT reset to "pipe".
+        assert seen["caller"] == "oauth:1.2.3.4"
+
+
 class TestResolveAuditCaller:
     """Unit tests for mcp/_call.py::_resolve_audit_caller.
 

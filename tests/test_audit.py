@@ -146,6 +146,30 @@ class TestRobustness:
         # object() is not JSON-serializable; this must be swallowed, not raised.
         audit.audit_destructive("fs_delete", {"path": object()}, "ok", caller="local")
 
+    def test_audit_destructive_swallows_enabled_check_failure(
+        self, isolated_audit, monkeypatch
+    ):
+        """If _audit_enabled() itself raises (e.g. corrupt ``[audit]`` config),
+        audit must still never raise — the destructive-op path it observes
+        stays intact.
+
+        ``_audit_enabled`` calls ``load_config`` → ``_validate_config``, which
+        raises ``ValueError`` on a type error (e.g. operator hand-edits
+        ``[audit] enabled = "yes"``). On the ``ok`` path the destructive op has
+        ALREADY succeeded by the time ``audit_destructive`` runs, so an escaping
+        exception would surface a real success as a JSON-RPC failure. The
+        existing never-raise test stubs ``_audit_enabled`` to constant True,
+        which is why it missed this gap; this test makes the check itself blow
+        up to confirm the invariant holds even then.
+        """
+        def _boom() -> bool:
+            raise ValueError("bad config")
+        monkeypatch.setattr(audit, "_audit_enabled", _boom)
+        # Must not raise — and must not write anything either (the check fails
+        # before any file I/O, so the log stays absent).
+        audit.audit_destructive("fs_delete", {"path": "C:/x"}, "ok", caller="local")
+        assert not isolated_audit.exists()
+
     def test_verify_empty_file_does_not_generate_key(self, isolated_audit, monkeypatch):
         """verify on an all-malformed log must NOT fetch (and thus never generate/
         persist) a key — verify is a read-only operator action."""

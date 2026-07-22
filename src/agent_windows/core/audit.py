@@ -148,11 +148,15 @@ def audit_destructive(
 
     No-op when ``[audit] enabled`` is false. Best-effort: a write failure is
     logged at debug and never raised — audit must not break the destructive-op
-    path it observes (same posture as telemetry / shell_audit).
+    path it observes (same posture as telemetry / shell_audit). The enabled
+    check lives INSIDE the try so a corrupt config (e.g. ``[audit] enabled =
+    "yes"`` raising ValueError in ``_validate_config``) is swallowed too — the
+    never-raise invariant must hold even when the kill-switch itself blows up,
+    or an already-succeeded destructive op would surface as a failure.
     """
-    if not _audit_enabled():
-        return
     try:
+        if not _audit_enabled():
+            return
         ts = datetime.datetime.now().isoformat(timespec="milliseconds")
         # Stable, compact JSON so the HMAC input is deterministic across runs.
         params_json = _escape(
