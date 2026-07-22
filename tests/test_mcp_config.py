@@ -1,4 +1,5 @@
 """Tests for the [mcp] config section: defaults, DPAPI round-trip, masking."""
+import pytest
 import toml
 from unittest.mock import patch
 
@@ -87,6 +88,14 @@ class TestDataclassDefaults:
         assert s.ssl_keyfile == d["ssl_keyfile"]
         assert s.allow_insecure_remote == d["allow_insecure_remote"]
         assert s.stateless_http == d["stateless_http"]
+        assert s.file_transfer == d["file_transfer"]
+        assert s.max_upload_mb == d["max_upload_mb"]
+
+    def test_server_config_has_file_transfer_defaults(self):
+        from agent_windows.utils.config import ServerConfig
+        sc = ServerConfig()
+        assert sc.file_transfer is True
+        assert sc.max_upload_mb == 512
 
     def test_security_config_matches(self):
         from agent_windows.utils.config import SecurityConfig
@@ -139,6 +148,20 @@ class TestBuildMcpConfig:
         view = build_mcp_config({})
         assert isinstance(view.security.ip_allowlist, list)
         assert isinstance(view.tools.include, list)
+
+    def test_build_mcp_config_reads_file_transfer_keys(self):
+        from agent_windows.utils.config import build_mcp_config
+        cfg = {"mcp": {"file_transfer": False, "max_upload_mb": 16},
+               "security": {}, "tools": {}}
+        view = build_mcp_config(cfg)
+        assert view.server.file_transfer is False
+        assert view.server.max_upload_mb == 16
+
+    def test_build_mcp_config_rejects_negative_max_upload_mb(self):
+        from agent_windows.utils.config import build_mcp_config
+        with pytest.raises(ValueError):
+            build_mcp_config({"mcp": {"max_upload_mb": -1},
+                              "security": {}, "tools": {}})
 
 
 class TestBuildMcpConfigTlsResolution:

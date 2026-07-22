@@ -242,6 +242,15 @@ DEFAULT_CONFIG: dict[str, Any] = {
         # server restart and the server scales behind a load balancer.
         # streamable-http only; default off. (TODO #5)
         "stateless_http": False,
+        # File-transfer HTTP endpoints (/files GET/HEAD/PUT) mounted on the
+        # HTTP transport only. Default on (HTTP + auth already gates access);
+        # set false to suppress the endpoints entirely (404). Endpoints are
+        # NOT MCP tools, so [tools] include/exclude does not apply.
+        "file_transfer": True,
+        # Upload size cap in MiB (PUT /files). 0 = no cap (trust auth'd
+        # client). Negative rejected at config build. Downloads are uncapped
+        # (streamed).
+        "max_upload_mb": 512,
     },
     "security": {
         # HTTP-transport access controls (sse / streamable-http). Both default
@@ -312,6 +321,8 @@ class ServerConfig:
     ssl_keyfile: str = ""
     allow_insecure_remote: bool = False
     stateless_http: bool = False
+    file_transfer: bool = True
+    max_upload_mb: int = 512
 
 
 @dataclass
@@ -385,6 +396,11 @@ def build_mcp_config(config: dict) -> MCPConfig:
     # override is applied) so the resolution base follows the override.
     # load_config()'s returned dict keeps the raw value — round-trip safe.
     config_dir = get_config_path().parent
+    max_upload_mb = mcp.get("max_upload_mb", 512)
+    if max_upload_mb < 0:
+        raise ValueError(
+            f"mcp.max_upload_mb must be >= 0 (0 = no cap), got {max_upload_mb}"
+        )
     return MCPConfig(
         server=ServerConfig(
             transport=mcp.get("transport", "stdio"),
@@ -397,6 +413,8 @@ def build_mcp_config(config: dict) -> MCPConfig:
                 mcp.get("ssl_keyfile", ""), config_dir),
             allow_insecure_remote=mcp.get("allow_insecure_remote", False),
             stateless_http=mcp.get("stateless_http", False),
+            file_transfer=mcp.get("file_transfer", True),
+            max_upload_mb=max_upload_mb,
         ),
         security=SecurityConfig(
             ip_allowlist=_coerce_list(sec.get("ip_allowlist", []) or []),
