@@ -306,3 +306,48 @@ def test_snapshot_diff_unknown_action_is_invalid_params(monkeypatch):
     _patch_diff_common(monkeypatch)
     with pytest.raises(ValueError, match="action must be"):
         HANDLERS["snapshot_diff"]({"action": "foo"})
+
+
+def test_snapshot_diff_surfaces_resolve_window_warning(monkeypatch):
+    """N-1: ``_capture_for_diff`` used to discard ``resolve_window``'s
+    ambiguity warning. It now surfaces it on both save (appended) and diff
+    (prepended) so an ambiguous --window match is visible to the agent,
+    mirroring the ``snapshot`` handler's header warning."""
+    import agent_windows.daemon.handlers.tree as h
+    warn = '⚠ Matched 2 windows by title "calc"'
+    monkeypatch.setattr(h, "_snapshot_diff_baseline", None, raising=False)
+    _patch_diff_common(monkeypatch)
+    monkeypatch.setattr("agent_windows.core.tree.traverse_tree",
+                        lambda **k: _fake_snapshot_data())
+    monkeypatch.setattr("agent_windows.core.tree.resolve_window",
+                        lambda value=None, active=False: (None, warn))
+    monkeypatch.setattr("agent_windows.core.tree.prime_tree_cache", lambda d: None)
+    saved = HANDLERS["snapshot_diff"]({"action": "save", "window": "calc"})
+    assert warn in saved["output"]
+    diffed = HANDLERS["snapshot_diff"]({"action": "diff"})
+    assert warn in diffed["output"]
+
+
+def test_snapshot_diff_closed_stored_window_raises_value_error(monkeypatch):
+    """Lock the error code for a baseline scoped to a window that no longer
+    resolves on diff (closed between save and diff). ``resolve_window`` raises
+    ``ValueError("Window not found")``, and ``route_request`` maps ``ValueError``
+    → ``INVALID_PARAMS`` (-32602) — NOT ``ELEMENT_NOT_FOUND`` (-1001), which is
+    reserved for ``FileNotFoundError``/``UIADeadElementError``. A earlier spec
+    row claimed -1001; this test pins the implemented -32602 behavior."""
+    import agent_windows.daemon.handlers.tree as h
+    monkeypatch.setattr(h, "_snapshot_diff_baseline", None, raising=False)
+    _patch_diff_common(monkeypatch)
+    monkeypatch.setattr("agent_windows.core.tree.traverse_tree",
+                        lambda **k: _fake_snapshot_data())
+    monkeypatch.setattr("agent_windows.core.tree.prime_tree_cache", lambda d: None)
+    # save resolves fine (window open at baseline time); scope stored as Notepad.
+    monkeypatch.setattr("agent_windows.core.tree.resolve_window",
+                        lambda value=None, active=False: (None, ""))
+    HANDLERS["snapshot_diff"]({"action": "save", "window": "Notepad"})
+    # Window closed between save and diff → resolve_window raises ValueError.
+    def _raise(value=None, active=False):
+        raise ValueError("Window not found: Notepad")
+    monkeypatch.setattr("agent_windows.core.tree.resolve_window", _raise)
+    with pytest.raises(ValueError, match="Window not found"):
+        HANDLERS["snapshot_diff"]({"action": "diff"})

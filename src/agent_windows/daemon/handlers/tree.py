@@ -78,23 +78,30 @@ def _snapshot(params: dict) -> dict[str, Any]:
 _snapshot_diff_baseline: dict | None = None
 
 
-def _capture_for_diff(window: str | None, active: bool, cfg: dict) -> dict:
+def _capture_for_diff(
+    window: str | None, active: bool, cfg: dict
+) -> tuple[dict, str | None]:
     """Resolve scope + capture a fresh, UNFILTERED tree via ``traverse_tree``.
 
     Never ``get_tree_snapshot``: the 2s single-slot cache is keyed only by
     TTL, so a save→diff within 2s would return the same cached dict and
     self-diff to a no-op.
 
-    Returns the UNFILTERED snapshot (no display clipping) so the diff path can
-    prime the tree cache with the full tree — ``resolve_element('@eN')`` aligns
-    to the unfiltered snapshot (display survivors carry ``_orig_idx`` pointing
-    into it). Display filtering is a separate step: see :func:`_filter_for_diff`.
+    Returns ``(data, warning)`` where ``warning`` is the ambiguity notice from
+    :func:`resolve_window` (``None`` when no scope or an unambiguous match) so
+    the caller can surface it to the agent, mirroring the ``snapshot`` handler.
+    The data is the UNFILTERED snapshot (no display clipping) so the diff path
+    can prime the tree cache with the full tree — ``resolve_element('@eN')``
+    aligns to the unfiltered snapshot (display survivors carry ``_orig_idx``
+    pointing into it). Display filtering is a separate step: see
+    :func:`_filter_for_diff`.
     """
     from agent_windows.core.tree import traverse_tree, resolve_window
     only_window = None
+    warning = None
     if active or window:
-        only_window, _warning = resolve_window(value=window, active=active)
-    return traverse_tree(
+        only_window, warning = resolve_window(value=window, active=active)
+    data = traverse_tree(
         max_depth=cfg.get("max_depth", 15),
         include_invisible=cfg.get("include_invisible", False),
         include_offscreen=cfg.get("include_offscreen", False),
@@ -102,6 +109,7 @@ def _capture_for_diff(window: str | None, active: bool, cfg: dict) -> dict:
         timeout=cfg.get("timeout", 10),
         only_window=only_window,
     )
+    return data, warning
 
 
 def _filter_for_diff(data: dict, display) -> dict:
@@ -168,7 +176,7 @@ def _snapshot_diff(params: dict) -> dict[str, Any]:
     cfg = load_config().get("tree", {})
 
     if action == "save":
-        raw = _capture_for_diff(window, active, cfg)
+        raw, warning = _capture_for_diff(window, active, cfg)
         filtered = _filter_for_diff(raw, display)
         _snapshot_diff_baseline = {
             "scope": {"window": window, "active": active, "display": display},
@@ -178,7 +186,10 @@ def _snapshot_diff(params: dict) -> dict[str, Any]:
         n = len(_snapshot_diff_baseline["interactive_elements"])
         aw = filtered.get("active_window")
         scope = f', window: "{aw.title}"' if aw and getattr(aw, "title", None) else ""
-        return {"output": f"## Snapshot Diff\nbaseline saved: {n} elements{scope}"}
+        output = f"## Snapshot Diff\nbaseline saved: {n} elements{scope}"
+        if warning:
+            output += f"\n{warning}"
+        return {"output": output}
 
     # action == "diff"
     if _snapshot_diff_baseline is None:
@@ -188,7 +199,7 @@ def _snapshot_diff(params: dict) -> dict[str, Any]:
         window = base["scope"]["window"]
         active = base["scope"]["active"]
         display = base["scope"]["display"]
-    raw = _capture_for_diff(window, active, cfg)
+    raw, warning = _capture_for_diff(window, active, cfg)
     filtered = _filter_for_diff(raw, display)
     # Prime the UNFILTERED tree: resolve_element aligns @eN to the unfiltered
     # snapshot (display survivors carry _orig_idx into it). Priming filtered
@@ -196,7 +207,10 @@ def _snapshot_diff(params: dict) -> dict[str, Any]:
     prime_tree_cache(raw)
     diff = diff_snapshots(base, filtered)
     diff["stats"]["scope"] = _scope_label(base["scope"])
-    return {"output": render_snapshot_diff(diff, filtered)}
+    output = render_snapshot_diff(diff, filtered)
+    if warning:
+        output = f"{warning}\n\n" + output
+    return {"output": output}
 
 
 @handler("get_text")

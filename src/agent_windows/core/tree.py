@@ -1649,7 +1649,17 @@ def _pair_elements(
     removed: list[ElementInfo] = []
     added: list[ElementInfo] = []
 
-    for key in set(base_b) | set(cur_b):
+    # Iterate buckets in first-seen order so rendered Added/Removed order is
+    # stable across processes (a `set` of string-tuple keys is hash-randomized
+    # via PYTHONHASHSEED, which would shuffle the section order otherwise).
+    seen: set = set()
+    keys: list = []
+    for d in (base_b, cur_b):
+        for k in d:
+            if k not in seen:
+                seen.add(k)
+                keys.append(k)
+    for key in keys:
         b_list = list(base_b.get(key, []))
         c_list = list(cur_b.get(key, []))
         b_nobox = [e for e in b_list if e.bbox is None]
@@ -1728,6 +1738,10 @@ def diff_snapshots(baseline: dict, current: dict) -> dict:
 
     Returns ``{added, removed, changed, windows_added, windows_removed, stats}``.
     ``changed`` entries are ``{"element": <current ElementInfo>, "deltas": [...]}``.
+
+    Windows are identity-keyed by ``(title, process_name)`` — ``handle`` is
+    deliberately excluded (unstable across captures). Only window add/remove
+    is reported; changed windows are rare and omitted.
     """
     base_els = baseline.get("interactive_elements", [])
     cur_els = current.get("interactive_elements", [])

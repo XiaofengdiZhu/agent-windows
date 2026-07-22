@@ -1923,12 +1923,28 @@ def test_diff_same_bucket_bbox_pairing():
 
 
 def test_diff_match_radius_boundary():
-    from agent_windows.core.tree import diff_snapshots, _SNAPSHOT_DIFF_MATCH_RADIUS
-    base = {"interactive_elements": [_el("X", bbox=(0, 0, 10, 10))], "windows": []}
-    r = int(_SNAPSHOT_DIFF_MATCH_RADIUS) + 20
-    cur = {"interactive_elements": [_el("X", bbox=(r, r, r + 10, r + 10))],
-           "windows": []}
-    d = diff_snapshots(base, cur)
+    from agent_windows.core.tree import (
+        diff_snapshots, _SNAPSHOT_DIFF_MATCH_RADIUS, BoundingBox,
+    )
+    # Centres on the X axis so distance == abs(dx). Just-AT-the-radius pairs
+    # (skip condition is strict `dist > radius`, so dist == radius pairs).
+    r = _SNAPSHOT_DIFF_MATCH_RADIUS
+    base = {"interactive_elements": [_el("X", bbox=BoundingBox(0, 0, 10, 10))],
+            "windows": []}
+    # current centre at 5+r → centre distance == r → pairs (NOT removed+added).
+    # The pair surfaces as `changed:moved` (60px > MOVE_THRESHOLD), but that is
+    # move-detection, not the pairing boundary under test — assert only what the
+    # radius controls: pairing keeps both sides out of removed/added.
+    cur_in = {"interactive_elements": [
+        _el("X", bbox=BoundingBox(int(5 + r) - 5, 0, int(5 + r) + 5, 10))],
+        "windows": []}
+    d = diff_snapshots(base, cur_in)
+    assert d["added"] == [] and d["removed"] == []
+    # one pixel beyond → no pair → removed+added
+    cur_out = {"interactive_elements": [
+        _el("X", bbox=BoundingBox(int(5 + r + 1) - 5, 0, int(5 + r + 1) + 5, 10))],
+        "windows": []}
+    d = diff_snapshots(base, cur_out)
     assert len(d["removed"]) == 1 and len(d["added"]) == 1
 
 
@@ -1981,6 +1997,14 @@ def test_render_snapshot_diff_markdown_and_current_refs():
     import re
     assert re.search(r"@e\d", out)
     assert "Changed" in out
+    # Stronger: each non-empty section must carry at least one @eN ref (a naive
+    # render change that dropped refs from one section but not the other would
+    # still satisfy the single whole-output search above).
+    def section(heading):
+        m = re.search(rf"### {heading}.*?(?=\n### |\Z)", out, re.S)
+        return m.group(0) if m else ""
+    assert re.search(r"@e\d", section("Added")), "Added section missing @eN"
+    assert re.search(r"@e\d", section("Changed")), "Changed section missing @eN"
 
 
 def test_render_snapshot_diff_shows_scope_in_header():
