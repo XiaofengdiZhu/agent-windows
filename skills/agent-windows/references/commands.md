@@ -668,7 +668,7 @@ agent-windows shell "Get-Process" --timeout 60     # override default 30s
 | `command` | str | **required** | PowerShell command |
 | `--timeout` / `-t` | float | `0` (= config `shell.timeout`, 30) | Execution timeout in seconds |
 
-**Output**: Command stdout/stderr with an `Exit code: N` line. A timeout raises error code `-1003` (WAIT_TIMEOUT). `shell.timeout` and `shell.max_output_bytes` are configurable in `config.toml`.
+**Output**: Command stdout/stderr with an `Exit code: N` line. A timeout raises error code `-1003` (WAIT_TIMEOUT). A command matching any pattern in `shell.blacklist` (default `[]` — empty, so **no commands are blocked by default**) is rejected before execution with `-1004` (PERMISSION_DENIED); every attempt — allowed or blocked — is still recorded in `shell_audit.log`. `shell.timeout`, `shell.max_output_bytes`, and `shell.blacklist` are configurable in `config.toml` (see `references/configuration.md`).
 
 ### fs read / fs write / fs list / fs copy / fs move / fs delete / fs search / fs info
 
