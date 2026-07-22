@@ -647,6 +647,26 @@ class TestSystemCommands:
         assert calls[2] == ("fs_list", {"path": "/d"})
 
     @patch("agent_windows.cli.commands.system._cmd")
+    def test_fs_delete_default_no_flags(self, mock_cmd):
+        runner.invoke(app, ["fs", "delete", "p"])
+        method, params = _cmd_calls(mock_cmd)[0]
+        assert method == "fs_delete"
+        assert params == {"path": "p"}
+
+    @patch("agent_windows.cli.commands.system._cmd")
+    def test_fs_delete_permanent_flag(self, mock_cmd):
+        runner.invoke(app, ["fs", "delete", "p", "--permanent"])
+        method, params = _cmd_calls(mock_cmd)[0]
+        assert method == "fs_delete"
+        assert params == {"path": "p", "permanent": True}
+
+    @patch("agent_windows.cli.commands.system._cmd")
+    def test_fs_delete_dry_run_flag(self, mock_cmd):
+        runner.invoke(app, ["fs", "delete", "p", "--dry-run"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params == {"path": "p", "dry_run": True}
+
+    @patch("agent_windows.cli.commands.system._cmd")
     def test_clipboard_get_keyboard_flag_only_when_set(self, mock_cmd):
         """keyboard=None (option omitted) → not forwarded; --keyboard → True."""
         runner.invoke(app, ["clipboard", "get"])

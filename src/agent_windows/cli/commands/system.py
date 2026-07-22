@@ -158,11 +158,17 @@ def fs_delete(
     ctx: typer.Context,
     path: str = typer.Argument(help="Path to delete"),
     recursive: bool = typer.Option(False, "--recursive", help="Delete non-empty directories"),
+    permanent: bool = typer.Option(False, "--permanent", help="Permanently delete (bypass Recycle Bin)"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview what would be deleted; no changes"),
 ) -> None:
-    """Delete a file or directory."""
+    """Delete a file/dir. Default sends to Recycle Bin; --permanent force-deletes; --dry-run previews."""
     params: dict = {"path": path}
     if recursive:
         params["recursive"] = True
+    if permanent:
+        params["permanent"] = True
+    if dry_run:
+        params["dry_run"] = True
     _cmd(ctx, "fs_delete", **params)
 
 
