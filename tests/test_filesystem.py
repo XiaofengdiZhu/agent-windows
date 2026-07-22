@@ -1267,6 +1267,48 @@ class TestDeleteRecycle:
         m.assert_not_called()
 
 
+class TestDeleteDryRun:
+    """dry_run=True returns a preview and does NOT touch the filesystem."""
+
+    def test_dry_run_file_preview_no_delete(self, tmp_path):
+        from agent_windows.core.filesystem import delete_path
+        f = tmp_path / "a.txt"
+        f.write_text("hello", encoding="utf-8")
+        r = delete_path(str(f), dry_run=True)
+        assert r["dry_run"] is True
+        assert r["type"] == "File"
+        assert r["size"] == 5
+        assert r["mode"] == "recycle"
+        assert f.exists()  # untouched
+
+    def test_dry_run_dir_counts_contents(self, tmp_path):
+        from agent_windows.core.filesystem import delete_path
+        d = tmp_path / "d"
+        d.mkdir()
+        (d / "a.txt").write_text("x", encoding="utf-8")
+        (d / "b.txt").write_text("x", encoding="utf-8")
+        (d / "sub").mkdir()
+        r = delete_path(str(d), dry_run=True)
+        assert r["type"] == "Directory"
+        assert r["contents_files"] == 2
+        assert r["contents_dirs"] == 1
+        assert d.exists()  # untouched
+
+    def test_dry_run_permanent_mode(self, tmp_path):
+        from agent_windows.core.filesystem import delete_path
+        f = tmp_path / "a.txt"
+        f.write_text("x", encoding="utf-8")
+        r = delete_path(str(f), permanent=True, dry_run=True)
+        assert r["mode"] == "permanent"
+
+    def test_dry_run_recursive_flag(self, tmp_path):
+        from agent_windows.core.filesystem import delete_path
+        d = tmp_path / "d"
+        d.mkdir()
+        r = delete_path(str(d), recursive=True, dry_run=True)
+        assert r["recursive"] is True
+
+
 class TestSearchFiles:
     def test_glob_match(self, tmp_path):
         from agent_windows.core.filesystem import search_files

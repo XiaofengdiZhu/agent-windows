@@ -874,6 +874,50 @@ def _recycle_path(p: Path) -> None:
         raise RuntimeError(f"SHFileOperationW failed (rc={rc})")
 
 
+def _delete_dry_run(p: Path, mode: str, recursive: bool, is_link: bool) -> dict[str, Any]:
+    """Preview a delete without touching the filesystem.
+
+    Returns the target's type/size and, for directories, the file/dir entry
+    count (does NOT walk recursively — bounded, mirroring ``get_file_info``'s
+    top-level count). ``recursive`` is reported as-is (it only affects the
+    real op, not the preview shape).
+    """
+    stat = p.lstat()
+    if is_link:
+        ftype = "Symlink" if p.is_symlink() else "Junction"
+    elif p.is_dir():
+        ftype = "Directory"
+    elif p.is_file():
+        ftype = "File"
+    else:
+        ftype = "Other"
+    result: dict[str, Any] = {
+        "dry_run": True,
+        "path": str(p),
+        "type": ftype,
+        "size": stat.st_size,
+        "mode": mode,
+        "recursive": recursive,
+    }
+    extra = ""
+    if p.is_dir() and not is_link:
+        try:
+            items = list(p.iterdir())
+            nf = sum(1 for i in items if i.is_file())
+            nd = sum(1 for i in items if i.is_dir())
+            result["contents_files"] = nf
+            result["contents_dirs"] = nd
+            extra = f"\nContents: {nf} files, {nd} directories"
+        except PermissionError:
+            extra = "\nContents: (access denied)"
+    rec_tag = " (recursive)" if recursive else ""
+    result["output"] = (
+        f"## File Delete (dry-run)\nPath: {p}\nType: {ftype}\n"
+        f"Size: {stat.st_size} bytes\nMode: {mode}{rec_tag}{extra}"
+    )
+    return result
+
+
 @_with_elevation_hint
 def copy_path(source: str, destination: str, overwrite: bool = False) -> dict[str, Any]:
     """Copy a file or directory to ``destination`` (TODO #4).
@@ -950,11 +994,12 @@ def move_path(source: str, destination: str, overwrite: bool = False) -> dict[st
 
 @_with_elevation_hint
 def delete_path(path: str, recursive: bool = False,
-                permanent: bool = False) -> dict[str, Any]:
+                permanent: bool = False, dry_run: bool = False) -> dict[str, Any]:
     """Delete a file or directory (TODO #4).
 
     By default the target is sent to the Recycle Bin (reversible);
-    ``permanent=True`` force-deletes (irreversible). Non-empty directories
+    ``permanent=True`` force-deletes (irreversible). ``dry_run=True`` previews
+    what would be deleted without changing anything. Non-empty directories
     require ``recursive=True``.
 
     The target is write-validated (treated as a write — so the blacklist AND
@@ -972,6 +1017,7 @@ def delete_path(path: str, recursive: bool = False,
     """
     recursive = _as_bool(recursive)
     permanent = _as_bool(permanent)
+    dry_run = _as_bool(dry_run)
     # Safety check on the resolved path; operation on the literal path (G8).
     _validate_write_path(_resolve_user_path(path))
     p = _literal_path(path)
@@ -979,6 +1025,11 @@ def delete_path(path: str, recursive: bool = False,
         raise FileNotFoundError(f"Path not found: {path}")
 
     is_link = p.is_symlink() or p.is_junction()
+    # Links are always detached (permanent) — a reparse point can't be recycled.
+    mode = "permanent" if (permanent or is_link) else "recycle"
+    if dry_run:
+        return _delete_dry_run(p, mode, recursive, is_link)
+
     # A symlink/junction is detached as a LINK (permanent) — a reparse point
     # can't be meaningfully recycled, so it ignores the recycle/permanent knob.
     if is_link:
