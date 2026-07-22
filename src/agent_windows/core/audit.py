@@ -7,10 +7,11 @@ is verifiable by ``audit verify``. Default-on (inverse of telemetry's opt-in):
 destructive ops are low-frequency / high-harm. A ``[audit] enabled = false``
 config is the kill-switch.
 
-Caller identity is threaded from the MCP HTTP edge via the ``audit_caller``
-contextvar (set by AuditCallerMiddleware) and the injected ``__caller``
-envelope field; the CLI injects ``"local"``; the daemon router sets the
-contextvar from ``__caller`` (default ``"pipe"``). See the design spec at
+Caller identity is threaded from the MCP HTTP edge via the injected
+``__caller`` envelope field (read from the live ASGI scope in
+``mcp/_call.py::_resolve_audit_caller``); the CLI injects ``"local"``; the
+daemon router sets this module's ``audit_caller`` contextvar from ``__caller``
+(default ``"pipe"``). See the design spec at
 docs/superpowers/specs/2026-07-22-destructive-audit-design.md.
 
 Pure stdlib at module top (hmac/datetime/secrets/contextvars/dataclasses) +
@@ -37,9 +38,10 @@ logger = logging.getLogger(__name__)
 # hand-rolled single-backup scheme used by telemetry.log / shell_audit.log.
 _MAX_BYTES = 1 * 1024 * 1024  # 1 MiB
 
-# Caller identity set at the MCP HTTP edge (AuditCallerMiddleware) and at the
-# daemon router (from the injected ``__caller`` param). Default None -> unknown,
-# which current_caller() reports as "pipe".
+# Caller identity set at the daemon router from the injected ``__caller`` param
+# (the MCP edge reads the live ASGI scope in mcp/_call.py::_resolve_audit_caller
+# and injects it; the CLI injects "local"). Default None -> unknown, which
+# current_caller() reports as "pipe".
 audit_caller: ContextVar[str | None] = ContextVar("audit_caller", default=None)
 
 
