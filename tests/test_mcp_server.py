@@ -234,8 +234,73 @@ def test_mcp_serve_delegates_explicit_flags_overriding_config():
                                      auth_key="cfgkey", ssl_certfile=None, ssl_keyfile=None,
                                      ip_allowlist=None, cors_origins=None,
                                      tools=None, exclude_tools=None, stateless_http=False,
+                                     file_transfer=True, max_upload_mb=512,
                                      oauth_client_id=None, oauth_client_secret=None,
                                      allowed_hosts=None, telemetry=False)
+
+
+def test_mcp_serve_no_file_transfer_flag_overrides_config():
+    """--no-file-transfer forces file_transfer=False; max_upload_mb stays default."""
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+    runner = CliRunner()
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config", return_value={"mcp": {"auth_key": "k"}}):
+        result = runner.invoke(mcp_cmd.app,
+                               ["serve", "--transport", "streamable-http",
+                                "--host", "127.0.0.1", "--port", "9000",
+                                "--no-file-transfer"])
+    assert result.exit_code == 0, result.output
+    kwargs = mock_run.call_args.kwargs
+    assert kwargs["file_transfer"] is False
+    assert kwargs["max_upload_mb"] == 512
+
+
+def test_mcp_serve_file_transfer_and_max_upload_flags_forwarded():
+    """--file-transfer --max-upload-mb 64 forwarded verbatim to run()."""
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+    runner = CliRunner()
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config", return_value={"mcp": {"auth_key": "k"}}):
+        result = runner.invoke(mcp_cmd.app,
+                               ["serve", "--transport", "streamable-http",
+                                "--host", "127.0.0.1", "--port", "9000",
+                                "--file-transfer", "--max-upload-mb", "64"])
+    assert result.exit_code == 0, result.output
+    kwargs = mock_run.call_args.kwargs
+    assert kwargs["file_transfer"] is True
+    assert kwargs["max_upload_mb"] == 64
+
+
+def test_mcp_serve_file_transfer_env_precedence(monkeypatch):
+    """AGENT_WINDOWS_FILE_TRANSFER=false overrides the config default (true)."""
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+    monkeypatch.setenv("AGENT_WINDOWS_FILE_TRANSFER", "false")
+    runner = CliRunner()
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config", return_value={"mcp": {"auth_key": "k"}}):
+        result = runner.invoke(mcp_cmd.app,
+                               ["serve", "--transport", "streamable-http",
+                                "--host", "127.0.0.1", "--port", "9000"])
+    assert result.exit_code == 0, result.output
+    assert mock_run.call_args.kwargs["file_transfer"] is False
+
+
+def test_mcp_serve_max_upload_mb_negative_rejected():
+    """--max-upload-mb < 0 is a BadParameter (mirrors config validation)."""
+    from typer.testing import CliRunner
+    from agent_windows.cli.commands import mcp_cmd
+    runner = CliRunner()
+    with patch("agent_windows.mcp.run") as mock_run, \
+         patch.object(mcp_cmd, "load_config", return_value={"mcp": {"auth_key": "k"}}):
+        result = runner.invoke(mcp_cmd.app,
+                               ["serve", "--transport", "streamable-http",
+                                "--host", "127.0.0.1", "--port", "9000",
+                                "--max-upload-mb=-1"])
+    assert result.exit_code != 0
+    mock_run.assert_not_called()
 
 
 def test_mcp_serve_debug_flag_calls_enable_debug():
@@ -297,6 +362,7 @@ def test_mcp_serve_defaults_come_from_config(monkeypatch, tmp_path):
                                      ssl_keyfile=str((tmp_path / "k.pem").resolve()),
                                      ip_allowlist=None, cors_origins=None,
                                      tools=None, exclude_tools=None, stateless_http=False,
+                                     file_transfer=True, max_upload_mb=512,
                                      oauth_client_id=None, oauth_client_secret=None,
                                      allowed_hosts=["1.2.3.4"], telemetry=False)
 
@@ -317,6 +383,7 @@ def test_mcp_serve_stdio_strips_auth_and_ssl():
                                      auth_key=None, ssl_certfile=None, ssl_keyfile=None,
                                      ip_allowlist=None, cors_origins=None,
                                      tools=None, exclude_tools=None, stateless_http=False,
+                                     file_transfer=True, max_upload_mb=512,
                                      oauth_client_id=None, oauth_client_secret=None,
                                      allowed_hosts=None, telemetry=False)
 

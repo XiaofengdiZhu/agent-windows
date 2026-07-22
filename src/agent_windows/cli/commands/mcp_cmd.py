@@ -97,6 +97,16 @@ def serve(
         help="Run streamable-http without Mcp-Session-Id / per-connection state "
              "(survives server restarts, scales behind a load balancer). "
              "Streamable-http only. Env: AGENT_WINDOWS_STATELESS_HTTP"),
+    file_transfer: bool | None = typer.Option(
+        None, "--file-transfer/--no-file-transfer",
+        help="Enable the HTTP /files endpoints (host<->Windows file bridge: "
+             "GET/HEAD/PUT). Default: config [mcp] file_transfer (true). "
+             "HTTP transport only. Env: AGENT_WINDOWS_FILE_TRANSFER"),
+    max_upload_mb: int | None = typer.Option(
+        None, "--max-upload-mb",
+        help="Max /files PUT body size in MiB (0 = unlimited). "
+             "Default: config [mcp] max_upload_mb (512). "
+             "Env: AGENT_WINDOWS_MAX_UPLOAD_MB"),
     oauth_client_id: str = typer.Option(
         None, "--oauth-client-id",
         help="OAuth client ID (pre-provisioned confidential client). "
@@ -252,6 +262,42 @@ def serve(
     if not parsed_stateless:
         parsed_stateless = view.server.stateless_http
 
+    # file_transfer precedence: --file-transfer/--no-file-transfer flag >
+    # AGENT_WINDOWS_FILE_TRANSFER env > [mcp] file_transfer config. Default true.
+    # Tri-state flag (None = not given) is required because the config default is
+    # true — a plain bool flag couldn't tell "unset" from "--no-file-transfer".
+    if file_transfer is not None:
+        parsed_file_transfer = file_transfer
+    else:
+        env_ft = os.environ.get("AGENT_WINDOWS_FILE_TRANSFER", "").strip().lower()
+        if env_ft in ("1", "true", "yes", "on"):
+            parsed_file_transfer = True
+        elif env_ft in ("0", "false", "no", "off"):
+            parsed_file_transfer = False
+        else:
+            parsed_file_transfer = view.server.file_transfer
+
+    # max_upload_mb precedence: --max-upload-mb flag >
+    # AGENT_WINDOWS_MAX_UPLOAD_MB env > [mcp] max_upload_mb config. 0 = unlimited.
+    # Negative rejected (mirrors config validation in build_mcp_config).
+    if max_upload_mb is not None:
+        parsed_max_upload_mb = int(max_upload_mb)
+    else:
+        env_mu = os.environ.get("AGENT_WINDOWS_MAX_UPLOAD_MB", "").strip()
+        if env_mu:
+            try:
+                parsed_max_upload_mb = int(env_mu)
+            except ValueError:
+                raise typer.BadParameter(
+                    f"AGENT_WINDOWS_MAX_UPLOAD_MB must be an integer (got {env_mu!r})",
+                    param_hint="--max-upload-mb")
+        else:
+            parsed_max_upload_mb = view.server.max_upload_mb
+    if parsed_max_upload_mb < 0:
+        raise typer.BadParameter(
+            "max_upload_mb must be >= 0 (0 = unlimited)",
+            param_hint="--max-upload-mb")
+
     # Debug mode (TODO #21-3): set the env var once at the entry point; run()
     # and UIA modules read it via is_debug(). No boolean threading into run().
     # The env var is inherited by a Python-spawned daemon automatically; the
@@ -287,6 +333,8 @@ def serve(
         ip_allowlist=parsed_allowlist, cors_origins=parsed_cors,
         tools=parsed_tools, exclude_tools=parsed_exclude,
         stateless_http=parsed_stateless,
+        file_transfer=parsed_file_transfer,
+        max_upload_mb=parsed_max_upload_mb,
         oauth_client_id=oauth_client_id,
         oauth_client_secret=oauth_client_secret,
         allowed_hosts=allowed_hosts,
