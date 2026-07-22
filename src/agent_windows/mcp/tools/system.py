@@ -70,8 +70,11 @@ def fs_move_fn(path: str, destination: str, overwrite: bool | str = False) -> st
                      overwrite=_as_bool(overwrite)).get("output", ""))
 
 
-def fs_delete_fn(path: str, recursive: bool | str = False) -> str:
-    return str(_call("fs_delete", path=path, recursive=_as_bool(recursive)).get("output", ""))
+def fs_delete_fn(path: str, recursive: bool | str = False,
+                 permanent: bool | str = False, dry_run: bool | str = False) -> str:
+    return str(_call("fs_delete", path=path, recursive=_as_bool(recursive),
+                     permanent=_as_bool(permanent), dry_run=_as_bool(dry_run))
+               .get("output", ""))
 
 
 def fs_search_fn(path: str, pattern: str, recursive: bool | str = True) -> str:
@@ -242,11 +245,14 @@ def register(mcp) -> None:
         return fs_move_fn(path=path, destination=destination, overwrite=overwrite)
 
     @mcp.tool(name="fs_delete", description=(
-        "Delete a file/dir. Keywords: delete, remove, rm, trash, erase. "
-        "recursive=True for non-empty dirs."
+        "Delete a file/dir. Default sends to Recycle Bin (reversible); "
+        "permanent=True force-deletes; dry_run=True previews without deleting. "
+        "recursive=True for non-empty dirs. "
+        "Keywords: delete, remove, rm, trash, erase, recycle."
     ), annotations=_REG(title="FS Delete", readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False))
-    def _fs_delete(path: str, recursive: bool | str = False) -> str:
-        return fs_delete_fn(path=path, recursive=recursive)
+    def _fs_delete(path: str, recursive: bool | str = False,
+                   permanent: bool | str = False, dry_run: bool | str = False) -> str:
+        return fs_delete_fn(path=path, recursive=recursive, permanent=permanent, dry_run=dry_run)
 
     @mcp.tool(name="fs_search", description=(
         "Find files/dirs matching a glob pattern (recursive by default). "

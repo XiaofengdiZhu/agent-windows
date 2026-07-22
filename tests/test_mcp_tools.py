@@ -370,6 +370,20 @@ def test_fs_write_fn_requires_content():
         sysmod.fs_write_fn(path="p", content=None)
 
 
+def test_fs_delete_fn_forwards_permanent_dry_run():
+    with patch.object(sysmod, "_call", return_value={"output": "ok"}) as m:
+        sysmod.fs_delete_fn(path="p", permanent=True, dry_run=True)
+    m.assert_called_once_with("fs_delete", path="p", recursive=False,
+                              permanent=True, dry_run=True)
+
+
+def test_fs_delete_fn_defaults():
+    with patch.object(sysmod, "_call", return_value={"output": "ok"}) as m:
+        sysmod.fs_delete_fn(path="p")
+    m.assert_called_once_with("fs_delete", path="p", recursive=False,
+                              permanent=False, dry_run=False)
+
+
 def test_registry_fn_validates_mode():
     with pytest.raises(ValueError):
         sysmod.registry_fn(mode="bogus", path="HKCU:\\S")
