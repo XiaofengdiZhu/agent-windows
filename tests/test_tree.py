@@ -1983,5 +1983,37 @@ def test_render_snapshot_diff_markdown_and_current_refs():
     assert "Changed" in out
 
 
+def test_render_snapshot_diff_shows_scope_in_header():
+    from agent_windows.core.tree import diff_snapshots, render_snapshot_diff
+    base = {"interactive_elements": [_el("A", bbox=(0, 0, 10, 10))], "windows": []}
+    cur = {"interactive_elements": [_el("A", bbox=(0, 0, 10, 10))], "windows": []}
+    d = diff_snapshots(base, cur)
+    # Scope is injected by the Task 2 handler before render; core never sets it.
+    d["stats"]["scope"] = "Login"
+    out = render_snapshot_diff(d, cur)
+    assert '(window: "Login")' in out
+    # Without scope, no parenthetical appears, but the element-count line does.
+    del d["stats"]["scope"]
+    out_noscope = render_snapshot_diff(d, cur)
+    assert "(window:" not in out_noscope
+    assert "elements → current:" in out_noscope
+
+
+def test_render_snapshot_diff_uses_orig_idx_refs():
+    from agent_windows.core.tree import diff_snapshots, render_snapshot_diff
+    base = {"interactive_elements": [], "windows": []}
+    # Display-filtered current element: _orig_idx stashes its ORIGINAL 1-based
+    # index in the unfiltered snapshot. render_snapshot_diff must emit @e7 so
+    # the ref still resolves via resolve_element (which numbers the unfiltered
+    # list), NOT @e1 from a naive 1-based enumerate over the filtered current.
+    cur_el = _el("Search", bbox=(0, 0, 10, 10))
+    cur_el.metadata["_orig_idx"] = 7
+    cur = {"interactive_elements": [cur_el], "windows": []}
+    d = diff_snapshots(base, cur)
+    out = render_snapshot_diff(d, cur)
+    assert "@e7" in out
+    assert "@e1" not in out
+
+
 
 

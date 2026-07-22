@@ -1749,16 +1749,34 @@ def _fmt_diff_row(el: "ElementInfo", ref: str | None) -> str:
 def render_snapshot_diff(diff: dict, current: dict) -> str:
     """Render a ``diff_snapshots`` result as markdown.
 
-    ``@eN`` refs are numbered against the CURRENT tree (1-based index into
-    ``current["interactive_elements"]``, matching what ``resolve_element`` uses).
+    ``@eN`` refs are numbered against the CURRENT tree. When an element carries
+    ``metadata["_orig_idx"]`` (display-filtered snapshot), that ORIGINAL index is
+    used so the ref stays valid against the unfiltered snapshot that
+    ``resolve_element`` resolves against — mirroring ``render_snapshot``.
     Added/changed rows carry the ref (clickable now); removed rows carry none
-    (the element is gone). Empty sections are omitted.
+    (the element is gone). Empty sections are omitted. If
+    ``diff["stats"]["scope"]`` is present (handler-injected), it is shown in the
+    header parenthetically.
     """
     cur_els = current.get("interactive_elements", [])
-    ref_by_id = {id(el): f"@e{i}" for i, el in enumerate(cur_els, 1)}
+    # Mirror render_snapshot's numbering path so refs survive a display filter:
+    # when --display clips the tree, current elements carry metadata["_orig_idx"]
+    # pointing at their ORIGINAL 1-based slot in the unfiltered snapshot that
+    # resolve_element resolves against. Falling back to a naive enumerate would
+    # renumber from 1 and silently point every @eN at the wrong element.
+    def _diff_ref(el: "ElementInfo", i: int) -> str:
+        orig = el.metadata.get("_orig_idx") if el.metadata else None
+        return f"@e{orig}" if orig else f"@e{i}"
+
+    ref_by_id = {id(el): _diff_ref(el, i) for i, el in enumerate(cur_els, 1)}
     stats = diff["stats"]
+    # Scope (e.g. the selected window title) is injected by the handler before
+    # render — core has no view of it. Optional: absent → no parenthetical.
+    scope = stats.get("scope")
+    scope_part = f' (window: "{scope}")' if scope else ""
+    base_str = f'baseline: {stats["baseline_n"]} elements{scope_part}'
     parts = ["## Snapshot Diff",
-             f'baseline: {stats["baseline_n"]} elements → current: {stats["current_n"]}']
+             f'{base_str} → current: {stats["current_n"]}']
     summary = []
     if diff["added"]:
         summary.append(f'+{len(diff["added"])} added')
