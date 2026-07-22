@@ -115,7 +115,10 @@ def _get_key() -> bytes:
 
 
 def _persist_key(key: str) -> None:
-    """Write the generated audit key into ``[audit] key`` (DPAPI-encrypted)."""
+    """Write the generated audit key into ``[audit] key``.
+
+    DPAPI-encrypted at rest by ``save_config`` (not by this function).
+    """
     from agent_windows.utils.config import load_config, save_config
     cfg = load_config()
     cfg.setdefault("audit", {})["key"] = key
@@ -147,13 +150,14 @@ def audit_destructive(
     """
     if not _audit_enabled():
         return
-    ts = datetime.datetime.now().isoformat(timespec="milliseconds")
-    # Stable, compact JSON so the HMAC input is deterministic across runs.
-    params_json = _escape(
-        json.dumps(params, ensure_ascii=False, separators=(",", ":")))
-    who = _escape(caller or current_caller())
-    prefix = f"{ts} | {who} | {method} | {status} | {params_json}"
     try:
+        ts = datetime.datetime.now().isoformat(timespec="milliseconds")
+        # Stable, compact JSON so the HMAC input is deterministic across runs.
+        params_json = _escape(
+            json.dumps(params, ensure_ascii=False, separators=(",", ":")))
+        who = _escape(caller or current_caller())
+        prefix = (f"{ts} | {who} | {_escape(method)} | "
+                  f"{_escape(status)} | {params_json}")
         key = _get_key()
         mac = hmac.new(key, prefix.encode("utf-8"), "sha256").hexdigest()
         path = _audit_path()
@@ -189,7 +193,7 @@ def verify_log(path: Path | None = None) -> VerifyReport:
     path = path or _audit_path()
     if not path.exists():
         return report
-    key = _get_key()
+    key = None  # fetched lazily only when a parseable line is encountered
     with open(path, encoding="utf-8") as f:
         for lineno, raw in enumerate(f, start=1):
             line = raw.rstrip("\n")
@@ -198,6 +202,8 @@ def verify_log(path: Path | None = None) -> VerifyReport:
                 report.malformed.append(lineno)
                 continue
             report.total += 1
+            if key is None:
+                key = _get_key()
             prefix, mac = line[:idx], line[idx + 3:]
             expected = hmac.new(key, prefix.encode("utf-8"), "sha256").hexdigest()
             if hmac.compare_digest(expected, mac):

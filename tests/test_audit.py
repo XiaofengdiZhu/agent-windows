@@ -1,6 +1,5 @@
 """Tests for the destructive-op audit log (HMAC write/verify, key mgmt)."""
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -60,6 +59,12 @@ class TestWriteAndVerify:
         report = audit.verify_log()
         assert report.malformed == [1]
         assert report.mismatched == []
+
+    def test_verify_missing_file_is_empty_ok(self, tmp_path, monkeypatch):
+        _stub_key(monkeypatch)
+        report = audit.verify_log(Path(tmp_path / "nope.log"))
+        assert report.total == 0
+        assert report.ok is True
 
 
 class TestEscape:
@@ -133,8 +138,24 @@ class TestCurrentCaller:
         finally:
             audit_caller.reset(token)
 
-    def test_verify_missing_file_is_empty_ok(self, tmp_path, monkeypatch):
+
+class TestRobustness:
+    def test_audit_destructive_never_raises(self, isolated_audit, monkeypatch):
+        """A non-serializable param must not escape audit_destructive (never raises)."""
         _stub_key(monkeypatch)
-        report = audit.verify_log(Path(tmp_path / "nope.log"))
+        # object() is not JSON-serializable; this must be swallowed, not raised.
+        audit.audit_destructive("fs_delete", {"path": object()}, "ok", caller="local")
+
+    def test_verify_empty_file_does_not_generate_key(self, isolated_audit, monkeypatch):
+        """verify on an all-malformed log must NOT fetch (and thus never generate/
+        persist) a key — verify is a read-only operator action."""
+        import agent_windows.core.audit as aud
+
+        def _no_key():
+            raise AssertionError(
+                "verify_log must not call _get_key for malformed-only logs")
+        monkeypatch.setattr(aud, "_get_key", _no_key)
+        isolated_audit.write_text("totally malformed line\n", encoding="utf-8")
+        report = audit.verify_log()
+        assert report.malformed == [1]
         assert report.total == 0
-        assert report.ok is True
