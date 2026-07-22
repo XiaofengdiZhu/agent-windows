@@ -1,9 +1,6 @@
 """Tests for the /files HTTP transfer endpoints (handler logic via a bare
 Starlette app; no FastMCP/uvicorn)."""
-from pathlib import Path
-
 from starlette.applications import Starlette
-from starlette.middleware import Middleware
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
@@ -59,3 +56,84 @@ def test_head_returns_sha256_and_size(tmp_path):
     assert r.headers["x-sha256"] == hashlib.sha256(b"abc").hexdigest()
     assert r.headers["x-size"] == "3"
     assert r.content == b""
+
+
+# --- upload (PUT) + register_file_endpoints (Task 3) ---
+
+from functools import partial
+
+from agent_windows.mcp.files import upload
+
+
+def _upload_app(cap):
+    return Starlette(routes=[Route("/files", partial(upload, cap=cap), methods=["PUT"])])
+
+
+def test_upload_creates_file_and_returns_sha256(tmp_path):
+    import hashlib
+    dest = tmp_path / "out.bin"
+    body = b"x" * 100
+    r = TestClient(_upload_app(512)).put(
+        f"/files?path={dest}", content=body,
+        headers={"content-type": "application/octet-stream"})
+    assert r.status_code == 200
+    assert dest.read_bytes() == body
+    assert r.json()["sha256"] == hashlib.sha256(body).hexdigest()
+    assert r.json()["bytes"] == 100
+
+
+def test_upload_rejects_existing_without_overwrite(tmp_path):
+    dest = tmp_path / "out.bin"
+    dest.write_bytes(b"old")
+    r = TestClient(_upload_app(512)).put(f"/files?path={dest}", content=b"new")
+    assert r.status_code == 409
+    assert dest.read_bytes() == b"old"  # untouched
+
+
+def test_upload_overwrites_with_flag(tmp_path):
+    dest = tmp_path / "out.bin"
+    dest.write_bytes(b"old")
+    r = TestClient(_upload_app(512)).put(f"/files?path={dest}&overwrite=true", content=b"new")
+    assert r.status_code == 200
+    assert dest.read_bytes() == b"new"
+
+
+def test_upload_creates_parent_dirs(tmp_path):
+    dest = tmp_path / "sub" / "deep" / "out.bin"
+    r = TestClient(_upload_app(512)).put(f"/files?path={dest}", content=b"x")
+    assert r.status_code == 200
+    assert dest.read_bytes() == b"x"
+
+
+def test_upload_rejects_blacklisted_path(tmp_path):
+    blocked = tmp_path / ".ssh" / "k"
+    r = TestClient(_upload_app(512)).put(f"/files?path={blocked}", content=b"x")
+    assert r.status_code == 403
+
+
+def test_upload_leaves_no_temp_on_oversize(tmp_path):
+    # Real stream over cap: write > cap bytes, ensure no .awpart-* left behind.
+    cap = 1  # 1 MiB
+    dest = tmp_path / "big.bin"
+    body = b"z" * (int(cap * 1024 * 1024) + 10)
+    r = TestClient(_upload_app(cap)).put(f"/files?path={dest}", content=body)
+    assert r.status_code == 413
+    assert not dest.exists()
+    assert not any(p.name.startswith(".awpart-") for p in tmp_path.iterdir())
+
+
+def test_register_file_endpoints_mounts_three_routes():
+    from agent_windows.mcp.files import register_file_endpoints
+    mounted = []
+
+    class FakeMcp:
+        def custom_route(self, path, methods):
+            def deco(fn):
+                mounted.append((path, methods))
+                return fn
+            return deco
+
+    register_file_endpoints(FakeMcp(), max_upload_mb=16)
+    # methods are lists (unhashable) -> join for a deterministic compare.
+    paths_methods = sorted(f"{p}:{','.join(m)}" for p, m in mounted)
+    assert paths_methods == ["/files:GET", "/files:HEAD", "/files:PUT"]

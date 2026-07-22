@@ -15,6 +15,7 @@ identical to the fs_* tools.
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
 from typing import Any
 
 from starlette.requests import Request
@@ -29,7 +30,7 @@ def _err(status: int, message: str, **extra: Any) -> JSONResponse:
     return JSONResponse(content=payload, status_code=status)
 
 
-def _sha256_file(p) -> str:
+def _sha256_file(p: Path) -> str:
     h = hashlib.sha256()
     with open(p, "rb") as f:
         for chunk in iter(lambda: f.read(_CHUNK), b""):
@@ -82,4 +83,77 @@ async def head(request: Request) -> Response:
     })
 
 
-# upload() + register_file_endpoints() added in Task 3.
+class _SizeExceeded(Exception):
+    """Internal: upload body surpassed the configured cap mid-stream."""
+
+
+def _safe_unlink(p) -> None:
+    try:
+        p.unlink()
+    except OSError:
+        pass
+
+
+async def upload(request: Request, *, cap: int | None) -> Response:
+    """PUT /files?path=<abs>[&overwrite=true] — stream a file from the client.
+
+    Streams to a same-dir temp file (atomic ``os.replace``), hashing + size-
+    counting as it goes. ``cap`` (bytes, None = unlimited) bounds upload size.
+    """
+    import os
+    import secrets
+    raw = request.query_params.get("path")
+    if not raw:
+        return _err(400, "missing required query param 'path'")
+    overwrite = str(request.query_params.get("overwrite", "")).strip().lower() in (
+        "1", "true", "yes", "on")
+    from agent_windows.core.filesystem import validate_write_path
+    try:
+        target = validate_write_path(raw)
+    except ValueError as exc:
+        return _err(403, str(exc))
+    # Early reject on declared Content-Length (don't read an oversized body).
+    if cap is not None:
+        cl = request.headers.get("content-length")
+        if cl and cl.isdigit() and int(cl) > cap:
+            return _err(413, f"upload exceeds max_upload_mb cap ({cap} bytes)")
+    if target.exists() and not overwrite:
+        return _err(409, f"target exists; pass overwrite=true to replace: {raw}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.parent / f".awpart-{secrets.token_hex(8)}"
+    h = hashlib.sha256()
+    size = 0
+    try:
+        with open(tmp, "wb") as f:
+            async for chunk in request.stream():
+                if not chunk:
+                    continue
+                if cap is not None and size + len(chunk) > cap:
+                    raise _SizeExceeded(cap)
+                f.write(chunk)
+                h.update(chunk)
+                size += len(chunk)
+        os.replace(tmp, target)
+    except _SizeExceeded:
+        _safe_unlink(tmp)
+        return _err(413, f"upload exceeded max_upload_mb cap ({cap} bytes)")
+    except Exception as exc:  # noqa: BLE001 — cleanup, then honest 500
+        _safe_unlink(tmp)
+        return _err(500, f"upload failed: {exc}")
+    return JSONResponse({"path": str(target), "bytes": size,
+                         "sha256": h.hexdigest()}, status_code=200)
+
+
+def register_file_endpoints(mcp: Any, *, max_upload_mb: int = 512) -> None:
+    """Mount GET/HEAD/PUT /files on a FastMCP instance (HTTP transport only).
+
+    Caller (``mcp/server.maybe_mount_file_endpoints``) already gated on
+    transport != stdio and ``file_transfer``. ``max_upload_mb`` <= 0 means no
+    cap.
+    """
+    from functools import partial
+    cap = (int(max_upload_mb) * 1024 * 1024
+           if max_upload_mb and max_upload_mb > 0 else None)
+    mcp.custom_route("/files", methods=["GET"])(download)
+    mcp.custom_route("/files", methods=["HEAD"])(head)
+    mcp.custom_route("/files", methods=["PUT"])(partial(upload, cap=cap))
