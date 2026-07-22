@@ -1804,11 +1804,21 @@ def diff_snapshots(baseline: dict, current: dict) -> dict:
     }
 
 
+def _oneline(s: Any, limit: int = 60) -> str:
+    """Flatten newlines/tabs (one element = one diff line) and cap length.
+
+    A multiline value (e.g. a Notepad document's full text) would otherwise
+    split a Changed row across lines and scramble the rendered section.
+    """
+    s = str(s).replace("\r", " ").replace("\n", " ").replace("\t", " ")
+    return s if len(s) <= limit else s[:limit - 3] + "..."
+
+
 def _fmt_diff_row(el: "ElementInfo", ref: str | None) -> str:
     ref = ref or ""
     t = el.control_type.replace("Control", "")
-    name = (el.name or "")[:40]
-    win = (el.window_name or "")[:30]
+    name = _oneline(el.name, 40)
+    win = _oneline(el.window_name, 30)
     return f"{ref:<5} {t:<10} {name:<24} [{win}]".rstrip()
 
 
@@ -1874,7 +1884,8 @@ def render_snapshot_diff(diff: dict, current: dict) -> str:
         for c in diff["changed"]:
             el = c["element"]
             row = _fmt_diff_row(el, ref_by_id.get(id(el)))
-            delta_str = "  ".join(f"{f}: {o}→{n}" for f, o, n in c["deltas"])
+            delta_str = "  ".join(
+                f"{f}: {_oneline(o)}→{_oneline(n)}" for f, o, n in c["deltas"])
             parts.append(f"{row}  {delta_str}" if row else delta_str)
         parts.append("")
     if diff["windows_added"]:

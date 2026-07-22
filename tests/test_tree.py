@@ -2067,6 +2067,24 @@ def test_diff_identical_is_empty():
     assert d["added"] == [] and d["removed"] == [] and d["changed"] == []
 
 
+def test_render_diff_multiline_value_is_single_lined():
+    # A multiline value (e.g. a Notepad document's full text) must render on ONE
+    # line — newlines in the value would otherwise split the Changed row across
+    # lines and scramble the section. The new tail ("789") stays visible.
+    from agent_windows.core.tree import diff_snapshots, render_snapshot_diff
+    base_el = _el("Doc", ctype="EditControl", bbox=(0, 0, 10, 10))
+    base_el.metadata["value"] = "你好 Hello\n123\n456"
+    cur_el = _el("Doc", ctype="EditControl", bbox=(0, 0, 10, 10))
+    cur_el.metadata["value"] = "你好 Hello\n123\n456\n789"
+    cur = {"interactive_elements": [cur_el], "windows": []}
+    d = diff_snapshots({"interactive_elements": [base_el], "windows": []}, cur)
+    out = render_snapshot_diff(d, cur)
+    value_lines = [ln for ln in out.splitlines() if "value:" in ln]
+    assert value_lines, "no value delta rendered"
+    assert "789" in value_lines[0]     # delta on one line, new tail visible
+    assert "\n" not in value_lines[0]  # no embedded newline
+
+
 def test_render_snapshot_diff_markdown_and_current_refs():
     from agent_windows.core.tree import diff_snapshots, render_snapshot_diff
     base = {"interactive_elements": [_el("OK", bbox=(0, 0, 10, 10))], "windows": []}
