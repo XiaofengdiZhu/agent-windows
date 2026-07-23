@@ -732,6 +732,8 @@ agent-windows fs info C:\Users\test\file.txt
 | `fs search` | `path` (str, **required**), `pattern` (str, **required** — glob, e.g. `*.py`), `--no-recursive` (bool, default `false` — search top level only) |
 | `fs info` | `path` (str, **required**) — returns metadata (size, timestamps, attributes) |
 
+> **`fs delete` output (post-op confirm)**: the path's disappearance is verified — `Verified: gone` on success, `Still present (unexpected)` if the literal path somehow survives. Sibling `verified.gone` (bool). Recycling is **best-effort**: `FOF_ALLOWUNDO` is only a hint, so a too-large file or an unavailable Recycle Bin makes the delete permanent instead — recoverability is not guaranteed, and the tool reports only that the path is gone, not whether it was recycled or permanently deleted. `--dry-run` returns a preview with no `Verified` line.
+
 > **Memory bounds (read/list/search)**: to keep the worker from loading huge trees into RAM, results are capped — `fs read` returns at most ~5 MiB (a larger file is truncated, or use `--offset`/`--limit` to stream just the lines you need; a line range is also byte-bounded so a multi-GB file is never read whole), `fs list` at 5000 entries, `fs search` at 1000 matches. When truncated, the output ends with a `[Truncated: ...]` notice.
 
 ### clipboard get / clipboard set
@@ -769,6 +771,8 @@ agent-windows process kill notepad --force        # 强杀 immediately (default:
 |---------|-----------|
 | `process list` | `--sort-by` (str, default `memory` — `memory`/`cpu`/`name`, descending), `--limit` (int, default `0` = all — cap rows to top-N), `--name` (str, default `""` — case-insensitive substring filter) |
 | `process kill` | `pid_or_name` (str/int, **required**), `--force` (bool, default `false` — `false` = graceful/WM_CLOSE lets the app save, `true` = immediate 强杀) |
+
+> **`process kill` output (post-op recheck)**: after taskkill reports success the tool rechecks liveness — `confirmed gone` (the PID no longer resolves / zero matching image names remain) or `still running (N remaining; retry with force=True)` when a graceful `WM_CLOSE` was ignored or the app prompted to save. Sibling `killed.confirmed_dead` (bool) and `killed.remaining` (int, name path). The recheck is **not** auto-retried with `/F` — decide yourself whether to escalate.
 
 ### notify
 
@@ -808,7 +812,7 @@ agent-windows registry delete HKCU:\Software\MyApp           # Delete the whole 
 
 **`--type` values**: `String` (default), `ExpandString`, `DWord`, `QWord`, `MultiString` (value = JSON array, e.g. `'["a","b"]'`), `Binary` (value = hex string, e.g. `deadbeef`).
 
-**Output**: `exit_code`, `stdout`, `stderr`; `get` also returns `value`. Paths must start with `HKCU/HKLM/HKCR/HKU/HKCC/HKPD`. All interpolated strings are single-quote-escaped (safe for any content). A missing value/key surfaces as a non-zero `exit_code` with stderr (not an exception).
+**Output**: `exit_code`, `stdout`, `stderr`; `get` also returns `value`. Paths must start with `HKCU/HKLM/HKCR/HKU/HKCC/HKPD`. All interpolated strings are single-quote-escaped (safe for any content). A missing value/key surfaces as a non-zero `exit_code` with stderr (not an exception). On a successful `delete`, a `Remaining values:` (value delete) or `Remaining sub-keys:` (whole-key delete) line is appended along with a `remaining` sibling (list of surviving names; empty shows `(none)`) — so you know what's left without a second call.
 
 ---
 
