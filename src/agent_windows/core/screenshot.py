@@ -652,12 +652,21 @@ def diff_images(
         vis_rgba[outline_coords[0], outline_coords[1], 2] = 0
         vis_rgba[outline_coords[0], outline_coords[1], 3] = 255
 
+        if diff_pixels > 0:
+            changed_bbox = [int(diff_coords[1].min()), int(diff_coords[0].min()),
+                            int(diff_coords[1].max()) + 1, int(diff_coords[0].max()) + 1]
+        else:
+            changed_bbox = None
         vis_img = Image.fromarray(vis_rgba, mode="RGBA")
     else:
         # Fallback without numpy: simple side-by-side diff
         mask = diff_gray.point(lambda p: 255 if p > threshold else 0)
         diff_pixels = sum(1 for v in mask.getchannel("L").tobytes() if v > 0)
         total_pixels = mask.width * mask.height
+        # getbbox() returns (l,u,r,l) exclusive — matches the screenshot bbox
+        # convention so changed_bbox round-trips with capture/highlight bboxes.
+        bb = mask.getbbox()
+        changed_bbox = list(bb) if bb else None
         vis_img = ImageChops.difference(a, b)
 
     diff_percent = round(diff_pixels / max(total_pixels, 1) * 100, 2)
@@ -676,6 +685,7 @@ def diff_images(
         "total_pixels": total_pixels,
         "diff_percent": diff_percent,
         "match": diff_pixels == 0,
+        "changed_bbox": changed_bbox,
         "diff_path": str(path),
     }
 

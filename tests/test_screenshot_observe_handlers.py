@@ -273,7 +273,8 @@ class TestHighlightHandler:
             r = HANDLERS["highlight"]({"x1": 1, "y1": 2, "x2": 3, "y2": 4})
         regions = m_hr.call_args.args[1]
         assert regions == [{"x1": 1, "y1": 2, "x2": 3, "y2": 4, "label": "", "color": "red"}]
-        assert r["regions"] == 1
+        assert len(r["regions"]) == 1
+        assert r["regions"][0]["x1"] == 1
         assert "Regions: 1" in r["output"]
 
     def test_single_region_label_and_color(self):
@@ -290,7 +291,8 @@ class TestHighlightHandler:
              patch("agent_windows.core.screenshot.highlight_region", return_value="p") as m_hr:
             r = HANDLERS["highlight"]({"regions": regions})
         assert m_hr.call_args.args[1] == regions
-        assert r["regions"] == 2
+        assert len(r["regions"]) == 2
+        assert r["regions"] == regions
 
     def test_uses_provided_image_instead_of_capture(self, tmp_path):
         """When `image` is supplied, highlight opens it instead of capturing."""
@@ -310,6 +312,30 @@ class TestHighlightHandler:
              patch("agent_windows.core.filesystem.validate_write_path", return_value="/safe/o.png") as m_vw:
             HANDLERS["highlight"]({"x1": 0, "y1": 0, "x2": 1, "y2": 1, "output": "o.png"})
         m_vw.assert_called_once_with("o.png")
+
+    def test_sibling_regions_is_bbox_list(self):
+        """P3.6: `regions` sibling is a list of bbox dicts (not a count), so
+        the caller gets each region's coordinates without parsing output."""
+        regions = [{"x1": 1, "y1": 2, "x2": 3, "y2": 4, "label": "A", "color": "red"}]
+        with patch("agent_windows.core.screenshot.capture_screenshot", return_value=_fake_image()), \
+             patch("agent_windows.core.screenshot.highlight_region", return_value="p"):
+            r = HANDLERS["highlight"]({"regions": regions})
+        assert isinstance(r["regions"], list)
+        assert r["regions"] == regions
+        for key in ("x1", "y1", "x2", "y2"):
+            assert key in r["regions"][0]
+
+    def test_output_lists_region_bboxes(self):
+        """Output renders each region as `(x1,y1)-(x2,y2)` so a text-only
+        caller (CLI/MCP) still sees the coordinates."""
+        regions = [{"x1": 10, "y1": 20, "x2": 30, "y2": 40, "label": "L", "color": "red"},
+                   {"x1": 5, "y1": 6, "x2": 7, "y2": 8}]
+        with patch("agent_windows.core.screenshot.capture_screenshot", return_value=_fake_image()), \
+             patch("agent_windows.core.screenshot.highlight_region", return_value="p"):
+            r = HANDLERS["highlight"]({"regions": regions})
+        assert "(10,20)-(30,40)" in r["output"]
+        assert '"L"' in r["output"]
+        assert "(5,6)-(7,8)" in r["output"]
 
 
 # ── diff handler ─────────────────────────────────────────────────────
@@ -335,16 +361,29 @@ class TestDiffHandler:
     def test_diff_with_explicit_compare(self, tmp_path):
         a, b = self._two_images(tmp_path)
         result = {"diff_pixels": 16, "total_pixels": 16, "diff_percent": 100.0,
-                  "match": False, "diff_path": "/o/d.png"}
+                  "match": False, "diff_path": "/o/d.png",
+                  "changed_bbox": [10, 10, 20, 20]}
         with patch("agent_windows.core.screenshot.diff_images", return_value=result) as m_diff, \
              patch("agent_windows.core.filesystem.validate_read_path", side_effect=lambda p: p):
             r = HANDLERS["diff"]({"baseline": str(a), "compare": str(b), "threshold": 10})
         m_diff.assert_called_once()
         assert m_diff.call_args.kwargs["threshold"] == 10
         assert r["diff_pixels"] == 16
+        assert r["changed_bbox"] == [10, 10, 20, 20]
         assert "Diff pixels: 16 / 16" in r["output"]
         assert "Match: False" in r["output"]
+        assert "Changed region: (10,10)-(20,20)" in r["output"]
         assert "Path: /o/d.png" in r["output"]
+
+    def test_diff_output_changed_region_none_when_match(self, tmp_path):
+        """P3.6: when match (no changed_bbox), output says 'Changed region: none'."""
+        a, _ = self._two_images(tmp_path)
+        result = {"diff_pixels": 0, "total_pixels": 16, "diff_percent": 0.0,
+                  "match": True, "diff_path": "/o/d.png"}
+        with patch("agent_windows.core.screenshot.diff_images", return_value=result), \
+             patch("agent_windows.core.filesystem.validate_read_path", side_effect=lambda p: p):
+            r = HANDLERS["diff"]({"baseline": str(a)})
+        assert "Changed region: none" in r["output"]
 
     def test_diff_captures_when_no_compare(self, tmp_path):
         a, _ = self._two_images(tmp_path)

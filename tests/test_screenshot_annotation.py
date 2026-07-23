@@ -142,7 +142,7 @@ class TestDiffImages:
         with tempfile.TemporaryDirectory() as tmpdir:
             out = Path(tmpdir) / "diff.png"
             result = diff_images(img, img.copy(), output_path=out)
-            for key in ("diff_pixels", "total_pixels", "diff_percent", "match", "diff_path"):
+            for key in ("diff_pixels", "total_pixels", "diff_percent", "match", "diff_path", "changed_bbox"):
                 assert key in result
 
     def test_partial_diff(self):
@@ -152,6 +152,21 @@ class TestDiffImages:
         result = diff_images(a, b, threshold=10)
         assert result["diff_pixels"] == 100  # 10x10
         assert result["total_pixels"] == 10000
+
+    def test_changed_bbox_for_partial_diff(self):
+        """P3.6: changed_bbox is the exclusive [l,t,r,b] of all changed pixels
+        — here the modified region (20,20)-(30,30), so [20,20,30,30]."""
+        a = _solid_image(100, 100, (100, 100, 100))
+        b = _modify_region(a, 20, 20, 30, 30, (200, 200, 200))
+        result = diff_images(a, b, threshold=10)
+        assert result["changed_bbox"] == [20, 20, 30, 30]
+
+    def test_changed_bbox_none_when_match(self):
+        """No changed pixels → changed_bbox is None (not a zero box)."""
+        img = _solid_image(50, 50, (128, 128, 128))
+        result = diff_images(img, img.copy())
+        assert result["match"] is True
+        assert result["changed_bbox"] is None
 
 
 # ── annotate_screenshot (TODO #14) ──────────────────────────────────

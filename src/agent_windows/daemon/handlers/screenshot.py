@@ -278,10 +278,16 @@ def _highlight(params: dict) -> dict[str, Any]:
 
     path = highlight_region(image, regions, output_path=output if output else None)
 
+    region_lines = []
+    for i, r in enumerate(regions, 1):
+        label = r.get("label", "")
+        tag = f' "{label}"' if label else ""
+        region_lines.append(f"{i}: ({r['x1']},{r['y1']})-({r['x2']},{r['y2']}){tag}")
     return {
-        "output": f"## Highlight\nRegions: {len(regions)}\nPath: {path}",
+        "output": (f"## Highlight\nRegions: {len(regions)}\n"
+                   + "\n".join(region_lines) + f"\nPath: {path}"),
         "path": str(path),
-        "regions": len(regions),
+        "regions": regions,
     }
 
 
@@ -322,12 +328,16 @@ def _diff(params: dict) -> dict[str, Any]:
         output_path=output if output else None,
     )
 
+    cb = result.get("changed_bbox")
+    region_line = (f"Changed region: ({cb[0]},{cb[1]})-({cb[2]},{cb[3]})"
+                   if cb else "Changed region: none")
     return {
         "output": (
             f"## Diff\n"
             f"Diff pixels: {result['diff_pixels']} / {result['total_pixels']} "
             f"({result['diff_percent']}%)\n"
             f"Match: {result['match']}\n"
+            f"{region_line}\n"
             f"Path: {result['diff_path']}"
         ),
         **result,
