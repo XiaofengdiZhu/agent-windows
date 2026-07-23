@@ -269,6 +269,8 @@ agent-windows mouse-down 500 300           # Press and hold
 agent-windows mouse-up 500 300             # Release
 ```
 
+`click`/`dblclick`/`hover`/`move` self-verify by default: each appends `Hit:` (the element under the cursor) and `Focus:` (the foreground window) to its output, and `drag` appends `Drop:` + `Slider:`. So you usually **don't need a follow-up `snapshot`** to confirm a click landed on the right thing — read the verify lines. Turn it off for raw speed with `config set input.verify false`.
+
 ### Keyboard
 
 ```bash

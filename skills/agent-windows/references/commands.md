@@ -304,6 +304,12 @@ Most mouse commands accept either explicit `X Y` coordinates or a `--selector`/`
 
 > **Negative coordinates** are supported on both the native launcher and the Python CLI (`agent-windows-python` / `--no-daemon`). A multi-monitor desktop extends left or above the primary monitor into negative space (e.g. a window at `x=-1920`), so `agent-windows click -1920 0` and `agent-windows drag -1920 0 -100 100` work without quoting or `--` separators.
 
+> **Post-op verify (default on).** `click`, `dblclick`, `hover`, and `move` append two best-effort lines after the op so you usually don't need a follow-up `snapshot` to confirm what you hit:
+> - `Hit: <Type> "<name>"` — the UIA element under the cursor after the op (`(none)` if it landed on dead space / non-client area). Names truncate to 40 chars with a `...(+N)` tail marker.
+> - `Focus: "<window title>"` — the current foreground window (changes when the op opens a modal / new window; omitted if empty).
+>
+> These are decoration: any UIA read failure degrades to a missing line, never an error. Turn off for raw speed with `config set input.verify false` (live; the daemon re-reads config per command).
+
 ### click
 
 Mouse click at coordinates or an element.
@@ -417,6 +423,12 @@ agent-windows drag 100 200 400 500 [--right]
 | `--right` | bool | `false` | Right-button drag |
 
 `drag` takes explicit coordinates only (two endpoints); resolve element centers via `snapshot` first if needed.
+
+**Post-op verify (default on).** `drag` appends best-effort lines about the destination:
+- `Drop: <Type> "<name>"` — the element hit at the end point (the drop target).
+- `Slider: <N>%` — if that element exposes a `RangeValue`/`Scroll` pattern, its post-drag percentage (native Win32/WPF sliders report this; scrollbars and custom canvas sliders often don't — best-effort, omitted when unavailable).
+
+Same fault-tolerance and `[input] verify` toggle as the other mouse commands.
 
 **Output**: `{output}`
 
@@ -617,7 +629,16 @@ agent-windows app switch chrome
 |-----------|------|---------|-------------|
 | `name_or_title` | str | **required** | Window title or process name |
 
-**Output**: Window handle of the switched-to window.
+**Output**: The switched-to window's title + handle, plus a foreground confirmation. `SetForegroundWindow`'s return is advisory (focus-stealing prevention can block the switch without erroring), so the command re-reads the real foreground window and reports it:
+
+```
+## App Switch
+Window: "Notepad"
+Handle: 197642
+Foreground: yes                        # or: no (blocked by focus-stealing prevention)
+```
+
+Machine-readable sibling keys: `hwnd` (int) and `foreground_confirmed` (bool) — use the latter to detect a blocked switch and retry (e.g. click the target first to satisfy focus rules).
 
 ### app list
 
