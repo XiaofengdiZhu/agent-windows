@@ -148,19 +148,27 @@ class TestFriendlyNameLaunch:
         assert mock_p.call_args_list[1].args[0] == [r"C:\Apps\myapp.exe"]
         assert result["pid"] == 99
 
-    def test_launch_uwp_uses_shell_appsfolder(self):
-        """A UWP AppID (no backslash, not an existing path) launches via
-        explorer.exe shell:AppsFolder\\{appid}."""
+    def test_launch_uwp_uses_activation_manager(self):
+        """A UWP AppID activates via IApplicationActivationManager and returns
+        the real PID (no explorer.exe surrogate)."""
         appid = "Microsoft.Calculator_8wekyb3d8bbwe!App"
-        with patch("agent_windows.core.app_manager.subprocess.Popen",
-                   return_value=MagicMock(pid=0)) as mock_p, \
+        with patch("agent_windows.core.uwp_activation.activate_uwp_app",
+                   return_value=1234) as mock_act, \
                 patch("os.path.exists", return_value=False):
             result = am._launch_start_app_target("calculator", appid)
-        argv = mock_p.call_args.args[0]
-        assert argv[0] == "explorer.exe"
-        assert argv[1] == f"shell:AppsFolder\\{appid}"
-        assert result["pid"] == 0
+        mock_act.assert_called_once_with(appid, "")  # aumid + empty args
+        assert result["pid"] == 1234
         assert "UWP" in result["output"]
+        assert "AppID: " + appid in result["output"]
+        assert "PID: 1234" in result["output"]
+
+    def test_launch_uwp_threads_args_to_activation(self):
+        appid = "Microsoft.Calculator_8wekyb3d8bbwe!App"
+        with patch("agent_windows.core.uwp_activation.activate_uwp_app",
+                   return_value=1) as mock_act, \
+                patch("os.path.exists", return_value=False):
+            am._launch_start_app_target("calculator", appid, args=["--flag", "v"])
+        mock_act.assert_called_once_with(appid, "--flag v")
 
     def test_launch_win32_path_validates_resolved_location(self):
         """A Win32 path target is re-validated (L-03) before launching."""

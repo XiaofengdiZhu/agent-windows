@@ -121,29 +121,24 @@ def launch_app(name_or_path: str, args: list[str] | None = None) -> dict[str, An
         target = _resolve_friendly_name(name_or_path)
         if not target:
             raise ValueError(f"Application not found: {name_or_path}")
-        return _launch_start_app_target(name_or_path, target)
+        return _launch_start_app_target(name_or_path, target, args)
 
 
-def _launch_start_app_target(friendly: str, target: str) -> dict[str, Any]:
+def _launch_start_app_target(friendly: str, target: str, args: list[str] | None = None) -> dict[str, Any]:
     """Launch a Start-Menu-resolved target.
 
-    ``target`` is either an AppID (UWP — no backslash, not an existing path) or
-    a Win32 exe/.lnk path. UWP apps launch via the shell AppsFolder; Win32 paths
-    launch directly (args still apply). We don't capture a reliable PID for UWP
-    (the surrogate process differs), so report 0 and let the caller observe the
-    window instead.
+    ``target`` is either an AUMID (UWP — no backslash, not an existing path) or
+    a Win32 exe/.lnk path. UWP apps activate via IApplicationActivationManager,
+    which returns the real app process id (unlike the old explorer.exe surrogate
+    that could only report 0). Win32 paths launch directly (args still apply).
     """
     is_uwp = not ("\\" in target or os.path.exists(target))
     try:
         if is_uwp:
-            # shell:AppsFolder\{appid} is the canonical UWP launch target.
-            subprocess.Popen(
-                ["explorer.exe", f"shell:AppsFolder\\{target}"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                stdin=subprocess.DEVNULL,
-                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS,
-            )
-            return {"output": f"## App Launch\nApp: {friendly} (UWP)\nAppID: {target}", "pid": 0}
+            from agent_windows.core.uwp_activation import activate_uwp_app
+            pid = activate_uwp_app(target, " ".join(args or []))
+            return {"output": f"## App Launch\nApp: {friendly} (UWP)\nAppID: {target}\nPID: {pid}",
+                    "pid": pid}
         # Win32 path: launch directly (validate the resolved location too).
         from agent_windows.core.filesystem import validate_executable_path
         validate_executable_path(target)
