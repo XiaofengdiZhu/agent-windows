@@ -154,13 +154,18 @@ def _type(params: dict) -> dict[str, Any]:
 @handler("scroll")
 def _scroll(params: dict) -> dict[str, Any]:
     """Scroll at position."""
-    from agent_windows.core.input_controller import scroll_at
+    from agent_windows.core.input_controller import scroll_at, MAX_SCROLL_STEPS
 
     x, y = _coords(params)
     direction = params.get("direction", "down")
-    amount = params.get("amount", 3)
+    requested = int(params.get("amount", 3))
+    # Mirror scroll_at's own clamp so the output reports what actually ran —
+    # scroll_at would silently shrink a runaway amount, leaving the agent to
+    # believe it scrolled far more than it did. (P3.1)
+    amount = max(0, min(requested, MAX_SCROLL_STEPS))
     scroll_at(x, y, direction=direction, amount=amount)
-    return {"output": f"## Scroll\nPosition: ({x}, {y})\nDirection: {direction}\nAmount: {amount}"}
+    note = f" (clamped from {requested})" if amount != requested else ""
+    return {"output": f"## Scroll\nPosition: ({x}, {y})\nDirection: {direction}\nAmount: {amount}{note}"}
 
 
 @handler("expand")

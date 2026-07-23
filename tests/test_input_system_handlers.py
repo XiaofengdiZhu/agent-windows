@@ -213,6 +213,16 @@ class TestScrollHandler:
             HANDLERS["scroll"]({"x": 1, "y": 2, "direction": "up", "amount": 5})
         m.assert_called_once_with(1, 2, direction="up", amount=5)
 
+    def test_amount_clamped_to_max_in_output(self):
+        """A runaway amount is clamped to MAX_SCROLL_STEPS before forwarding,
+        and the output reports the clamped value with a note — not the raw
+        input (which scroll_at would silently shrink, leaving the agent misled)."""
+        with patch("agent_windows.core.input_controller.scroll_at") as m:
+            r = HANDLERS["scroll"]({"x": 1, "y": 2, "amount": 5000})
+        m.assert_called_once_with(1, 2, direction="down", amount=1000)
+        assert "Amount: 1000" in r["output"]
+        assert "clamped from 5000" in r["output"]
+
 
 class TestMoveHandler:
     def test_forwards(self):
