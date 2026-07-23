@@ -520,6 +520,27 @@ class TestDetectRouterHandler:
             assert result["count"] == 1
             assert len(result["targets"]) == 1
 
+    def test_handler_includes_center_coords(self):
+        """detect output and targets carry a click-ready center (bbox midpoint),
+        so the agent can click without computing it from the box each time."""
+        from agent_windows.daemon.router import HANDLERS
+
+        with patch("agent_windows.core.grounding.detect_elements") as mock_detect:
+            mock_detect.return_value = {
+                "description": "icons",
+                "count": 1,
+                "targets": [{"index": 1, "label": "pdf",
+                             "box": {"x1": 10, "y1": 20, "x2": 30, "y2": 40}}],
+                "screenshot_path": "/tmp/test.png",
+            }
+            result = HANDLERS["detect"]({"description": "icons"})
+
+        # center = midpoint of (10,20,30,40) = (20, 30)
+        assert "center=(20, 30)" in result["output"]
+        t = result["targets"][0]
+        assert t["center_x"] == 20
+        assert t["center_y"] == 30
+
     def test_handler_zero_targets_format(self):
         from agent_windows.daemon.router import HANDLERS
 

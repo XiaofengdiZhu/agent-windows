@@ -109,6 +109,7 @@ def _detect(params: dict) -> dict[str, Any]:
     )
 
     targets = result["targets"]
+    out_targets: list[dict] = []
     if targets:
         lines = [
             "## Detection Result",
@@ -120,9 +121,14 @@ def _detect(params: dict) -> dict[str, Any]:
         ]
         for t in targets:
             b = t["box"]
+            # Click-ready center (bbox midpoint) so the agent needn't compute
+            # it — mirrors find_image's center_x/center_y contract. (P3.4)
+            cx, cy = (b["x1"] + b["x2"]) // 2, (b["y1"] + b["y2"]) // 2
+            out_targets.append({**t, "center_x": cx, "center_y": cy})
             lines.append(
                 f"  #{t['index']}: label=\"{t['label']}\", "
-                f"box=({b['x1']}, {b['y1']}, {b['x2']}, {b['y2']})"
+                f"box=({b['x1']}, {b['y1']}, {b['x2']}, {b['y2']}), "
+                f"center=({cx}, {cy})"
             )
         text_output = "\n".join(lines)
     else:
@@ -138,6 +144,6 @@ def _detect(params: dict) -> dict[str, Any]:
         "output": text_output,
         "description": result["description"],
         "count": result["count"],
-        "targets": result["targets"],
+        "targets": out_targets,
         "screenshot_path": result["screenshot_path"],
     }
