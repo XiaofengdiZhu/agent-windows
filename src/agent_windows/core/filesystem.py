@@ -874,6 +874,16 @@ def _recycle_path(p: Path) -> None:
         raise RuntimeError(f"SHFileOperationW failed (rc={rc})")
 
 
+def _confirm_gone(p: Path) -> bool:
+    """True when the literal path no longer exists (file/dir gone, link detached).
+
+    Mirrors delete_path's entry guard (not exists and not a reparse point) so the
+    post-op read agrees with the pre-op check. Powers P1.1's ``Verified: gone``
+    recheck — SHFileOperationW does not report recycle-vs-permanent, so existence
+    is the only reliable post-op signal."""
+    return not p.exists() and not p.is_symlink() and not p.is_junction()
+
+
 def _delete_dry_run(p: Path, mode: str, recursive: bool, is_link: bool) -> dict[str, Any]:
     """Preview a delete without touching the filesystem.
 
@@ -1034,22 +1044,30 @@ def delete_path(path: str, recursive: bool = False,
     # can't be meaningfully recycled, so it ignores the recycle/permanent knob.
     if is_link:
         _remove_path(p)
-        return {"output": f"## File Delete\nDeleted link: {p}"}
-    if p.is_file():
+        kind = "link"
+    elif p.is_file():
         if permanent:
             p.unlink()
         else:
             _recycle_path(p)
-        return {"output": f"## File Delete\nDeleted file: {p}"}
-    if p.is_dir():
+        kind = "file"
+    elif p.is_dir():
         if not recursive and any(p.iterdir()):
             raise ValueError(f"Directory is not empty: {path}. Set recursive=True to delete non-empty directories.")
         if permanent:
             shutil.rmtree(p)
         else:
             _recycle_path(p)
-        return {"output": f"## File Delete\nDeleted directory: {p}"}
-    raise ValueError(f"Unsupported file type: {path}")
+        kind = "directory"
+    else:
+        raise ValueError(f"Unsupported file type: {path}")
+    # P1.1: confirm the path actually disappeared. SHFileOperationW does not
+    # report recycle-vs-permanent (see _recycle_path), so existence is the only
+    # reliable post-op signal — mode stays best-effort.
+    gone = _confirm_gone(p)
+    verify = "Verified: gone" if gone else "Still present (unexpected)"
+    return {"output": f"## File Delete\nDeleted {kind}: {p}\n{verify}",
+            "verified": {"gone": gone}}
 
 
 @_with_elevation_hint

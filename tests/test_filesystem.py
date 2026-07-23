@@ -1309,6 +1309,80 @@ class TestDeleteDryRun:
         assert r["recursive"] is True
 
 
+class TestDeleteVerify:
+    """P1.1: delete_path confirms the path is gone post-op — ``Verified: gone``
+    / ``Still present (unexpected)`` — and reports a sibling ``verified.gone``
+    flag across the recycle / permanent / link paths. SHFileOperationW does not
+    report recycle-vs-permanent (core/filesystem.py:831), so the recheck is
+    existence only, not mode."""
+
+    def test_permanent_file_confirms_gone(self, tmp_path):
+        from agent_windows.core.filesystem import delete_path
+        f = tmp_path / "a.txt"
+        f.write_text("x", encoding="utf-8")
+        r = delete_path(str(f), permanent=True)
+        assert "Verified: gone" in r["output"]
+        assert r["verified"]["gone"] is True
+
+    def test_permanent_dir_confirms_gone(self, tmp_path):
+        from agent_windows.core.filesystem import delete_path
+        d = tmp_path / "d"
+        d.mkdir()
+        r = delete_path(str(d), permanent=True)
+        assert "Verified: gone" in r["output"]
+        assert r["verified"]["gone"] is True
+
+    def test_recycle_file_confirms_gone_when_path_disappears(self, tmp_path):
+        # _recycle_path patched to actually remove the literal path (a real
+        # recycle would), so the post-op existence check sees it gone.
+        from unittest.mock import patch
+        from agent_windows.core.filesystem import delete_path
+        f = tmp_path / "a.txt"
+        f.write_text("x", encoding="utf-8")
+
+        def fake_recycle(p):
+            p.unlink()
+
+        with patch("agent_windows.core.filesystem._recycle_path",
+                   side_effect=fake_recycle):
+            r = delete_path(str(f))
+        assert "Verified: gone" in r["output"]
+        assert r["verified"]["gone"] is True
+
+    def test_still_present_flagged_when_path_remains(self, tmp_path):
+        # recycle mock is a no-op → the path still exists → Still present flags
+        # the unexpected survival (the delete "succeeded" but didn't remove).
+        from unittest.mock import patch
+        from agent_windows.core.filesystem import delete_path
+        f = tmp_path / "a.txt"
+        f.write_text("x", encoding="utf-8")
+        with patch("agent_windows.core.filesystem._recycle_path"):
+            r = delete_path(str(f))
+        assert "Still present" in r["output"]
+        assert r["verified"]["gone"] is False
+
+    def test_link_confirms_gone(self, tmp_path):
+        from agent_windows.core.filesystem import delete_path
+        target = tmp_path / "real.txt"
+        target.write_text("p", encoding="utf-8")
+        link = tmp_path / "link.txt"
+        try:
+            os.symlink(target, link)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks unavailable on this host")
+        r = delete_path(str(link))
+        assert "Verified: gone" in r["output"]
+        assert r["verified"]["gone"] is True
+
+    def test_dry_run_has_no_verify(self, tmp_path):
+        from agent_windows.core.filesystem import delete_path
+        f = tmp_path / "a.txt"
+        f.write_text("x", encoding="utf-8")
+        r = delete_path(str(f), dry_run=True)
+        assert "verified" not in r
+        assert "Verified:" not in r.get("output", "")
+
+
 class TestSearchFiles:
     def test_glob_match(self, tmp_path):
         from agent_windows.core.filesystem import search_files
