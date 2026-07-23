@@ -105,6 +105,7 @@ from agent_windows.cli.commands.system import (  # noqa: E402
 )
 from agent_windows.cli.commands.wait import wait, wait_for  # noqa: E402
 from agent_windows.cli.commands.multi import multi_select, multi_edit  # noqa: E402
+from agent_windows.cli.commands.window import window_cmd  # noqa: E402
 
 app.command()(observe)
 app.command()(snapshot)
@@ -154,6 +155,7 @@ app.add_typer(clip_cmd, name="clipboard")
 app.add_typer(proc_cmd, name="process")
 app.add_typer(is_cmd, name="is")
 app.add_typer(registry_cmd, name="registry")
+app.add_typer(window_cmd, name="window")
 
 # ── Daemon and Config groups ──────────────────────────────────────
 

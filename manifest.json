@@ -104,7 +104,12 @@
     { "name": "snapshot_diff", "description": "Diff a stored baseline UIA snapshot against the current desktop: report added/removed/changed UIA elements. action=save captures a baseline, action=diff (default) reports deltas, action=clear drops it." },
     { "name": "type", "description": "Type text using Unicode direct input (bypasses IME)." },
     { "name": "wait", "description": "Wait for a duration, an element (@eN selector) to appear, or text to appear in an interactive element's name." },
-    { "name": "wait_for", "description": "Wait until a UI condition holds." }
+    { "name": "wait_for", "description": "Wait until a UI condition holds." },
+    { "name": "window_close", "description": "Close a window gracefully (the app may prompt to save). target is a HWND, title substring, or process name; omit for the foreground window." },
+    { "name": "window_focus", "description": "Focus (bring to foreground) a window. target is a HWND, title substring, or process name; omit for the foreground window." },
+    { "name": "window_maximize", "description": "Maximize a window. target is a HWND, title substring, or process name; omit for the foreground window." },
+    { "name": "window_minimize", "description": "Minimize a window. target is a HWND, title substring, or process name; omit for the foreground window." },
+    { "name": "window_restore", "description": "Restore a window to its normal size. target is a HWND, title substring, or process name; omit for the foreground window." }
   ],
   "compatibility": {
     "platforms": ["win32"],

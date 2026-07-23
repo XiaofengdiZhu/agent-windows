@@ -256,6 +256,7 @@ pub fn parse(argv: &[String], global: &GlobalFlags) -> Result<Action, ParseError
 
         // ── System groups ─────────────────────────────────────────────────
         "app" => parse_app(rest),
+        "window" => parse_window(rest),
         "shell" => {
             // --timeout/-t (seconds) overrides the shell.timeout config default.
             // Forwarded only when > 0 (Python system.py:66-67); 0 means "use the
@@ -972,6 +973,28 @@ fn parse_app(rest: &[String]) -> Result<Action, ParseError> {
     }
 }
 
+fn parse_window(rest: &[String]) -> Result<Action, ParseError> {
+    const VALID: &[&str] = &["minimize", "maximize", "restore", "close", "focus"];
+    let sub = rest.first().ok_or_else(|| {
+        missing("Missing window subcommand (minimize/maximize/restore/close/focus)")
+    })?;
+    let p = ParsedArgs::parse(&rest[1..], &[]);
+    // target is optional (default "" = the foreground window).
+    let target = p.positionals.first().cloned().unwrap_or_default();
+    let method = match sub.as_str() {
+        "minimize" => "window_minimize",
+        "maximize" => "window_maximize",
+        "restore" => "window_restore",
+        "close" => "window_close",
+        "focus" => "window_focus",
+        _ => return Err(unknown_subcommand("window", sub, VALID)),
+    };
+    Ok(Action::Call {
+        method: method.into(),
+        params: json!({ "target": target }),
+    })
+}
+
 fn parse_fs(rest: &[String]) -> Result<Action, ParseError> {
     // Eight subcommands; mirrors the Python `fs` Typer group (system.py:76-187).
     // read/write/list existed first; copy/move/delete/search/info were added for
@@ -1500,6 +1523,35 @@ mod tests {
         let g = GlobalFlags::default();
         assert!(parse(&argv(&["ping"]), &g).is_ok());
         assert!(parse(&argv(&["app", "list"]), &g).is_ok());
+    }
+
+    #[test]
+    fn window_subcommands_forward_target() {
+        // P4.2: window minimize/maximize/restore/close/focus dispatch. Locks the
+        // method name + target param the daemon expects; a mismatch surfaces only
+        // at runtime as a JSON-RPC error.
+        let g = GlobalFlags::default();
+        for (sub, method) in [
+            ("minimize", "window_minimize"), ("maximize", "window_maximize"),
+            ("restore", "window_restore"), ("close", "window_close"),
+            ("focus", "window_focus"),
+        ] {
+            match parse(&argv(&["window", sub, "Notepad"]), &g) {
+                Ok(Action::Call { method: m, params }) => {
+                    assert_eq!(m, method);
+                    assert_eq!(params["target"], "Notepad");
+                }
+                _ => panic!("{sub} did not parse to Call"),
+            }
+        }
+        // No target → "" (the foreground window).
+        match parse(&argv(&["window", "minimize"]), &g) {
+            Ok(Action::Call { params, .. }) => assert_eq!(params["target"], ""),
+            _ => panic!("no-target window did not parse to Call"),
+        }
+        // Unknown subcommand → error naming the valid set.
+        let e = parse(&argv(&["window", "frobnicate"]), &g).unwrap_err();
+        assert!(e.message().contains("minimize"));
     }
 
     // ── New command mappings (parity with the Python CLI) ──────────────────

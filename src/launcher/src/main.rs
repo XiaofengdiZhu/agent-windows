@@ -787,6 +787,8 @@ Commands:
   type / shortcut                  Keyboard actions
 
   app launch/switch/list/resize    Application management
+  window minimize/maximize/restore/close/focus
+                                   Window state (no target = foreground)
   fs read/write/list               File operations
   clipboard get/set                Clipboard access
   process list/kill                Process management

@@ -32,6 +32,28 @@ def app_list_fn() -> str:
     return str(_call("app_list").get("output", ""))
 
 
+# ── window (P4.2) ──────────────────────────────────────────────────────
+
+def window_minimize_fn(target: str = "") -> str:
+    return str(_call("window_minimize", target=target).get("output", ""))
+
+
+def window_maximize_fn(target: str = "") -> str:
+    return str(_call("window_maximize", target=target).get("output", ""))
+
+
+def window_restore_fn(target: str = "") -> str:
+    return str(_call("window_restore", target=target).get("output", ""))
+
+
+def window_focus_fn(target: str = "") -> str:
+    return str(_call("window_focus", target=target).get("output", ""))
+
+
+def window_close_fn(target: str = "") -> str:
+    return str(_call("window_close", target=target).get("output", ""))
+
+
 # ── shell ──────────────────────────────────────────────────────────────
 
 def shell_fn(command: str, timeout: int | None = None) -> str:
@@ -189,6 +211,48 @@ def register(mcp) -> None:
     ), annotations=_REG(title="App List", readOnlyHint=True, idempotentHint=True, openWorldHint=False))
     def _app_list() -> str:
         return app_list_fn()
+
+    @mcp.tool(name="window_minimize", description=(
+        "Minimize a window. target is a window HWND (e.g. '0x1234'), title "
+        "substring, or process name; omit for the foreground window. "
+        "Keywords: minimize window, hide window, send to taskbar."
+    ), annotations=_REG(title="Window Minimize", readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False))
+    def _window_minimize(target: str = "") -> str:
+        return window_minimize_fn(target=target)
+
+    @mcp.tool(name="window_maximize", description=(
+        "Maximize a window. target is a window HWND, title substring, or "
+        "process name; omit for the foreground window. "
+        "Keywords: maximize window, fullscreen window, enlarge window."
+    ), annotations=_REG(title="Window Maximize", readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False))
+    def _window_maximize(target: str = "") -> str:
+        return window_maximize_fn(target=target)
+
+    @mcp.tool(name="window_restore", description=(
+        "Restore a window to its normal size (un-minimize / un-maximize). "
+        "target is a window HWND, title substring, or process name; omit for "
+        "the foreground window. "
+        "Keywords: restore window, un-maximize, un-minimize, normalize window."
+    ), annotations=_REG(title="Window Restore", readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False))
+    def _window_restore(target: str = "") -> str:
+        return window_restore_fn(target=target)
+
+    @mcp.tool(name="window_focus", description=(
+        "Focus (bring to foreground) a window. target is a window HWND, title "
+        "substring, or process name; omit for the foreground window. "
+        "Keywords: focus window, activate window, bring to front, switch to window."
+    ), annotations=_REG(title="Window Focus", readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False))
+    def _window_focus(target: str = "") -> str:
+        return window_focus_fn(target=target)
+
+    @mcp.tool(name="window_close", description=(
+        "Close a window gracefully (PostMessage WM_CLOSE — the app may prompt "
+        "to save). target is a window HWND, title substring, or process name; "
+        "omit for the foreground window. "
+        "Keywords: close window, quit window, dismiss window."
+    ), annotations=_REG(title="Window Close", readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False))
+    def _window_close(target: str = "") -> str:
+        return window_close_fn(target=target)
 
     @mcp.tool(name="shell", description=(
         "Run a PowerShell command and return stdout/stderr. "

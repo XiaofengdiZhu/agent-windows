@@ -683,6 +683,38 @@ agent-windows app resize "Notepad" --width 800 --height 600 --x 100 --y 100
 
 **Output**: New window position and size.
 
+### window minimize / maximize / restore / close / focus
+
+Direct window operations by HWND, title substring, or process name — no `target` means the foreground window. Replaces the indirect `shortcut win+down` convention (which only acts on the foreground window and can't target by HWND). Each op confirms the resulting state.
+
+```bash
+agent-windows window minimize                  # foreground window
+agent-windows window minimize 0x302a0          # by HWND (decimal or 0x-hex)
+agent-windows window maximize "Notepad"        # by title substring
+agent-windows window restore chrome            # by process name
+agent-windows window focus "Settings"
+agent-windows window close "Notepad"           # graceful — app may prompt to save
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `target` | str | `""` | Window HWND (`0x..` or decimal), title substring, or process name. Empty = the foreground window. |
+
+**Output** (per op, with a state-confirmation line):
+
+```
+## Window Minimize
+Window: "Notepad"
+Handle: 197642
+Minimized: yes                # or: Maximized: yes / Restored: yes / Foreground: yes / Closed: yes
+```
+
+- `focus` restores first if the target is minimized (focus won't stick on an iconic window), then re-reads the foreground window to confirm (P0.4 — `SetForegroundWindow`'s BOOL is advisory; focus-stealing prevention can block it without erroring).
+- `close` is a graceful `PostMessage(WM_CLOSE)` — the app may show a "save changes?" dialog and keep the window, reported as `Closed: no`. For a forceful process-level kill use `process kill`. No force flag: there's no clean window-level force API (`DestroyWindow` is same-thread only).
+- Multiple matches by title/process: the first is used and a `⚠ Matched N windows ...` warning is appended — pass the HWND for determinism.
+
+Machine-readable sibling keys: `hwnd` (int), the op state (`minimized` / `maximized` / `restored` / `foreground_confirmed` / `closed`, bool), and `warning` (str, only on multi-match). Daemon-direct clients (including `--format json`) read these; MCP/CLI text rendering uses `output`.
+
 ---
 
 ## System

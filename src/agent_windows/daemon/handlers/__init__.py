@@ -15,4 +15,5 @@ from agent_windows.daemon.handlers import (  # noqa: F401
     system,
     tree,
     vision,
+    window,
 )
