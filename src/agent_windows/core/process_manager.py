@@ -173,6 +173,18 @@ def _num(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _to_num(value: Any) -> float | None:
+    """Coerce a JSON field to float, returning None when missing/unparseable.
+
+    Unlike :func:`_num` (which defaults to 0 for sorting), this preserves None
+    so the sibling reports an unknown value honestly rather than a misleading 0.
+    """
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def list_processes(
     sort_by: Literal["memory", "cpu", "name"] = "memory",
     limit: int = 0,
@@ -202,14 +214,28 @@ def list_processes(
         #
         # .CPU is total CPU seconds consumed (lifetime) — an honest signal for
         # CPU-heavy processes, cheaper and more stable than sampling cpu_percent.
+        #
+        # P3.3: join Win32_Process (CIM) once by PID for ParentProcessId /
+        # CommandLine / ExecutablePath — Get-Process exposes none of these. CIM
+        # full-table is ~0.1s for 300+ procs; CommandLine/ExecutablePath are null
+        # for protected/system procs (~50%), ParentProcessId is always present.
+        # -ErrorAction SilentlyContinue on both: a CIM failure leaves the byId map
+        # empty, so the three CIM fields fall back to null while Mem/CPU/Name
+        # still come through from Get-Process.
         result = subprocess.run(
             ["powershell", "-NoProfile", "-Command",
-             "Get-Process | "
-             "Select-Object Id, ProcessName, "
-             "@{N='MemMB';E={[math]::Round($_.WorkingSet64/1MB,1)}}, "
-             "@{N='CpuSec';E={[math]::Round($_.CPU,1)}} | "
-             "ConvertTo-Json -Compress"],
-            capture_output=True, text=True, timeout=10,
+             "$cim = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue; "
+             "$byId = @{}; foreach ($c in $cim) { $byId[[int]$c.ProcessId] = $c }; "
+             "Get-Process -ErrorAction SilentlyContinue | ForEach-Object { "
+             "$c = $byId[[int]$_.Id]; "
+             "[PSCustomObject]@{ Id = $_.Id; ProcessName = $_.ProcessName; "
+             "MemMB = [math]::Round($_.WorkingSet64/1MB,1); "
+             "CpuSec = [math]::Round($_.CPU,1); "
+             "PPid = if ($c) { [int]$c.ParentProcessId } else { $null }; "
+             "CmdLine = if ($c) { $c.CommandLine } else { $null }; "
+             "ExePath = if ($c) { $c.ExecutablePath } else { $null } } "
+             "} | ConvertTo-Json -Compress"],
+            capture_output=True, text=True, timeout=15,
             encoding="utf-8", errors="replace",
         )
 
@@ -231,15 +257,18 @@ def list_processes(
             pname = p.get("ProcessName", "")
             if pid is None or not pname:
                 continue  # skip malformed rows (QUAL3-01)
-            # `or ""` would clobber a legit 0 → render blank; only replace None.
-            mem_raw = p.get("MemMB")
-            cpu_raw = p.get("CpuSec")
-            mem_disp = "" if mem_raw is None else mem_raw
-            cpu_disp = "" if cpu_raw is None else cpu_raw
+            # mem/cpu coerce to float for the sibling (machine-readable); a null
+            # (e.g. System's null CPU) stays None — sort falls back to 0 via _num.
             cleaned.append({
-                "pid": pid, "name": pname,
-                "mem_disp": mem_disp, "cpu_disp": cpu_disp,
-                "mem_key": _num(mem_disp), "cpu_key": _num(cpu_disp),
+                "pid": pid,
+                "name": pname,
+                "mem_mb": _to_num(p.get("MemMB")),
+                "cpu_sec": _to_num(p.get("CpuSec")),
+                # CIM fields: ParentProcessId is always present; CommandLine /
+                # ExecutablePath are null for protected/system procs (~50%).
+                "parent_pid": p.get("PPid"),
+                "cmdline": p.get("CmdLine"),
+                "exe_path": p.get("ExePath"),
             })
 
         # name filter: case-insensitive substring (dependency-free; not fuzzy).
@@ -248,25 +277,34 @@ def list_processes(
             cleaned = [p for p in cleaned if needle in p["name"].lower()]
 
         # sort: memory/cpu descending (biggest first), name ascending (A→Z).
+        # _num falls back to 0 for a null mem/cpu (e.g. System's null CPU).
         if sort_by == "name":
             cleaned.sort(key=lambda p: p["name"].lower())
         elif sort_by == "cpu":
-            cleaned.sort(key=lambda p: p["cpu_key"], reverse=True)
+            cleaned.sort(key=lambda p: _num(p["cpu_sec"]), reverse=True)
         else:  # memory
-            cleaned.sort(key=lambda p: p["mem_key"], reverse=True)
+            cleaned.sort(key=lambda p: _num(p["mem_mb"]), reverse=True)
 
         if limit:
             cleaned = cleaned[:limit]
 
+        def _cell(v):
+            # None → blank cell (protected procs have no parent cmdline/exe).
+            return "" if v is None else v
+
         lines = ["## Process List"]
-        lines.append("| PID | Name | Memory (MB) | CPU (s) |")
-        lines.append("|-----|------|-------------|---------|")
+        lines.append("| PID | Name | Memory (MB) | CPU (total s) | Parent |")
+        lines.append("|-----|------|-------------|---------------|--------|")
         for p in cleaned:
             lines.append(
-                f"| {p['pid']} | {p['name']} | {p['mem_disp']} | {p['cpu_disp']} |"
+                f"| {p['pid']} | {p['name']} | {_cell(p['mem_mb'])} | "
+                f"{_cell(p['cpu_sec'])} | {_cell(p['parent_pid'])} |"
             )
 
-        return {"output": "\n".join(lines)}
+        # processes[] sibling: machine-readable rows incl. cmdline/exe_path (too
+        # long for the table) so two same-named procs (e.g. chrome.exe) can be
+        # told apart without parsing markdown. (P3.3)
+        return {"output": "\n".join(lines), "processes": cleaned}
     except ValueError:
         raise
     except Exception as e:

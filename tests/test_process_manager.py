@@ -48,12 +48,14 @@ class TestListProcesses:
 
     @patch("agent_windows.core.process_manager.subprocess.run")
     def test_table_has_cpu_column_header(self, mock_run):
-        """The 4-column table now includes CPU (s) — sort_by=cpu needs it visible."""
+        """The table includes CPU (total s) — lifetime CPU seconds, not instant %
+        (renamed from 'CPU (s)' to make the cumulative semantics explicit) — and a
+        Parent column (parent_pid from CIM)."""
         mock_run.return_value = _completed("[]") if False else _completed(
             '[{"Id":1,"ProcessName":"a","MemMB":1,"CpuSec":0}]'
         )
         out = pm.list_processes()["output"]
-        assert "| PID | Name | Memory (MB) | CPU (s) |" in out
+        assert "| PID | Name | Memory (MB) | CPU (total s) | Parent |" in out
 
     @patch("agent_windows.core.process_manager.subprocess.run")
     def test_single_process_json_object_normalized_to_list(self, mock_run):
@@ -71,8 +73,8 @@ class TestListProcesses:
         result = pm.list_processes()
         lines = result["output"].splitlines()
         assert lines[0] == "## Process List"
-        assert lines[1] == "| PID | Name | Memory (MB) | CPU (s) |"
-        assert lines[2] == "|-----|------|-------------|---------|"
+        assert lines[1] == "| PID | Name | Memory (MB) | CPU (total s) | Parent |"
+        assert lines[2] == "|-----|------|-------------|---------------|--------|"
         assert len(lines) == 3  # no data rows
 
     @patch("agent_windows.core.process_manager.subprocess.run")
@@ -84,7 +86,7 @@ class TestListProcesses:
             '{"Id":3,"MemMB":3,"CpuSec":0}]'
         )
         result = pm.list_processes()
-        assert "| 1 | ok | 1 | 0 |" in result["output"]
+        assert "| 1 | ok | 1.0 | 0.0 |" in result["output"]
         assert "noid" not in result["output"]
         assert "| 3 |" not in result["output"]
 
@@ -160,6 +162,106 @@ class TestListProcesses:
         rows = _data_rows(pm.list_processes(name="EDGE")["output"])
         assert len(rows) == 2
         assert "notepad" not in "".join(rows)
+
+    # ── P3.3: processes[] sibling + CIM parent/cmdline/exe ──────────────
+
+    @patch("agent_windows.core.process_manager.subprocess.run")
+    def test_sibling_processes_array_present(self, mock_run):
+        """A processes[] sibling carries the rows machine-readably so the agent
+        needn't parse the markdown table. Each item has the full field set."""
+        mock_run.return_value = _completed(
+            '[{"Id":100,"ProcessName":"notepad","MemMB":12.3,"CpuSec":1.0,'
+            '"PPid":4,"CmdLine":"notepad a.txt","ExePath":"C:\\\\win\\\\notepad.exe"}]'
+        )
+        procs = pm.list_processes()["processes"]
+        assert isinstance(procs, list)
+        assert len(procs) == 1
+        assert set(procs[0]) == {
+            "pid", "name", "mem_mb", "cpu_sec", "parent_pid",
+            "cmdline", "exe_path",
+        }
+
+    @patch("agent_windows.core.process_manager.subprocess.run")
+    def test_sibling_fields_numeric_snake_case(self, mock_run):
+        """mem/cpu are floats (not the old str display values); keys are snake_case."""
+        mock_run.return_value = _completed(
+            '[{"Id":1,"ProcessName":"a","MemMB":10,"CpuSec":2,'
+            '"PPid":4,"CmdLine":null,"ExePath":null}]'
+        )
+        p = pm.list_processes()["processes"][0]
+        assert p["mem_mb"] == 10.0
+        assert p["cpu_sec"] == 2.0
+        assert isinstance(p["mem_mb"], float)
+        assert p["parent_pid"] == 4
+
+    @patch("agent_windows.core.process_manager.subprocess.run")
+    def test_parent_pid_column_from_cim(self, mock_run):
+        """parent_pid lands in both the sibling and the markdown Parent column."""
+        mock_run.return_value = _completed(
+            '[{"Id":100,"ProcessName":"notepad","MemMB":1,"CpuSec":0,'
+            '"PPid":1234,"CmdLine":null,"ExePath":null}]'
+        )
+        r = pm.list_processes()
+        assert r["processes"][0]["parent_pid"] == 1234
+        assert "| 100 | notepad | 1.0 | 0.0 | 1234 |" in r["output"]
+
+    @patch("agent_windows.core.process_manager.subprocess.run")
+    def test_cmdline_exe_path_only_in_sibling_not_table(self, mock_run):
+        """cmdline/exe_path are long — they go in the sibling only, never the
+        markdown table (keep the table narrow)."""
+        long_cl = "chrome.exe --foo " + "x" * 200
+        mock_run.return_value = _completed(
+            '[{"Id":1,"ProcessName":"chrome","MemMB":1,"CpuSec":0,'
+            f'"PPid":4,"CmdLine":"{long_cl}","ExePath":"C:\\\\chr\\\\chrome.exe"}}]'
+        )
+        r = pm.list_processes()
+        assert r["processes"][0]["cmdline"] == long_cl
+        assert r["processes"][0]["exe_path"] == "C:\\chr\\chrome.exe"
+        assert long_cl not in r["output"]
+        assert "chrome.exe" not in r["output"]  # name col is bare "chrome"
+
+    @patch("agent_windows.core.process_manager.subprocess.run")
+    def test_cim_fields_null_for_protected_procs(self, mock_run):
+        """Protected/system procs have no cmdline/exepath (CIM returns null); the
+        sibling keeps None and the table Parent cell is blank, but Mem/CPU show."""
+        mock_run.return_value = _completed(
+            '[{"Id":4,"ProcessName":"System","MemMB":0,"CpuSec":100,'
+            '"PPid":null,"CmdLine":null,"ExePath":null}]'
+        )
+        r = pm.list_processes()
+        p = r["processes"][0]
+        assert p["cmdline"] is None
+        assert p["exe_path"] is None
+        assert p["parent_pid"] is None
+        assert "| 4 | System | 0.0 | 100.0 |  |" in r["output"]
+
+    @patch("agent_windows.core.process_manager.subprocess.run")
+    def test_two_same_name_distinguished_by_cmdline(self, mock_run):
+        """P3.3 core: two chrome.exe are indistinguishable in the table, but the
+        sibling cmdline tells them apart."""
+        mock_run.return_value = _completed(
+            '[{"Id":100,"ProcessName":"chrome","MemMB":1,"CpuSec":0,"PPid":4,'
+            '"CmdLine":"chrome --profile=A","ExePath":null},'
+            '{"Id":200,"ProcessName":"chrome","MemMB":1,"CpuSec":0,"PPid":4,'
+            '"CmdLine":"chrome --profile=B","ExePath":null}]'
+        )
+        procs = pm.list_processes()["processes"]
+        cmdlines = {p["pid"]: p["cmdline"] for p in procs}
+        assert cmdlines[100] == "chrome --profile=A"
+        assert cmdlines[200] == "chrome --profile=B"
+
+    @patch("agent_windows.core.process_manager.subprocess.run")
+    def test_mem_cpu_present_when_cim_fields_absent(self, mock_run):
+        """Old-style JSON without CIM fields (or total CIM failure) still yields
+        Mem/CPU from Get-Process; CIM fields default to None."""
+        mock_run.return_value = _completed(
+            '[{"Id":1,"ProcessName":"a","MemMB":5,"CpuSec":3}]'
+        )
+        p = pm.list_processes()["processes"][0]
+        assert p["mem_mb"] == 5.0
+        assert p["cpu_sec"] == 3.0
+        assert p["cmdline"] is None
+        assert p["parent_pid"] is None
 
     def test_invalid_sort_by_raises(self):
         """An unknown sort_by surfaces as ValueError → INVALID_PARAMS."""

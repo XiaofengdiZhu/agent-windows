@@ -774,6 +774,8 @@ agent-windows process kill notepad --force        # 强杀 immediately (default:
 | `process list` | `--sort-by` (str, default `memory` — `memory`/`cpu`/`name`, descending), `--limit` (int, default `0` = all — cap rows to top-N), `--name` (str, default `""` — case-insensitive substring filter) |
 | `process kill` | `pid_or_name` (str/int, **required**), `--force` (bool, default `false` — `false` = graceful/WM_CLOSE lets the app save, `true` = immediate 强杀) |
 
+> **`process list` output**: a markdown table — `PID | Name | Memory (MB) | CPU (total s) | Parent`. `CPU (total s)` is lifetime CPU seconds (not instant %). `Parent` is the parent PID (blank for protected/system procs). A `processes[]` sibling (daemon-direct clients; not via MCP/CLI, which return the table string) carries each row machine-readably with the full set — `pid`, `name`, `mem_mb`, `cpu_sec`, `parent_pid`, `cmdline`, `exe_path` — so two same-named procs (e.g. two `chrome.exe`) are told apart by `cmdline` without parsing markdown. `cmdline`/`exe_path`/`parent_pid` come from `Win32_Process` (CIM) and are `null` for protected/system processes (~50%); Mem/CPU/Name always come from `Get-Process`.
+
 > **`process kill` output (post-op recheck)**: after taskkill reports success the tool rechecks liveness — `confirmed gone` (the PID no longer resolves / zero matching image names remain) or `still running (N remaining; retry with force=True)` when a graceful `WM_CLOSE` was ignored or the app prompted to save. Sibling `killed.confirmed_dead` (bool) and `killed.remaining` (int, name path). The recheck is **not** auto-retried with `/F` — decide yourself whether to escalate.
 
 ### notify
