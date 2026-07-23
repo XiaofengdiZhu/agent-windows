@@ -355,6 +355,7 @@ class TestSwitchWindow:
              patch.object(am, "_find_window_by_process", return_value=200) as mp, \
              patch.object(am.user32, "IsIconic", return_value=False), \
              patch.object(am.user32, "SetForegroundWindow") as mock_fg, \
+             patch.object(am.user32, "GetForegroundWindow", return_value=100), \
              patch.object(am.user32, "GetWindowTextLengthW", return_value=0), \
              patch.object(am.user32, "GetWindowTextW"), \
              patch("time.sleep"):
@@ -368,6 +369,7 @@ class TestSwitchWindow:
              patch.object(am, "_find_window_by_process", return_value=300), \
              patch.object(am.user32, "IsIconic", return_value=False), \
              patch.object(am.user32, "SetForegroundWindow") as mock_fg, \
+             patch.object(am.user32, "GetForegroundWindow", return_value=300), \
              patch.object(am.user32, "GetWindowTextLengthW", return_value=0), \
              patch.object(am.user32, "GetWindowTextW"), \
              patch("time.sleep"):
@@ -381,6 +383,7 @@ class TestSwitchWindow:
              patch.object(am.user32, "IsIconic", return_value=True), \
              patch.object(am.user32, "ShowWindow") as mock_sw, \
              patch.object(am.user32, "SetForegroundWindow"), \
+             patch.object(am.user32, "GetForegroundWindow", return_value=50), \
              patch.object(am.user32, "GetWindowTextLengthW", return_value=0), \
              patch.object(am.user32, "GetWindowTextW"), \
              patch("time.sleep"):
@@ -394,6 +397,7 @@ class TestSwitchWindow:
              patch.object(am, "_find_window_by_process", return_value=0), \
              patch.object(am.user32, "IsIconic", return_value=False), \
              patch.object(am.user32, "SetForegroundWindow"), \
+             patch.object(am.user32, "GetForegroundWindow", return_value=100), \
              patch.object(am.user32, "GetWindowTextLengthW", return_value=14), \
              patch.object(am.user32, "GetWindowTextW", side_effect=_fill_buf("Hello - Notes")), \
              patch("time.sleep"):
@@ -401,6 +405,46 @@ class TestSwitchWindow:
         assert result["output"].startswith("## App Switch")
         assert 'Window: "Hello - Notes"' in result["output"]
         assert "Handle: 100" in result["output"]
+
+    def test_get_foreground_window_restype_is_hwnd(self):
+        """HWND is pointer-sized; the default c_int restype truncates large
+        handles on 64-bit, breaking the fg==hwnd foreground check. Lock the
+        restype so the comparison is correct. (P0.4)"""
+        import ctypes.wintypes
+        assert am.user32.GetForegroundWindow.restype is ctypes.wintypes.HWND
+
+    def test_foreground_confirmed_when_target_now_foreground(self):
+        """SetForegroundWindow success + GetForegroundWindow re-reads the
+        target → 'Foreground: yes' + foreground_confirmed True + hwnd sibling."""
+        with patch.object(am, "_find_window_by_title", return_value=100), \
+             patch.object(am, "_find_window_by_process", return_value=0), \
+             patch.object(am.user32, "IsIconic", return_value=False), \
+             patch.object(am.user32, "SetForegroundWindow", return_value=1), \
+             patch.object(am.user32, "GetForegroundWindow", return_value=100), \
+             patch.object(am.user32, "GetWindowTextLengthW", return_value=0), \
+             patch.object(am.user32, "GetWindowTextW"), \
+             patch("time.sleep"):
+            r = am.switch_window("foo")
+        assert "Foreground: yes" in r["output"]
+        assert r["foreground_confirmed"] is True
+        assert r["hwnd"] == 100
+
+    def test_foreground_blocked_when_target_not_foreground(self):
+        """Focus-stealing prevention (SetForegroundWindow returns 0 / target
+        not actually foreground) → 'Foreground: no (blocked...)' + False."""
+        with patch.object(am, "_find_window_by_title", return_value=100), \
+             patch.object(am, "_find_window_by_process", return_value=0), \
+             patch.object(am.user32, "IsIconic", return_value=False), \
+             patch.object(am.user32, "SetForegroundWindow", return_value=0), \
+             patch.object(am.user32, "GetForegroundWindow", return_value=999), \
+             patch.object(am.user32, "GetWindowTextLengthW", return_value=0), \
+             patch.object(am.user32, "GetWindowTextW"), \
+             patch("time.sleep"):
+            r = am.switch_window("foo")
+        assert "Foreground: no" in r["output"]
+        assert "blocked" in r["output"]
+        assert r["foreground_confirmed"] is False
+        assert r["hwnd"] == 100
 
 
 # ── resize_window ────────────────────────────────────────────────────

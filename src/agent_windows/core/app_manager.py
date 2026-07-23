@@ -13,6 +13,12 @@ logger = logging.getLogger(__name__)
 
 user32 = ctypes.windll.user32
 
+# HWND is pointer-sized; the default c_int restype truncates large handles on
+# 64-bit, which would break the fg==hwnd foreground check in switch_window. The
+# other Win32 calls used here take/return ints that fit c_int, so only this one
+# needs a pointer-sized restype. (P0.4)
+user32.GetForegroundWindow.restype = ctypes.wintypes.HWND
+
 # Window enumeration callback type (defined once at module level)
 WNDENUMPROC = ctypes.WINFUNCTYPE(
     ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM,
@@ -169,16 +175,27 @@ def switch_window(name_or_title: str) -> dict[str, Any]:
         user32.ShowWindow(hwnd, SW_RESTORE)
         time.sleep(0.1)
 
-    # Bring to foreground
+    # Bring to foreground. SetForegroundWindow's BOOL return is advisory —
+    # focus-stealing prevention can make it lie — so we don't trust it.
     user32.SetForegroundWindow(hwnd)
     time.sleep(0.1)
+
+    # Confirm the target is actually foreground by re-reading the real
+    # foreground window and comparing. (P0.4)
+    confirmed = (user32.GetForegroundWindow() == hwnd)
 
     # Get window title
     length = user32.GetWindowTextLengthW(hwnd)
     buf = ctypes.create_unicode_buffer(length + 1)
     user32.GetWindowTextW(hwnd, buf, length + 1)
 
-    return {"output": f"## App Switch\nWindow: \"{buf.value}\"\nHandle: {hwnd}"}
+    fg_line = "Foreground: yes" if confirmed else \
+              "Foreground: no (blocked by focus-stealing prevention)"
+    return {
+        "output": f'## App Switch\nWindow: "{buf.value}"\nHandle: {hwnd}\n{fg_line}',
+        "hwnd": hwnd,
+        "foreground_confirmed": confirmed,
+    }
 
 
 def resize_window(name_or_title: str, width: int, height: int, x: int = -1, y: int = -1) -> dict[str, Any]:
