@@ -309,6 +309,8 @@ Most mouse commands accept either explicit `X Y` coordinates or a `--selector`/`
 > - `Focus: "<window title>"` — the current foreground window (changes when the op opens a modal / new window; omitted if empty).
 >
 > These are decoration: any UIA read failure degrades to a missing line, never an error. Turn off for raw speed with `config set input.verify false` (live; the daemon re-reads config per command).
+>
+> The `Hit:`/`Drop:`/`Slider:` reads use UIA `ElementFromPoint`, which returns the **topmost element on screen at that point (visual z-order)** — the same target the physical click actually struck. If another window covers that coordinate, the read reports the *covering* window, not the intended one (foreground *focus* ≠ visual *topmost*). That mismatch surfaces the obscuring instead of silently misreporting, but there is no coordinate-free guarantee — when a `Hit:`/`Drop:` names an unexpected window, re-`snapshot` and retry with the covering window moved aside.
 
 ### click
 
@@ -500,7 +502,7 @@ agent-windows type "Hello World" [--at X,Y] [--at-selector @eN] [--enter] [--cle
 > - `Field value: no change` — the input was rejected, maxlength-truncated, or IME-swallowed.
 > - `Field value: (password field, value hidden)` — password fields never echo the value.
 
-> The `--at`/`--at-selector` path reads by coordinate (`ControlFromPoint`), so pre and post are guaranteed the same field even though focus may be elsewhere before the click; the no-coords path reads the focused field (pre is read **before** `--clear`, so `--clear` shows old→new, not empty→new). Non-text controls exposing no value pattern surface nothing. Same fault-tolerance and `[input] verify` toggle as the mouse commands (`config set input.verify false` for raw speed). A structured `field_value: {pre, post, is_password}` sibling is also returned (pre/post truncated to 500 chars; visible only to direct daemon/IPC clients — MCP and CLI consumers read the `output` block).
+> The `--at`/`--at-selector` path reads by coordinate (`ControlFromPoint` — visual z-order topmost, same obscuring caveat as the `Hit:` line: if another window covers the point, pre/post report the covering field, surfacing the miss), so pre and post are guaranteed the same field even though focus may be elsewhere before the click; the no-coords path reads the focused field (pre is read **before** `--clear`, so `--clear` shows old→new, not empty→new). Non-text controls exposing no value pattern surface nothing. Same fault-tolerance and `[input] verify` toggle as the mouse commands (`config set input.verify false` for raw speed). A structured `field_value: {pre, post, is_password}` sibling is also returned (pre/post truncated to 500 chars; visible only to direct daemon/IPC clients — MCP and CLI consumers read the `output` block).
 
 **Output**: `{output}`
 
