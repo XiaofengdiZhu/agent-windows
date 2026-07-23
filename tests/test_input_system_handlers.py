@@ -25,14 +25,17 @@ class TestClickHandler:
             r = HANDLERS["click"]({"x": 10, "y": 20})
         mock_click.assert_called_once_with(10, 20, right=False, double=False)
         assert "Position: (10, 20)" in r["output"]
-        assert "Button: left" in r["output"]
-        assert "Double: False" in r["output"]
+        # P2.2: default flags (left button, single click) are suppressed — only
+        # non-defaults surface, so a plain left click echoes just the position.
+        assert "Button:" not in r["output"]
+        assert "Double:" not in r["output"]
 
     def test_forwards_right_double(self):
         with patch("agent_windows.core.input_controller.click") as mock_click:
             r = HANDLERS["click"]({"x": 1, "y": 2, "right": True, "double": True})
         mock_click.assert_called_once_with(1, 2, right=True, double=True)
         assert "Button: right" in r["output"]
+        assert "Double: true" in r["output"]  # P2.2: non-default surfaced
 
     def test_missing_x_raises(self):
         with pytest.raises(ValueError, match="missing required parameter 'x'"):
@@ -45,6 +48,7 @@ class TestDblClickHandler:
             r = HANDLERS["dblclick"]({"x": 5, "y": 6})
         mock_click.assert_called_once_with(5, 6, right=False, double=True)
         assert "Double Click" in r["output"]
+        assert "Button:" not in r["output"]  # P2.2: default left suppressed
 
 
 class TestHoverHandler:
@@ -58,23 +62,27 @@ class TestHoverHandler:
 class TestMouseDownUpHandlers:
     def test_mouse_down_defaults_left(self):
         with patch("agent_windows.core.input_controller.mouse_down") as m:
-            HANDLERS["mouse_down"]({"x": 1, "y": 2})
+            r = HANDLERS["mouse_down"]({"x": 1, "y": 2})
         m.assert_called_once_with(1, 2, button="left")
+        assert "Button:" not in r["output"]  # P2.2: default left suppressed
 
     def test_mouse_down_passes_button(self):
         with patch("agent_windows.core.input_controller.mouse_down") as m:
-            HANDLERS["mouse_down"]({"x": 1, "y": 2, "button": "right"})
+            r = HANDLERS["mouse_down"]({"x": 1, "y": 2, "button": "right"})
         m.assert_called_once_with(1, 2, button="right")
+        assert "Button: right" in r["output"]  # P2.2: non-default surfaced
 
     def test_mouse_up_defaults_left(self):
         with patch("agent_windows.core.input_controller.mouse_up") as m:
-            HANDLERS["mouse_up"]({"x": 3, "y": 4})
+            r = HANDLERS["mouse_up"]({"x": 3, "y": 4})
         m.assert_called_once_with(3, 4, button="left")
+        assert "Button:" not in r["output"]  # P2.2: default left suppressed
 
     def test_mouse_up_passes_button(self):
         with patch("agent_windows.core.input_controller.mouse_up") as m:
-            HANDLERS["mouse_up"]({"x": 3, "y": 4, "button": "middle"})
+            r = HANDLERS["mouse_up"]({"x": 3, "y": 4, "button": "middle"})
         m.assert_called_once_with(3, 4, button="middle")
+        assert "Button: middle" in r["output"]  # P2.2: non-default surfaced
 
 
 class TestTypeHandler:
@@ -83,7 +91,7 @@ class TestTypeHandler:
             r = HANDLERS["type"]({"text": "hello"})
         m.assert_called_once_with("hello")
         assert "Text: hello" in r["output"]
-        assert "Enter: False" in r["output"]
+        assert "Enter:" not in r["output"]  # P2.2: default enter=False suppressed
 
     def test_type_truncates_long_text_in_output(self):
         long = "x" * 100
@@ -177,7 +185,7 @@ class TestTypeHandler:
              patch.object(time, "sleep"):
             r = HANDLERS["type"]({"text": "hi", "caret_position": None})
         m_vk.assert_not_called()
-        assert "Caret: idle" in r["output"]
+        assert "Caret:" not in r["output"]  # P2.2: default idle suppressed
 
     def test_type_caret_non_string_rejected(self):
         """A non-string caret_position (int/bool) must surface as INVALID_PARAMS,
@@ -234,13 +242,15 @@ class TestMoveHandler:
 class TestDragHandler:
     def test_defaults_left(self):
         with patch("agent_windows.core.input_controller.drag") as m:
-            HANDLERS["drag"]({"x1": 1, "y1": 2, "x2": 3, "y2": 4})
+            r = HANDLERS["drag"]({"x1": 1, "y1": 2, "x2": 3, "y2": 4})
         m.assert_called_once_with(1, 2, 3, 4, right=False)
+        assert "Button:" not in r["output"]  # P2.2: default left suppressed
 
     def test_right(self):
         with patch("agent_windows.core.input_controller.drag") as m:
-            HANDLERS["drag"]({"x1": 1, "y1": 2, "x2": 3, "y2": 4, "right": True})
+            r = HANDLERS["drag"]({"x1": 1, "y1": 2, "x2": 3, "y2": 4, "right": True})
         m.assert_called_once_with(1, 2, 3, 4, right=True)
+        assert "Button: right" in r["output"]  # P2.2: non-default surfaced
 
     def test_missing_coord_raises(self):
         with pytest.raises(ValueError, match="missing required parameter 'x2'"):

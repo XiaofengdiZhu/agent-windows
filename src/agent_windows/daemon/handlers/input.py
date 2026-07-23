@@ -49,7 +49,14 @@ def _click(params: dict) -> dict[str, Any]:
     right = params.get("right", False)
     double = params.get("double", False)
     click(x, y, right=right, double=double)
-    return {"output": f"## Click\nPosition: ({x}, {y})\nButton: {'right' if right else 'left'}\nDouble: {double}"}
+    # P2.2: echo only non-default flags — a plain left single click is the
+    # common case, so Button/Double lines appear only when they deviate.
+    lines = ["## Click", f"Position: ({x}, {y})"]
+    if right:
+        lines.append("Button: right")
+    if double:
+        lines.append("Double: true")
+    return {"output": "\n".join(lines)}
 
 
 @handler("dblclick")
@@ -60,7 +67,10 @@ def _dblclick(params: dict) -> dict[str, Any]:
     x, y = _coords(params)
     right = params.get("right", False)
     click(x, y, right=right, double=True)
-    return {"output": f"## Double Click\nPosition: ({x}, {y})\nButton: {'right' if right else 'left'}"}
+    lines = ["## Double Click", f"Position: ({x}, {y})"]
+    if right:
+        lines.append("Button: right")
+    return {"output": "\n".join(lines)}
 
 
 @handler("hover")
@@ -81,7 +91,10 @@ def _mouse_down(params: dict) -> dict[str, Any]:
     x, y = _coords(params)
     button = params.get("button", "left")
     mouse_down(x, y, button=button)
-    return {"output": f"## Mouse Down\nPosition: ({x}, {y})\nButton: {button}"}
+    lines = ["## Mouse Down", f"Position: ({x}, {y})"]
+    if button != "left":
+        lines.append(f"Button: {button}")
+    return {"output": "\n".join(lines)}
 
 
 @handler("mouse_up")
@@ -92,7 +105,10 @@ def _mouse_up(params: dict) -> dict[str, Any]:
     x, y = _coords(params)
     button = params.get("button", "left")
     mouse_up(x, y, button=button)
-    return {"output": f"## Mouse Up\nPosition: ({x}, {y})\nButton: {button}"}
+    lines = ["## Mouse Up", f"Position: ({x}, {y})"]
+    if button != "left":
+        lines.append(f"Button: {button}")
+    return {"output": "\n".join(lines)}
 
 
 @handler("type")
@@ -148,7 +164,16 @@ def _type(params: dict) -> dict[str, Any]:
         if enter:
             _send_vk_key(0x0D)  # VK_RETURN
 
-    return {"output": f"## Type\nText: {text[:50]}{'...' if len(text) > 50 else ''}\nEnter: {enter}\nClear: {clear}\nCaret: {caret_position}"}
+    # P2.2: echo only non-default flags. Enter/Clear default False, Caret
+    # defaults "idle" — surfacing them on every call was noise.
+    lines = ["## Type", f"Text: {text[:50]}{'...' if len(text) > 50 else ''}"]
+    if enter:
+        lines.append("Enter: true")
+    if clear:
+        lines.append("Clear: true")
+    if caret_position != "idle":
+        lines.append(f"Caret: {caret_position}")
+    return {"output": "\n".join(lines)}
 
 
 @handler("scroll")
@@ -218,7 +243,10 @@ def _drag(params: dict) -> dict[str, Any]:
     x2, y2 = validate_coordinates(require(params, "x2"), require(params, "y2"))
     right = params.get("right", False)
     drag(x1, y1, x2, y2, right=right)
-    return {"output": f"## Drag\nFrom: ({x1}, {y1})\nTo: ({x2}, {y2})\nButton: {'right' if right else 'left'}"}
+    lines = ["## Drag", f"From: ({x1}, {y1})", f"To: ({x2}, {y2})"]
+    if right:
+        lines.append("Button: right")
+    return {"output": "\n".join(lines)}
 
 
 @handler("shortcut")
