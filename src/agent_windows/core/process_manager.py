@@ -190,13 +190,24 @@ def list_processes(
     limit: int = 0,
     name: str | None = None,
 ) -> dict[str, Any]:
-    """List running processes with PID, name, memory (MB), and CPU (s).
+    """List running processes with PID, name, memory, CPU, and parent PID.
 
     ``sort_by`` selects the sort key (memory/cpu descending, name ascending);
     ``limit`` caps the row count (0 = all); ``name`` filters to processes whose
     name *contains* it, case-insensitively (a dependency-free substitute for the
     reference project's fuzzy match). All optional — bare ``list_processes()``
     returns every process sorted by memory, as before.
+
+    Returns a dict with:
+    - ``output``: markdown table ``PID | Name | Memory (MB) | CPU (total s) |
+      Parent``. cmdline/exe_path are too long for the table (see ``processes``).
+    - ``processes``: list of per-proc dicts — ``pid``, ``name``, ``mem_mb``,
+      ``cpu_sec``, ``parent_pid``, ``cmdline``, ``exe_path`` — machine-readable
+      so two same-named procs (e.g. ``chrome.exe``) are told apart by
+      ``cmdline``. ``parent_pid``/``cmdline``/``exe_path`` come from
+      ``Win32_Process`` (CIM), None for protected/system procs (~50%);
+      ``mem_mb``/``cpu_sec``/``name`` always from ``Get-Process``. CPU is
+      lifetime seconds, not instant %.
     """
     if sort_by not in _SORT_KEYS:
         raise ValueError(

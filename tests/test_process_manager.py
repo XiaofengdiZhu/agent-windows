@@ -51,7 +51,7 @@ class TestListProcesses:
         """The table includes CPU (total s) — lifetime CPU seconds, not instant %
         (renamed from 'CPU (s)' to make the cumulative semantics explicit) — and a
         Parent column (parent_pid from CIM)."""
-        mock_run.return_value = _completed("[]") if False else _completed(
+        mock_run.return_value = _completed(
             '[{"Id":1,"ProcessName":"a","MemMB":1,"CpuSec":0}]'
         )
         out = pm.list_processes()["output"]
@@ -65,6 +65,7 @@ class TestListProcesses:
         )
         result = pm.list_processes()
         assert "| 42 | calc | 5.0 | 0.2 |" in result["output"]
+        assert len(result["processes"]) == 1  # single object → 1-item sibling (review #2)
 
     @patch("agent_windows.core.process_manager.subprocess.run")
     def test_empty_output_yields_header_only(self, mock_run):
@@ -137,8 +138,10 @@ class TestListProcesses:
             '{"Id":2,"ProcessName":"b","MemMB":500,"CpuSec":0},'
             '{"Id":3,"ProcessName":"c","MemMB":100,"CpuSec":0}]'
         )
-        rows = _data_rows(pm.list_processes(limit=2)["output"])
+        r = pm.list_processes(limit=2)
+        rows = _data_rows(r["output"])
         assert len(rows) == 2
+        assert len(r["processes"]) == 2  # sibling capped too (review #1)
         assert "| 2 |" in rows[0]  # 500 (biggest)
 
     @patch("agent_windows.core.process_manager.subprocess.run")
