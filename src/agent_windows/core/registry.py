@@ -15,6 +15,7 @@ so this tool grants no privilege escalation beyond it. DoS bounds cap the
 path/name/value lengths.
 """
 
+import json
 import logging
 import subprocess
 from typing import Any
@@ -173,23 +174,68 @@ def _run(command: str, timeout: float = 30.0) -> dict[str, Any]:
     }
 
 
+def _display(val: Any) -> str:
+    """Render a native-typed registry value for the human-readable output line.
+
+    Binary (list[int]) → hex (round-trips with ``set --type Binary``'s hex
+    input); MultiString (list[str]) → '; '-joined; str/int → bare; None → "".
+    """
+    if val is None:
+        return ""
+    if isinstance(val, str):
+        return val
+    if isinstance(val, bool):
+        return str(val)
+    if isinstance(val, int):
+        return str(val)
+    if isinstance(val, list):
+        if val and isinstance(val[0], int):
+            return "".join(f"{b:02x}" for b in val)
+        return "; ".join(str(s) for s in val)
+    return str(val)
+
+
 def get_value(path: str, name: str) -> dict[str, Any]:
-    """Read a registry value."""
+    """Read a registry value with its type.
+
+    Returns ``value`` in its native .NET type (int for DWord/QWord, str for
+    String/ExpandString, list[str] for MultiString, list[int] for Binary) and
+    ``reg_type`` as the PS value-kind enum name (String/DWord/.../Binary), so a
+    DWord ``1`` is distinguishable from a String ``"1"``. The output line
+    annotates the type: ``= <value> (type: <kind>)``.
+
+    A missing key/value is routine, not a crash: stderr surfaces, no raise,
+    ``value``/``reg_type`` are None. ExpandString is returned expanded
+    (PowerShell GetValue default, same as the prior Get-ItemProperty path).
+    """
     _validate_path(path)
     _validate_name(name)
     q_path, q_name = _quote(path), _quote(name)
     command = (
-        f"Get-ItemProperty -Path {q_path} -Name {q_name} | "
-        f"Select-Object -ExpandProperty {q_name}"
+        f"try {{ "
+        f"$k = Get-Item -Path {q_path} -ErrorAction Stop; "
+        f"$kind = $k.GetValueKind({q_name}).ToString(); "
+        f"$val = $k.GetValue({q_name}); "
+        f"[PSCustomObject]@{{ Kind = $kind; Value = $val }} | ConvertTo-Json -Compress "
+        f"}} catch {{ Write-Error $_.Exception.Message; exit 1 }}"
     )
     r = _run(command)
-    value = r["stdout"].strip()
-    out = (
-        f'Registry value [{path}] "{name}" = {value}'
-        if r["exit_code"] == 0
-        else f'Error reading registry: {r["stderr"].strip() or r["stdout"].strip()}'
-    )
-    return {"output": out, "value": value if r["exit_code"] == 0 else None, **r}
+    if r["exit_code"] != 0:
+        err = r["stderr"].strip() or r["stdout"].strip()
+        return {"output": f"Error reading registry: {err}",
+                "value": None, "reg_type": None, **r}
+    try:
+        parsed = json.loads(r["stdout"].strip())
+        kind = parsed.get("Kind")
+        val = parsed.get("Value")
+    except (ValueError, AttributeError):
+        # stdout wasn't the expected JSON — surface it, don't crash.
+        return {"output": f"Error reading registry: "
+                          f"{r['stdout'].strip() or 'unexpected output'}",
+                "value": None, "reg_type": None, **r}
+    out = (f'Registry value [{path}] "{name}" = {_display(val)} '
+           f'(type: {kind})')
+    return {"output": out, "value": val, "reg_type": kind, **r}
 
 
 def set_value(path: str, name: str, value: Any, reg_type: str = "String") -> dict[str, Any]:

@@ -13,7 +13,7 @@ import pytest
 
 from agent_windows.core import registry
 from agent_windows.core.registry import (
-    _quote, _validate_path, _validate_name, _encode_value,
+    _quote, _validate_path, _validate_name, _encode_value, _display,
     get_value, set_value, delete_entry, list_key,
     ALLOWED_HIVES, ALLOWED_TYPES, MAX_PATH_LEN, MAX_NAME_LEN,
 )
@@ -194,37 +194,84 @@ class TestEncodeValue:
 
 class TestGetValue:
     def test_command_uses_quoted_path_name(self):
-        with patch("subprocess.run", return_value=_ok_run(stdout="42")) as m:
+        # Get-Item + GetValueKind + GetValue; the quoted path/name appear in
+        # each interpolated slot. No more -ExpandProperty.
+        with patch("subprocess.run", return_value=_ok_run(
+                stdout='{"Kind":"String","Value":"x"}')) as m:
             get_value(r"HKCU:\Software\MyApp", "Count")
         cmd = _captured_command(m)
-        assert "Get-ItemProperty" in cmd
-        assert "'HKCU:\\Software\\MyApp'" in cmd
-        assert "'Count'" in cmd
+        assert "Get-Item -Path 'HKCU:\\Software\\MyApp'" in cmd
+        assert "GetValueKind('Count')" in cmd
+        assert "GetValue('Count')" in cmd
+        assert "-ExpandProperty" not in cmd
 
     def test_returns_value_on_success(self):
-        with patch("subprocess.run", return_value=_ok_run(stdout="hello\n")):
+        with patch("subprocess.run", return_value=_ok_run(
+                stdout='{"Kind":"String","Value":"hello"}')):
             r = get_value(r"HKCU:\Soft", "Name")
         assert r["value"] == "hello"
+        assert r["reg_type"] == "String"
         assert r["exit_code"] == 0
         assert "hello" in r["output"]
+        assert "type: String" in r["output"]
+
+    def test_returns_dword_as_int_with_type(self):
+        """P3.5: a DWord is returned as a native int (not the stringed '42'),
+        with reg_type=DWord — so it's distinguishable from a String '42'."""
+        with patch("subprocess.run", return_value=_ok_run(
+                stdout='{"Kind":"DWord","Value":42}')):
+            r = get_value(r"HKCU:\Soft", "Count")
+        assert r["value"] == 42
+        assert isinstance(r["value"], int)
+        assert r["reg_type"] == "DWord"
+        assert "= 42" in r["output"]
+        assert "type: DWord" in r["output"]
+
+    def test_returns_multistring_as_list(self):
+        with patch("subprocess.run", return_value=_ok_run(
+                stdout='{"Kind":"MultiString","Value":["a","b"]}')):
+            r = get_value(r"HKCU:\Soft", "Lines")
+        assert r["value"] == ["a", "b"]
+        assert r["reg_type"] == "MultiString"
+        assert "a; b" in r["output"]
+
+    def test_returns_binary_as_int_list_displayed_hex(self):
+        """Binary sibling is the raw byte list; the output line renders hex so
+        it round-trips with `set --type Binary`'s hex input."""
+        with patch("subprocess.run", return_value=_ok_run(
+                stdout='{"Kind":"Binary","Value":[222,173,190,239]}')):
+            r = get_value(r"HKCU:\Soft", "Blob")
+        assert r["value"] == [222, 173, 190, 239]
+        assert r["reg_type"] == "Binary"
+        assert "deadbeef" in r["output"]
 
     def test_returns_none_on_error_no_raise(self):
         """A missing value is routine, not a crash — surface stderr, don't raise."""
         with patch("subprocess.run", return_value=_ok_run(stderr="not found", returncode=1)):
             r = get_value(r"HKCU:\Soft", "Nope")
         assert r["value"] is None
+        assert r["reg_type"] is None
         assert r["exit_code"] == 1
         assert "not found" in r["output"]
 
+    def test_invalid_json_falls_back_to_error(self):
+        """Unexpected (non-JSON) stdout must not crash — surface as error,
+        value/reg_type None. (Defensive; shouldn't happen in practice.)"""
+        with patch("subprocess.run", return_value=_ok_run(stdout="not json", returncode=0)):
+            r = get_value(r"HKCU:\Soft", "Name")
+        assert r["value"] is None
+        assert r["reg_type"] is None
+        assert "Error reading registry" in r["output"]
+
     def test_injection_in_name_contained(self):
         """A hostile name can't break out of the quoted literal — it's
-        interpolated twice (as -Name and -ExpandProperty), both via _quote."""
+        interpolated twice (GetValueKind + GetValue), both via _quote."""
         hostile = "'; Get-Process; '"
-        with patch("subprocess.run", return_value=_ok_run()) as m:
+        with patch("subprocess.run", return_value=_ok_run(
+                stdout='{"Kind":"String","Value":"x"}')) as m:
             get_value(r"HKCU:\Soft", hostile)
         cmd = _captured_command(m)
-        # The escaped literal appears in BOTH positions (Get-ItemProperty -Name
-        # and Select-Object -ExpandProperty).
+        # The escaped literal appears in BOTH positions (GetValueKind + GetValue).
         escaped = "'''; Get-Process; '''"
         assert cmd.count(escaped) == 2
         # No unescaped breakout: collapse every doubled quote pair ('' → ''),
@@ -232,6 +279,26 @@ class TestGetValue:
         # even count). Hostile content can't introduce an unbalanced quote.
         collapsed = cmd.replace("''", "")
         assert collapsed.count("'") % 2 == 0
+
+
+class TestDisplay:
+    """_display renders native-typed values for the human-readable output line."""
+
+    def test_none_is_empty(self):
+        assert _display(None) == ""
+
+    def test_int_bare(self):
+        assert _display(42) == "42"
+
+    def test_str_as_is(self):
+        assert _display("hello") == "hello"
+
+    def test_multistring_joined(self):
+        assert _display(["a", "b"]) == "a; b"
+
+    def test_binary_as_hex(self):
+        # round-trips with set --type Binary's hex input
+        assert _display([222, 173, 190, 239]) == "deadbeef"
 
 
 class TestSetValue:
