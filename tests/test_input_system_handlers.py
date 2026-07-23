@@ -16,6 +16,19 @@ from agent_windows.daemon.router import HANDLERS
 from agent_windows.core import notifier
 
 
+@pytest.fixture(autouse=True)
+def _neutralize_verify(monkeypatch):
+    """verify helpers default to no-op so legacy click/hover/move/drag tests
+    (which patch only the core op, not verify) stay deterministic and free of
+    Hit/Focus/Drop/Slider lines — no real ControlFromPoint in CI. verify-ON
+    behavior is exercised by TestVerifyState, which overrides these with canned
+    data on the same (function-scoped) monkeypatch instance."""
+    import agent_windows.core.tree as _tree
+    monkeypatch.setattr(_tree, "hit_element_at", lambda x, y: None)
+    monkeypatch.setattr(_tree, "foreground_window", lambda: {"hwnd": 0, "title": ""})
+    monkeypatch.setattr(_tree, "range_percent_at", lambda x, y: None)
+
+
 # ── input.py handlers ────────────────────────────────────────────────
 
 
@@ -255,6 +268,121 @@ class TestDragHandler:
     def test_missing_coord_raises(self):
         with pytest.raises(ValueError, match="missing required parameter 'x2'"):
             HANDLERS["drag"]({"x1": 1, "y1": 2, "y2": 4})
+
+
+class TestVerifyState:
+    """Default-on post-op verify (P0.1/P0.3). Each test overrides the
+    autouse no-op verify helpers with canned data (same monkeypatch instance)."""
+
+    def test_click_appends_hit_and_focus(self, monkeypatch):
+        import agent_windows.core.tree as t
+        monkeypatch.setattr(t, "hit_element_at",
+                            lambda x, y: {"control_type": "Button", "name": "OK"})
+        monkeypatch.setattr(t, "foreground_window",
+                            lambda: {"hwnd": 1, "title": "Settings"})
+        with patch("agent_windows.core.input_controller.click"):
+            r = HANDLERS["click"]({"x": 10, "y": 20})
+        assert 'Hit: Button "OK"' in r["output"]
+        assert 'Focus: "Settings"' in r["output"]
+
+    def test_click_shows_none_when_no_hit(self, monkeypatch):
+        import agent_windows.core.tree as t
+        monkeypatch.setattr(t, "hit_element_at", lambda x, y: None)
+        monkeypatch.setattr(t, "foreground_window",
+                            lambda: {"hwnd": 1, "title": "X"})
+        with patch("agent_windows.core.input_controller.click"):
+            r = HANDLERS["click"]({"x": 1, "y": 2})
+        assert "Hit: (none)" in r["output"]
+        assert 'Focus: "X"' in r["output"]
+
+    def test_click_skips_focus_when_title_empty(self, monkeypatch):
+        import agent_windows.core.tree as t
+        monkeypatch.setattr(t, "hit_element_at",
+                            lambda x, y: {"control_type": "Button", "name": "OK"})
+        monkeypatch.setattr(t, "foreground_window", lambda: {"hwnd": 0, "title": ""})
+        with patch("agent_windows.core.input_controller.click"):
+            r = HANDLERS["click"]({"x": 1, "y": 2})
+        assert 'Hit: Button "OK"' in r["output"]
+        assert "Focus:" not in r["output"]
+
+    def test_click_verify_off_via_config(self, monkeypatch):
+        monkeypatch.setattr("agent_windows.utils.config.load_config",
+                            lambda: {"input": {"verify": False}})
+        import agent_windows.core.tree as t
+        monkeypatch.setattr(t, "hit_element_at",
+                            lambda x, y: {"control_type": "B", "name": "n"})  # would show if on
+        with patch("agent_windows.core.input_controller.click"):
+            r = HANDLERS["click"]({"x": 1, "y": 2})
+        assert "Hit:" not in r["output"]
+        assert "Focus:" not in r["output"]
+
+    def test_dblclick_verify(self, monkeypatch):
+        import agent_windows.core.tree as t
+        monkeypatch.setattr(t, "hit_element_at",
+                            lambda x, y: {"control_type": "ListItem", "name": "Row"})
+        monkeypatch.setattr(t, "foreground_window", lambda: {"hwnd": 1, "title": "App"})
+        with patch("agent_windows.core.input_controller.click"):
+            r = HANDLERS["dblclick"]({"x": 5, "y": 6})
+        assert 'Hit: ListItem "Row"' in r["output"]
+        assert 'Focus: "App"' in r["output"]
+
+    def test_hover_and_move_verify(self, monkeypatch):
+        import agent_windows.core.tree as t
+        monkeypatch.setattr(t, "hit_element_at",
+                            lambda x, y: {"control_type": "Edit", "name": "Box"})
+        monkeypatch.setattr(t, "foreground_window", lambda: {"hwnd": 1, "title": "App"})
+        with patch("agent_windows.core.input_controller.hover"):
+            rh = HANDLERS["hover"]({"x": 1, "y": 2})
+        with patch("agent_windows.core.input_controller.move_to"):
+            rm = HANDLERS["move"]({"x": 3, "y": 4})
+        assert 'Hit: Edit "Box"' in rh["output"]
+        assert 'Hit: Edit "Box"' in rm["output"]
+
+    def test_drag_appends_drop_and_slider(self, monkeypatch):
+        import agent_windows.core.tree as t
+        monkeypatch.setattr(t, "hit_element_at",
+                            lambda x, y: {"control_type": "Edit", "name": "Volume"})
+        monkeypatch.setattr(t, "range_percent_at", lambda x, y: 62)
+        with patch("agent_windows.core.input_controller.drag"):
+            r = HANDLERS["drag"]({"x1": 1, "y1": 2, "x2": 3, "y2": 4})
+        assert 'Drop: Edit "Volume"' in r["output"]
+        assert "Slider: 62%" in r["output"]
+        assert "Focus:" not in r["output"]  # drag has no Focus line
+
+    def test_drag_no_slider_when_none(self, monkeypatch):
+        import agent_windows.core.tree as t
+        monkeypatch.setattr(t, "hit_element_at",
+                            lambda x, y: {"control_type": "List", "name": "Items"})
+        monkeypatch.setattr(t, "range_percent_at", lambda x, y: None)
+        with patch("agent_windows.core.input_controller.drag"):
+            r = HANDLERS["drag"]({"x1": 1, "y1": 2, "x2": 3, "y2": 4})
+        assert "Slider:" not in r["output"]
+        assert 'Drop: List "Items"' in r["output"]
+
+    def test_drag_verify_off_via_config(self, monkeypatch):
+        monkeypatch.setattr("agent_windows.utils.config.load_config",
+                            lambda: {"input": {"verify": False}})
+        import agent_windows.core.tree as t
+        monkeypatch.setattr(t, "hit_element_at",
+                            lambda x, y: {"control_type": "X", "name": "y"})
+        with patch("agent_windows.core.input_controller.drag"):
+            r = HANDLERS["drag"]({"x1": 1, "y1": 2, "x2": 3, "y2": 4})
+        assert "Drop:" not in r["output"]
+        assert "Slider:" not in r["output"]
+
+    def test_verify_failure_never_breaks_op(self, monkeypatch):
+        """Even if a verify helper raises, a successful op returns normally
+        (the handler wraps verify in its own try/except)."""
+        import agent_windows.core.tree as t
+
+        def boom(x, y):
+            raise RuntimeError("verify exploded")
+        monkeypatch.setattr(t, "hit_element_at", boom)
+        monkeypatch.setattr(t, "foreground_window", boom)
+        with patch("agent_windows.core.input_controller.click"):
+            r = HANDLERS["click"]({"x": 1, "y": 2})
+        assert "Position: (1, 2)" in r["output"]  # op still reported
+        assert "Hit:" not in r["output"]  # verify raised → no line, no crash
 
 
 class TestShortcutHandler:

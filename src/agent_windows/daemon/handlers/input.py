@@ -40,6 +40,60 @@ def _coords(params: dict) -> tuple[int, int]:
     return validate_coordinates(require(params, "x"), require(params, "y"))
 
 
+def _verify_enabled() -> bool:
+    """Whether post-op verify lines are appended to input command output.
+
+    Default-on ([input] verify = true in config); the daemon re-reads config per
+    command, so `config set input.verify false` disables it live for raw speed.
+    """
+    from agent_windows.utils.config import load_config
+    return bool(load_config().get("input", {}).get("verify", True))
+
+
+def _append_hit_focus(lines: list[str], x: int, y: int) -> None:
+    """Append best-effort Hit + Focus verify lines (P0.1).
+
+    Never raises — the tree helpers are already fault-tolerant (degrade to
+    None/empty) and this wraps them in a second guard, so a successful op can
+    never become an error from verify. No-op when verify is disabled.
+    """
+    if not _verify_enabled():
+        return
+    from agent_windows.core.tree import hit_element_at, foreground_window
+    try:
+        hit = hit_element_at(x, y)
+        lines.append(
+            f"Hit: {hit['control_type']} \"{hit['name']}\""
+            if hit else "Hit: (none)")
+        fg = foreground_window()
+        if fg.get("title"):
+            lines.append(f"Focus: \"{fg['title']}\"")
+    except Exception:
+        pass
+
+
+def _append_drop_slider(lines: list[str], x2: int, y2: int) -> None:
+    """Append best-effort Drop + Slider verify lines for drag (P0.3).
+
+    Single hit-test at the destination (x2, y2): the drop target element, and —
+    if that element exposes a RangeValue/Scroll pattern — the post-drag slider
+    percentage. File drags surface Drop only; slider drags surface both. Never
+    raises; no-op when verify is disabled.
+    """
+    if not _verify_enabled():
+        return
+    from agent_windows.core.tree import hit_element_at, range_percent_at
+    try:
+        drop = hit_element_at(x2, y2)
+        if drop:
+            lines.append(f"Drop: {drop['control_type']} \"{drop['name']}\"")
+        pct = range_percent_at(x2, y2)
+        if pct is not None:
+            lines.append(f"Slider: {pct}%")
+    except Exception:
+        pass
+
+
 @handler("click")
 def _click(params: dict) -> dict[str, Any]:
     """Mouse click at coordinates."""
@@ -56,6 +110,7 @@ def _click(params: dict) -> dict[str, Any]:
         lines.append("Button: right")
     if double:
         lines.append("Double: true")
+    _append_hit_focus(lines, x, y)  # P0.1: post-op verify
     return {"output": "\n".join(lines)}
 
 
@@ -70,6 +125,7 @@ def _dblclick(params: dict) -> dict[str, Any]:
     lines = ["## Double Click", f"Position: ({x}, {y})"]
     if right:
         lines.append("Button: right")
+    _append_hit_focus(lines, x, y)  # P0.1: post-op verify
     return {"output": "\n".join(lines)}
 
 
@@ -80,7 +136,9 @@ def _hover(params: dict) -> dict[str, Any]:
 
     x, y = _coords(params)
     hover(x, y)
-    return {"output": f"## Hover\nPosition: ({x}, {y})"}
+    lines = ["## Hover", f"Position: ({x}, {y})"]
+    _append_hit_focus(lines, x, y)  # P0.1: post-op verify
+    return {"output": "\n".join(lines)}
 
 
 @handler("mouse_down")
@@ -230,7 +288,9 @@ def _move(params: dict) -> dict[str, Any]:
 
     x, y = _coords(params)
     move_to(x, y)
-    return {"output": f"## Move\nPosition: ({x}, {y})"}
+    lines = ["## Move", f"Position: ({x}, {y})"]
+    _append_hit_focus(lines, x, y)  # P0.1: post-op verify
+    return {"output": "\n".join(lines)}
 
 
 @handler("drag")
@@ -246,6 +306,7 @@ def _drag(params: dict) -> dict[str, Any]:
     lines = ["## Drag", f"From: ({x1}, {y1})", f"To: ({x2}, {y2})"]
     if right:
         lines.append("Button: right")
+    _append_drop_slider(lines, x2, y2)  # P0.3: drop-target + slider verify
     return {"output": "\n".join(lines)}
 
 
