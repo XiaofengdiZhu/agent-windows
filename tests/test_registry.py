@@ -361,6 +361,35 @@ class TestDeleteRecheck:
         assert "remaining" not in r
         assert m.call_count == 1
 
+    def test_delete_value_list_failure_surfaces_not_silent_none(self):
+        """list failure (e.g. access denied enumerating the key) must NOT read
+        as '(none)' survivors — that masks a real error behind an empty list.
+        Surface the list failure instead, with a list_failed sibling."""
+        runs = [_ok_run(), _ok_run(stderr="Access is denied", returncode=1)]
+        with patch("subprocess.run", side_effect=runs):
+            r = delete_entry(r"HKCU:\Soft", "Name")
+        assert "(none)" not in r["output"]
+        assert "list failed" in r["output"].lower()
+        assert r["list_failed"] is True
+        assert r["remaining"] == []
+
+    def test_delete_value_list_cmd_injects_escaped_path(self):
+        """The list call reuses q_path (Get-Item) — a hostile path must stay
+        escaped there too, not only in the delete command. Mirrors
+        TestGetValue.test_injection_in_name_contained: assert the escaped
+        literal appears and no unescaped quote breaks out."""
+        hostile = r"HKCU:\Soft'; Remove-Item C:\evil; '"
+        runs = [_ok_run(), _ok_run(stdout="A")]
+        with patch("subprocess.run", side_effect=runs) as m:
+            delete_entry(hostile, "Name")
+        list_cmd = m.call_args_list[1].args[0][-1]  # 2nd run → list command
+        # The escaped path literal is in the list command (single Get-Item).
+        assert _quote(hostile) in list_cmd
+        # No unescaped breakout: collapse every doubled quote pair, then every
+        # remaining single quote must be a LITERAL delimiter (balanced, even).
+        collapsed = list_cmd.replace("''", "")
+        assert collapsed.count("'") % 2 == 0
+
 
 class TestListKey:
     def test_command_lists_values_and_subkeys(self):

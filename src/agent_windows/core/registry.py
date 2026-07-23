@@ -224,6 +224,12 @@ def delete_entry(path: str, name: str | None = None) -> dict[str, Any]:
       is named ``(default)`` internally), so use ``(Get-Item ...).'(default)'``
       via ``Remove-ItemProperty`` on the property named ``(default)``.
     - ``name`` non-empty → delete that named value.
+
+    On a successful delete the result carries a ``remaining`` sibling — the
+    surviving value names (value delete) or sub-key names (whole-key delete) of
+    the same key/parent, so the agent knows what's left without a second call.
+    If that recheck list itself fails (e.g. access denied), ``list_failed`` is
+    set instead of silently reporting an empty list.
     """
     _validate_path(path)
     q_path = _quote(path)
@@ -263,6 +269,14 @@ def delete_entry(path: str, name: str | None = None) -> dict[str, Any]:
                     f"-join \"`n\"")
         list_what = "values"
     lr = _run(list_cmd)
+    if lr["exit_code"] != 0:
+        # list failed (e.g. access denied enumerating the key) — must NOT read
+        # as an empty "(none)" survivor list, which masks the error behind a
+        # benign-looking empty result. Surface the failure instead.
+        list_err = (lr["stderr"] or lr["stdout"]).strip() or f"exit code {lr['exit_code']}"
+        return {"output": f"Registry {what} [{path}] deleted.\n"
+                          f"Remaining {list_what}: (list failed: {list_err})",
+                "remaining": [], "list_failed": True, **r}
     remaining = [s for s in lr["stdout"].splitlines() if s.strip()]
     rem_line = ", ".join(remaining) if remaining else "(none)"
     return {"output": f"Registry {what} [{path}] deleted.\n"
