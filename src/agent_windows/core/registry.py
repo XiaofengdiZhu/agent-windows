@@ -253,8 +253,14 @@ def delete_entry(path: str, name: str | None = None) -> dict[str, Any]:
                     f"Select-Object -ExpandProperty PSChildName) -join \"`n\"")
         list_what = "sub-keys"
     else:
-        list_cmd = (f"((Get-Item {q_path} -ErrorAction SilentlyContinue).Property "
-                    f"| Where-Object {{ $_ -notlike 'PS*' }}) -join \"`n\"")
+        # .Property holds the key's value names only — the synthetic
+        # PSPath/PSParentPath props live on the RegistryKey object, not in this
+        # array — so no PS* filter is needed (and one would silently drop real
+        # PS-prefixed values like PSData/PSVersion). Contrast list_key, which
+        # runs on a Get-ItemProperty PSCustomObject where the synthetic props
+        # ARE mixed in and DO need excluding.
+        list_cmd = (f"((Get-Item {q_path} -ErrorAction SilentlyContinue).Property) "
+                    f"-join \"`n\"")
         list_what = "values"
     lr = _run(list_cmd)
     remaining = [s for s in lr["stdout"].splitlines() if s.strip()]

@@ -316,6 +316,21 @@ class TestDeleteRecheck:
         assert "A, B" in r["output"]
         assert r["remaining"] == ["A", "B"]
 
+    def test_delete_value_list_cmd_has_no_ps_filter(self):
+        # The list call must NOT carry a ``-notlike 'PS*'`` filter: ``.Property``
+        # holds value names only (the synthetic PSPath/PSParentPath props live on
+        # the RegistryKey object, not in .Property), so the filter is redundant
+        # AND lossy — a real value named PSData/PSVersion would be dropped.
+        # Assert on the PS command string: the canned-stdout tests above mock
+        # out subprocess.run, so PowerShell-side filtering never runs there.
+        runs = [_ok_run(), _ok_run(stdout="A")]
+        with patch("subprocess.run", side_effect=runs) as m:
+            delete_entry(r"HKCU:\Soft", "Name")
+        list_cmd = m.call_args_list[1].args[0][-1]  # 2nd run → list command
+        assert "Where-Object" not in list_cmd
+        assert "-notlike" not in list_cmd
+        assert ".Property" in list_cmd
+
     def test_delete_value_empty_remaining(self):
         runs = [_ok_run(), _ok_run(stdout="")]
         with patch("subprocess.run", side_effect=runs):
