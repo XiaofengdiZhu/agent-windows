@@ -785,6 +785,70 @@ def foreground_window() -> dict[str, Any]:
     return {"hwnd": hwnd, "title": title}
 
 
+def _read_field_value(control) -> dict[str, Any]:
+    """Best-effort read of a live Control's text value + password flag (P0.2).
+
+    Mirrors _collect_rich_metadata's value block: ValueValueProperty first,
+    LegacyIAccessibleValueProperty fallback; IsPasswordProperty read independently
+    of value (a password field may expose the flag but not the value). Returns
+    ``{"value": str|None, "is_password": bool}`` — value is None when the control
+    exposes no value pattern (unreadable) or the read fails. Never raises.
+    """
+    try:
+        is_pw = control.GetPropertyValue(PropertyId.IsPasswordProperty)
+        is_pw = bool(is_pw) and not _is_uia_sentinel(is_pw)
+    except Exception:
+        is_pw = False
+    val = None
+    try:
+        raw = control.GetPropertyValue(PropertyId.ValueValueProperty)
+        if raw is None or _is_uia_sentinel(raw):
+            raw = control.GetPropertyValue(PropertyId.LegacyIAccessibleValueProperty)
+            if raw is None or _is_uia_sentinel(raw):
+                raw = None
+        val = None if raw is None else str(raw)
+    except Exception:
+        logger.debug("verify: field value read failed", exc_info=True)
+        val = None
+    return {"value": val, "is_password": is_pw}
+
+
+def focused_field_value() -> dict[str, Any] | None:
+    """Best-effort focused element's text value + password flag (P0.2).
+
+    Powers type's pre/post diff on the no-coords path (the field is already
+    focused). Returns None when there's no focused element or the lookup fails.
+    """
+    from agent_windows.uia.controls import GetFocusedControl
+    try:
+        control = GetFocusedControl()
+    except Exception:
+        logger.debug("verify: GetFocusedControl failed", exc_info=True)
+        return None
+    if control is None:
+        return None
+    return _read_field_value(control)
+
+
+def field_value_at(x: int, y: int) -> dict[str, Any] | None:
+    """Best-effort text value + password flag of the element at (x, y) (P0.2).
+
+    Powers type's pre/post diff on the --at / --at-selector path, where focus
+    may not be on the target at pre-read time. ControlFromPoint resolves the
+    target element directly by coordinate, so pre (before click/type) and post
+    (after) are guaranteed the same field. Returns None on failure.
+    """
+    from agent_windows.uia.controls import ControlFromPoint
+    try:
+        control = ControlFromPoint(x, y)
+    except Exception:
+        logger.debug("verify: ControlFromPoint failed at (%s, %s)", x, y, exc_info=True)
+        return None
+    if control is None:
+        return None
+    return _read_field_value(control)
+
+
 # ExpandCollapseExpandCollapseStateProperty int → human-readable state. Shared
 # with _collect_rich_metadata; the value map is the single source of truth so
 # expand_element/collapse_element report states consistent with the tree.

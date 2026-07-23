@@ -1580,6 +1580,102 @@ class TestVerifyHelpers:
         assert r == {"hwnd": 0, "title": ""}
 
 
+class TestFieldValueHelpers:
+    """focused_field_value / field_value_at power type's post-op field-value
+    diff (P0.2). Best-effort, never raise — read failure degrades to None. The
+    live-Control reads are faked via GetFocusedControl / ControlFromPoint."""
+
+    def _ctrl(self, value="foo", is_pw=False, props=None):
+        """A fake live Control whose GetPropertyValue returns value + password."""
+        c = MagicMock()
+        props = dict(props) if props else {}
+        if value is not None:
+            props.setdefault(PropertyId.ValueValueProperty, value)
+
+        def gpv(pid):
+            if pid == PropertyId.IsPasswordProperty:
+                return is_pw
+            return props.get(pid)
+        c.GetPropertyValue = gpv
+        return c
+
+    def test_focused_field_value_reads_value(self):
+        from agent_windows.core.tree import focused_field_value
+        with patch("agent_windows.uia.controls.GetFocusedControl",
+                   return_value=self._ctrl("hello")):
+            assert focused_field_value() == {"value": "hello", "is_password": False}
+
+    def test_focused_field_value_none_when_no_focus(self):
+        from agent_windows.core.tree import focused_field_value
+        with patch("agent_windows.uia.controls.GetFocusedControl", return_value=None):
+            assert focused_field_value() is None
+
+    def test_focused_field_value_swallows_comerror(self):
+        from agent_windows.core.tree import focused_field_value
+        with patch("agent_windows.uia.controls.GetFocusedControl",
+                   side_effect=COMError("dead", 0, None)):
+            assert focused_field_value() is None  # never raises
+
+    def test_field_value_at_reads_via_controlfrompoint(self):
+        from agent_windows.core.tree import field_value_at
+        with patch("agent_windows.uia.controls.ControlFromPoint",
+                   return_value=self._ctrl("bar")):
+            assert field_value_at(5, 5) == {"value": "bar", "is_password": False}
+
+    def test_field_value_at_none_on_dead_point(self):
+        from agent_windows.core.tree import field_value_at
+        with patch("agent_windows.uia.controls.ControlFromPoint", return_value=None):
+            assert field_value_at(0, 0) is None
+
+    def test_value_none_when_no_value_pattern(self):
+        from agent_windows.core.tree import focused_field_value
+        with patch("agent_windows.uia.controls.GetFocusedControl",
+                   return_value=self._ctrl(value=None)):
+            r = focused_field_value()
+        assert r["value"] is None
+
+    def test_legacy_accessible_fallback(self):
+        from agent_windows.core.tree import focused_field_value
+        c = MagicMock()
+
+        def gpv(pid):
+            if pid == PropertyId.IsPasswordProperty:
+                return False
+            if pid == PropertyId.ValueValueProperty:
+                return None
+            if pid == PropertyId.LegacyIAccessibleValueProperty:
+                return "legacy-val"
+        c.GetPropertyValue = gpv
+        with patch("agent_windows.uia.controls.GetFocusedControl", return_value=c):
+            assert focused_field_value()["value"] == "legacy-val"
+
+    def test_password_flag_independent_of_value(self):
+        from agent_windows.core.tree import focused_field_value
+        with patch("agent_windows.uia.controls.GetFocusedControl",
+                   return_value=self._ctrl(value=None, is_pw=True)):
+            r = focused_field_value()
+        assert r == {"value": None, "is_password": True}
+
+    def test_non_string_value_coerced(self):
+        from agent_windows.core.tree import focused_field_value
+        with patch("agent_windows.uia.controls.GetFocusedControl",
+                   return_value=self._ctrl(value=42)):
+            assert focused_field_value()["value"] == "42"
+
+    def test_sentinel_value_treated_as_none(self):
+        from agent_windows.core.tree import focused_field_value
+        sentinel = object()  # not bool/int/float/str → _is_uia_sentinel True
+        c = MagicMock()
+
+        def gpv(pid):
+            if pid == PropertyId.IsPasswordProperty:
+                return False
+            return sentinel
+        c.GetPropertyValue = gpv
+        with patch("agent_windows.uia.controls.GetFocusedControl", return_value=c):
+            assert focused_field_value()["value"] is None
+
+
 # ── element action hints (TODO #5) ──────────────────────────────────
 
 
