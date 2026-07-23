@@ -849,6 +849,51 @@ def field_value_at(x: int, y: int) -> dict[str, Any] | None:
     return _read_field_value(control)
 
 
+_VALUE_DIFF_INLINE_LIMIT = 60    # per side, single-line inline render
+_VALUE_DIFF_LINE_LIMIT = 120     # per rendered line, multi-line unified
+_VALUE_DIFF_TOTAL_LIMIT = 50000  # skip diff if either side huge (DoS guard)
+
+
+def format_value_diff(pre: dict | None, post: dict | None) -> list[str]:
+    """Render a git-diff-style output block for pre→post field value (P0.2).
+
+    pre/post are focused_field_value/field_value_at dicts ({"value","is_password"})
+    or None/empty. Returns the lines to append after the type echo (possibly []
+    when there's nothing useful to show). Never raises. Cases:
+      - password → single hidden line (no value leak);
+      - both values None (no value pattern) → [] (nothing to report);
+      - equal → "no change" (input rejected / maxlength / IME-swallowed);
+      - single-line (no \\n) → "old → new" inline;
+      - multi-line → difflib.unified_diff hunk.
+    """
+    pre = pre or {}
+    post = post or {}
+    is_pw = bool(post.get("is_password")) or bool(pre.get("is_password"))
+    pv = pre.get("value")
+    qv = post.get("value")
+    if is_pw:
+        return ["Field value: (password field, value hidden)"]
+    if pv is None and qv is None:
+        return []
+    a = pv or ""
+    b = qv or ""
+    if len(a) > _VALUE_DIFF_TOTAL_LIMIT or len(b) > _VALUE_DIFF_TOTAL_LIMIT:
+        return ["Field value: (value too large to diff)"]
+    if a == b:
+        return ["Field value: no change"]
+    if "\n" not in a and "\n" not in b:
+        return [f"Field value: {_truncate_with_count(a, _VALUE_DIFF_INLINE_LIMIT)} → "
+                f"{_truncate_with_count(b, _VALUE_DIFF_INLINE_LIMIT)}"]
+    import difflib
+    diff = list(difflib.unified_diff(
+        a.splitlines(), b.splitlines(),
+        fromfile="before", tofile="after", lineterm=""))
+    if not diff:
+        return ["Field value: no change"]
+    return ["Field value diff:"] + [
+        _truncate_with_count(ln, _VALUE_DIFF_LINE_LIMIT) for ln in diff]
+
+
 # ExpandCollapseExpandCollapseStateProperty int → human-readable state. Shared
 # with _collect_rich_metadata; the value map is the single source of truth so
 # expand_element/collapse_element report states consistent with the tree.

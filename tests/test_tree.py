@@ -1676,6 +1676,60 @@ class TestFieldValueHelpers:
             assert focused_field_value()["value"] is None
 
 
+class TestFormatValueDiff:
+    """format_value_diff renders the git-diff-style Field value block for type's
+    post-op readback (P0.2). Pure function — no COM — so each branch is tested
+    directly."""
+
+    def _v(self, value, is_pw=False):
+        return {"value": value, "is_password": is_pw}
+
+    def test_password_hidden(self):
+        from agent_windows.core.tree import format_value_diff
+        assert format_value_diff(self._v("x", True), self._v("xy", True)) == \
+            ["Field value: (password field, value hidden)"]
+
+    def test_both_none_empty(self):
+        from agent_windows.core.tree import format_value_diff
+        assert format_value_diff({"value": None, "is_password": False},
+                                 {"value": None, "is_password": False}) == []
+
+    def test_no_change(self):
+        from agent_windows.core.tree import format_value_diff
+        assert format_value_diff(self._v("abc"), self._v("abc")) == \
+            ["Field value: no change"]
+
+    def test_single_line_inline(self):
+        from agent_windows.core.tree import format_value_diff
+        assert format_value_diff(self._v("foo"), self._v("foobar")) == \
+            ["Field value: foo → foobar"]
+
+    def test_multi_line_unified(self):
+        from agent_windows.core.tree import format_value_diff
+        pre = "line1\nline2\nline3"
+        post = "line1\nCHANGED\nline3"
+        out = format_value_diff(self._v(pre), self._v(post))
+        assert out[0] == "Field value diff:"
+        joined = "\n".join(out)
+        assert "-line2" in joined and "+CHANGED" in joined
+
+    def test_none_pre_treated_as_empty(self):
+        from agent_windows.core.tree import format_value_diff
+        out = format_value_diff({"value": None, "is_password": False}, self._v("new"))
+        assert out == ["Field value:  → new"]
+
+    def test_huge_value_skipped(self):
+        from agent_windows.core.tree import format_value_diff
+        big = "x" * 100000
+        out = format_value_diff(self._v(big), self._v("y"))
+        assert out == ["Field value: (value too large to diff)"]
+
+    def test_never_raises_on_garbage(self):
+        from agent_windows.core.tree import format_value_diff
+        assert format_value_diff(None, None) == []
+        assert format_value_diff({}, {}) == []
+
+
 # ── element action hints (TODO #5) ──────────────────────────────────
 
 
