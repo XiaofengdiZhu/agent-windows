@@ -26,6 +26,12 @@ user32.GetForegroundWindow.restype = ctypes.wintypes.HWND
 user32.IsWindow.restype = ctypes.wintypes.BOOL
 
 WM_CLOSE = 0x0010
+# WM_CLOSE is asynchronous — the app receives it on its own message loop and
+# may take a beat to tear down (or show a save-changes dialog). Poll IsWindow a
+# few times instead of a single check so slow-to-close apps aren't misreported
+# as "closed: no" while still winding down.
+CLOSE_POLL_ATTEMPTS = 3
+CLOSE_POLL_INTERVAL = 0.1
 
 
 def _resolve(target: str) -> tuple[int, str, str | None]:
@@ -123,8 +129,12 @@ def close_window(target: str = "") -> dict[str, Any]:
     """
     hwnd, title, warn = _resolve(target)
     user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
-    time.sleep(0.1)
-    gone = not bool(user32.IsWindow(hwnd))
+    gone = False
+    for _ in range(CLOSE_POLL_ATTEMPTS):
+        time.sleep(CLOSE_POLL_INTERVAL)
+        if not bool(user32.IsWindow(hwnd)):
+            gone = True
+            break
     state = ("Closed: yes" if gone
              else "Closed: no (window remains — app may be prompting to save)")
     return _result("Close", title, hwnd, state, warn, closed=gone)

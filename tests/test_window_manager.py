@@ -164,6 +164,21 @@ class TestClose:
         assert r["closed"] is False
         assert "Closed: no" in r["output"]
 
+    def test_closes_after_brief_delay(self):
+        """A window that vanishes shortly after WM_CLOSE (slow app, or a save
+        modal dismissed a moment later) must still report closed=yes — poll
+        IsWindow a few times rather than a single 100ms check that would
+        false-negative on slow-to-close apps and make the agent over-react."""
+        m32 = MagicMock()
+        m32.IsWindow.side_effect = [True, True, False]  # gone on the 3rd check
+        with patch.object(wm, "user32", m32), \
+             patch.object(wm, "resolve_window", return_value=(_wi(100), None)), \
+             patch("agent_windows.core.window_manager.time"):
+            r = wm.close_window("Notepad")
+        assert m32.IsWindow.call_count == 3
+        assert r["closed"] is True
+        assert "Closed: yes" in r["output"]
+
 
 class TestWarningSurfacing:
     """A multi-match warning appears in output AND as a sibling (so a

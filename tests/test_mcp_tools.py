@@ -462,6 +462,27 @@ def test_process_list_fn_forwards_filter_params():
     m.assert_called_once_with("process_list", sort_by="cpu", limit=10, name="edge")
 
 
+@pytest.mark.parametrize("op", ["minimize", "maximize", "restore", "close", "focus"])
+def test_window_op_fn_forwards_target(op):
+    """Each window_<op>_fn forwards method window_<op> + target and returns the
+    str output (siblings never leak — MCP reads only `output`). P4.2 added these
+    trivial forwarders; this locks the method-name contract + target shape so a
+    silent rename in the MCP layer can't slip through."""
+    fn = getattr(sysmod, f"window_{op}_fn")
+    with patch.object(sysmod, "_call", return_value={"output": f"## Window {op}"}) as m:
+        out = fn(target="Notepad")
+    m.assert_called_once_with(f"window_{op}", target="Notepad")
+    assert out == f"## Window {op}"
+
+
+def test_window_op_fn_default_target_is_empty():
+    """No target → "" forwarded; the daemon resolves that to the foreground
+    window (resolve_window(active=True))."""
+    with patch.object(sysmod, "_call", return_value={"output": "fg"}) as m:
+        sysmod.window_minimize_fn()
+    m.assert_called_once_with("window_minimize", target="")
+
+
 def test_lock_fn_returns_output():
     with patch.object(sysmod, "_call", return_value={"output": "## Lock\nWorkstation locked."}):
         assert sysmod.lock_fn() == "## Lock\nWorkstation locked."
