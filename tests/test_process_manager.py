@@ -180,6 +180,15 @@ class TestKillByName:
     """kill_process runs ``taskkill [/IM name.exe] [/F]`` and classifies the
     result from taskkill's exit code + message text."""
 
+    @pytest.fixture(autouse=True)
+    def _stub_name_recheck(self, monkeypatch):
+        # P1.2: a name-path success now rechecks via _count_by_image (tasklist),
+        # which the mock_run below would intercept with taskkill's stdout and
+        # miscount as 1 survivor. Stub it to 0 (confirmed gone) so these tests
+        # stay focused on taskkill argv/classification — the recheck itself is
+        # covered by TestKillRecheck.
+        monkeypatch.setattr(pm, "_count_by_image", lambda image: 0)
+
     @patch("agent_windows.core.process_manager.subprocess.run")
     def test_graceful_success_reports_terminated(self, mock_run):
         """rc 0 + 'success' → Status: terminated (not force-killed)."""
@@ -324,6 +333,76 @@ class TestKillByPid:
             pm.kill_process("4321")
         argv = mock_run.call_args.args[0]
         assert argv == ["taskkill", "/PID", "4321"]
+
+
+class TestKillRecheck:
+    """P1.2: kill_process rechecks liveness after taskkill rc==0. PID path uses
+    _image_name_for_pid (None=gone); name path uses _count_by_image (remaining
+    count). A graceful close may be ignored or save-prompted → 'still running' is
+    reported and NOT auto-retried (the agent decides whether to force)."""
+
+    @patch("agent_windows.core.process_manager._image_name_for_pid",
+           return_value=None)
+    @patch("agent_windows.core.process_manager.subprocess.run")
+    def test_pid_confirmed_dead_when_image_gone(self, mock_run, _img):
+        mock_run.return_value = _completed("SUCCESS: signal", 0)
+        with patch("agent_windows.core.process_manager._open_and_verify_pid",
+                   return_value=("notepad.exe", 0)):
+            r = pm.kill_process(1234)
+        assert "confirmed gone" in r["output"]
+        assert r["killed"]["confirmed_dead"] is True
+
+    @patch("agent_windows.core.process_manager._image_name_for_pid",
+           return_value="notepad.exe")
+    @patch("agent_windows.core.process_manager.subprocess.run")
+    def test_pid_still_running_no_retry(self, mock_run, _img):
+        mock_run.return_value = _completed("SUCCESS: signal", 0)
+        with patch("agent_windows.core.process_manager._open_and_verify_pid",
+                   return_value=("notepad.exe", 0)):
+            r = pm.kill_process(1234)
+        assert "still running" in r["output"]
+        assert "force=True" in r["output"]
+        assert r["killed"]["confirmed_dead"] is False
+        # taskkill called exactly once — a graceful failure is NOT auto-retried
+        assert mock_run.call_count == 1
+
+    @patch("agent_windows.core.process_manager._image_name_for_pid",
+           side_effect=Exception)
+    @patch("agent_windows.core.process_manager.subprocess.run")
+    def test_pid_recheck_failure_does_not_claim_dead(self, mock_run, _img):
+        # fail-closed: a recheck that errors must not report confirmed gone
+        mock_run.return_value = _completed("SUCCESS: signal", 0)
+        with patch("agent_windows.core.process_manager._open_and_verify_pid",
+                   return_value=("notepad.exe", 0)):
+            r = pm.kill_process(1234)
+        assert "confirmed gone" not in r["output"]
+        assert r["killed"]["confirmed_dead"] is False
+
+    @patch("agent_windows.core.process_manager._count_by_image", return_value=0)
+    @patch("agent_windows.core.process_manager.subprocess.run")
+    def test_name_zero_remaining_confirmed_gone(self, mock_run, _cnt):
+        mock_run.return_value = _completed("SUCCESS: terminated", 0)
+        r = pm.kill_process("notepad")
+        assert "confirmed gone" in r["output"]
+        assert r["killed"]["confirmed_dead"] is True
+
+    @patch("agent_windows.core.process_manager._count_by_image", return_value=3)
+    @patch("agent_windows.core.process_manager.subprocess.run")
+    def test_name_counts_remaining(self, mock_run, _cnt):
+        mock_run.return_value = _completed("SUCCESS: terminated", 0)
+        r = pm.kill_process("notepad")
+        assert "still running" in r["output"]
+        assert "3 remaining" in r["output"]
+        assert r["killed"]["confirmed_dead"] is False
+        assert r["killed"]["remaining"] == 3
+
+    @patch("agent_windows.core.process_manager.subprocess.run")
+    def test_access_denied_does_not_recheck(self, mock_run):
+        # non-success path (rc!=0) returns no killed sibling — no recheck
+        mock_run.return_value = _completed("", 1, stderr="ERROR: Access is denied.")
+        r = pm.kill_process("systemish")
+        assert "killed" not in r
+        assert "Status: failed (access denied)" in r["output"]
 
 
 class TestKillByPidImageNameGate:

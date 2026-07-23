@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import subprocess
+import time
 from typing import Any, Literal
 
 logger = logging.getLogger(__name__)
@@ -112,6 +113,25 @@ def _image_name_for_pid(pid: int) -> str | None:
         return _query_image_name(handle)
     finally:
         _close_process_handle(handle)
+
+
+def _count_by_image(image: str) -> int:
+    """Count live processes matching an image name (e.g. ``'notepad.exe'``).
+
+    Powers process_kill's name-path recheck (P1.2): ``taskkill /IM`` kills all
+    matches, so the post-op count of remaining matches tells the agent whether
+    anything survived a graceful close. Returns -1 when the count itself failed
+    (callers must treat that as fail-closed, not zero)."""
+    try:
+        r = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {image}",
+                            "/FO", "CSV", "/NH"],
+                           capture_output=True, text=True, timeout=5,
+                           encoding="utf-8", errors="replace")
+    except Exception:
+        return -1
+    if r.returncode != 0:
+        return -1
+    return sum(1 for ln in r.stdout.splitlines() if ln.strip())
 
 
 def _open_and_verify_pid(pid: int) -> tuple[str | None, int]:
@@ -352,7 +372,34 @@ def kill_process(pid_or_name: str | int, force: bool = False) -> dict[str, Any]:
         # unconditionally.
         if rc == 0:
             mode = "force-killed" if force else "terminated"
-            return {"output": f"## Process Kill\n{label}\nStatus: {mode}"}
+            lines = ["## Process Kill", label]
+            if pid is not None:
+                # Let the graceful close settle, then confirm the PID is gone.
+                # _image_name_for_pid returns None when the PID no longer
+                # resolves (gone) — fail-closed on any read error.
+                time.sleep(0.3)
+                try:
+                    still = _image_name_for_pid(pid)
+                except Exception:
+                    still = "unknown"
+                if still is None:
+                    lines.append(f"Status: {mode} (confirmed gone)")
+                    killed = {"confirmed_dead": True}
+                else:
+                    lines.append("Status: still running (graceful close "
+                                 "requested; retry with force=True)")
+                    killed = {"confirmed_dead": False}
+            else:
+                # Name path: taskkill /IM kills all matches — count survivors.
+                remaining = _count_by_image(image)
+                if remaining == 0:
+                    lines.append(f"Status: {mode} (confirmed gone)")
+                    killed = {"confirmed_dead": True}
+                else:
+                    lines.append(f"Status: still running ({remaining} "
+                                 "remaining; retry with force=True)")
+                    killed = {"confirmed_dead": False, "remaining": remaining}
+            return {"output": "\n".join(lines), "killed": killed}
 
         # No such process (covers both "not found" and "no running instance
         # of…"). These English markers are best-effort sub-classification on the
