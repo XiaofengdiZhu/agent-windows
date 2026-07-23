@@ -179,6 +179,17 @@ class TestFriendlyNameLaunch:
             am._launch_start_app_target("myapp", r"C:\Apps\myapp.exe")
         mock_v.assert_called_once_with(r"C:\Apps\myapp.exe")
 
+    def test_launch_win32_threads_args_to_popen(self):
+        """Win32 friendly-name targets pass args through to Popen argv."""
+        with patch("agent_windows.core.filesystem.validate_executable_path"), \
+                patch("agent_windows.core.app_manager.subprocess.Popen",
+                      return_value=MagicMock(pid=8)) as mock_p, \
+                patch("os.path.exists", return_value=True):
+            result = am._launch_start_app_target(
+                "myapp", r"C:\Apps\myapp.exe", args=["--verbose", "file.txt"])
+        assert mock_p.call_args.args[0] == [r"C:\Apps\myapp.exe", "--verbose", "file.txt"]
+        assert result["pid"] == 8
+
     def test_launch_no_match_raises_not_found(self):
         """When neither PATH nor Start Menu resolves, raise 'not found'."""
         with patch("agent_windows.core.filesystem.validate_executable_path"), \

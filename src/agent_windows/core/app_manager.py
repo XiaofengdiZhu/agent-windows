@@ -124,7 +124,9 @@ def launch_app(name_or_path: str, args: list[str] | None = None) -> dict[str, An
         return _launch_start_app_target(name_or_path, target, args)
 
 
-def _launch_start_app_target(friendly: str, target: str, args: list[str] | None = None) -> dict[str, Any]:
+def _launch_start_app_target(
+    friendly: str, target: str, args: list[str] | None = None,
+) -> dict[str, Any]:
     """Launch a Start-Menu-resolved target.
 
     ``target`` is either an AUMID (UWP — no backslash, not an existing path) or
@@ -143,7 +145,7 @@ def _launch_start_app_target(friendly: str, target: str, args: list[str] | None 
         from agent_windows.core.filesystem import validate_executable_path
         validate_executable_path(target)
         proc = subprocess.Popen(
-            [target],
+            [target] + (args or []),
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS,

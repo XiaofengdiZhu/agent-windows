@@ -57,8 +57,11 @@ def activate_uwp_app(
     converted to ValueError (-> INVALID_PARAMS via route_request) so the bare
     HRESULT never reaches the JSON-RPC surface.
     """
-    mgr = (_create or _create_activation_manager)()
+    # TODO(P5): guard against indefinite block if the activation broker hangs
+    # (e.g. suspended app that fails to resume).  A watchdog thread or
+    # CoWaitForMultipleHandles timeout would keep the daemon STA responsive.
     try:
+        mgr = (_create if _create is not None else _create_activation_manager)()
         pid = ctypes.c_ulong(0)
         mgr.ActivateApplication(aumid, args, AO_NONE, ctypes.byref(pid))
         return int(pid.value)
