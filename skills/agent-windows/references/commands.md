@@ -77,7 +77,7 @@ No parameters. Indices are 0-based, `EnumDisplayMonitors` order — **identical 
 
 **Action column**: each element's Action column shows the verb(s) it supports — `click` (buttons/menu items/hyperlinks), `fill` (text fields → `type`), `toggle` (checkboxes), `select` (radios/list items/tree items/tab items/combo boxes), `slide` (sliders/spinners/scroll bars — drag the thumb → `drag`), `scroll` (scrollable documents/containers), `expand` (expandable combos/collapsible groups/tree items). Multiple verbs join with `/` (e.g. `select/expand` for a combo box, `scroll/expand` for a scrollable collapsible group). This tells you what to *do* with `@eN`; the State column tells you its *current* state. Derived from control type + cached UIA properties, so it's free (no extra COM round-trips).
 
-**Rich element attributes**: the Interactive Elements table's State column surfaces extra attributes when the element exposes them — `toggle_state:on|off|indeterminate` (checkboxes/toggles), `value:...` (text fields, sliders), `expand_collapse_state:expanded|collapsed|partially expanded` (combo boxes, tree items, menus, collapsible groups — any element exposing the state), `scrollable:v|h|vh` + `scroll_pct:v:42% h:0%` (scrollable containers), `min:..`/`max:..` (sliders), `is_selected:true|false` (list/radio/tab items), `is_password:true`, `shortcut:Ctrl+S`, `help_text:...`. These are read from the cached UIA properties (no extra COM round-trips) and help disambiguate similar-looking elements and read current state without an extra click. Note: scrollable and expandable containers are promoted to interactive (they get an `@eN` ref) so they can be targeted by `expand`/`collapse`/`scroll`.
+**Rich element attributes**: the Interactive Elements table's State column surfaces extra attributes when the element exposes them — `toggle_state:on|off|indeterminate` (checkboxes/toggles), `value:...` (text fields, sliders), `expand_collapse_state:expanded|collapsed|partially expanded` (combo boxes, tree items, menus, collapsible groups — any element exposing the state), `scrollable:v|h|vh` + `scroll_pct:v:42% h:0%` (scrollable containers), `min:..`/`max:..` (sliders), `is_selected:true|false` (list/radio/tab items), `is_password:true`, `shortcut:Ctrl+S`, `help_text:...`. These are read from the cached UIA properties (no extra COM round-trips) and help disambiguate similar-looking elements and read current state without an extra click. Note: scrollable and expandable containers are promoted to interactive (they get an `@eN` ref) so they can be targeted by `expand`/`collapse`/`scroll`. Long element names and attribute values are truncated in the table with a `...(+N)` suffix reporting how many characters were dropped — if you need the full text, follow up with `get-text @eN`.
 
 ### screenshot
 
@@ -158,7 +158,7 @@ agent-windows detect "PDF file icons" [--max-targets N] [-i IMAGE] [-m MODEL]
 | `--max-targets` | int | `20` | Maximum number of targets |
 | `--output` / `-o` | str | `""` | Save annotated screenshot to path |
 
-**Output**: `{output, description, count, targets, screenshot_path}`. Each target: `{index, label, box: {x1, y1, x2, y2}}`.
+**Output**: `{output, description, count, targets, screenshot_path}`. Each target: `{index, label, box: {x1, y1, x2, y2}, center_x, center_y}` — `center_x`/`center_y` is the bbox midpoint (click-ready, no need to compute it).
 
 ### find-image
 
