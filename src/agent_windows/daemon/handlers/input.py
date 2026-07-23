@@ -281,15 +281,30 @@ def _type(params: dict) -> dict[str, Any]:
         if verify:
             post = _safe_field_read(focused_field_value)
 
+    # P3.2: no Text: echo. P0.2's Field value diff already reads the field's
+    # actual value (untruncated), so echoing the param again would duplicate it
+    # AND truncate at 50 chars — the original tail-loss bug. Click paths
+    # (--at / --at-selector) echo the resolved target coord and verify what the
+    # click hit (P0.1 consistency with click/dblclick/hover/move); the plain
+    # focused-field path has no click point. ``clicked`` guards ``ax``/``ay``
+    # scope (both click branches above define them; the plain branch does not).
+    clicked = at_selector or (at_x is not None and at_y is not None)
+    lines = ["## Type"]
+    if clicked:
+        if at_selector:
+            lines.append(f"At: {at_selector} ({ax}, {ay})")
+        else:
+            lines.append(f"At: ({ax}, {ay})")
     # P2.2: echo only non-default flags. Enter/Clear default False, Caret
     # defaults "idle" — surfacing them on every call was noise.
-    lines = ["## Type", f"Text: {text[:50]}{'...' if len(text) > 50 else ''}"]
     if enter:
         lines.append("Enter: true")
     if clear:
         lines.append("Clear: true")
     if caret_position != "idle":
         lines.append(f"Caret: {caret_position}")
+    if clicked:
+        _append_hit_focus(lines, ax, ay)  # P0.1: verify what the click hit
     sibling = _append_field_diff(lines, pre, post)  # P0.2: field-value diff
     result: dict[str, Any] = {"output": "\n".join(lines)}
     if sibling is not None:

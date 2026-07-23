@@ -504,6 +504,8 @@ agent-windows type "Hello World" [--at X,Y] [--at-selector @eN] [--enter] [--cle
 
 > The `--at`/`--at-selector` path reads by coordinate (`ControlFromPoint` — visual z-order topmost, same obscuring caveat as the `Hit:` line: if another window covers the point, pre/post report the covering field, surfacing the miss), so pre and post are guaranteed the same field even though focus may be elsewhere before the click; the no-coords path reads the focused field (pre is read **before** `--clear`, so `--clear` shows old→new, not empty→new). Non-text controls exposing no value pattern surface nothing. Same fault-tolerance and `[input] verify` toggle as the mouse commands (`config set input.verify false` for raw speed). A structured `field_value: {pre, post, is_password}` sibling is also returned (pre/post truncated to 500 chars; visible only to direct daemon/IPC clients — MCP and CLI consumers read the `output` block).
 
+> **Click-target echo.** With `--at` or `--at-selector`, the output reports the resolved click point — `At: (x, y)` for `--at`, or `At: @eN (x, y)` for `--at-selector` — plus a `Hit:`/`Focus:` verify of what the click landed on (same as the `click` command, default-on; off when `[input] verify = false`). Without a click target neither line appears. The typed text itself is not echoed back; read the `Field value` line above to see what landed in the field.
+
 **Output**: `{output}`
 
 ### shortcut

@@ -105,15 +105,9 @@ class TestTypeHandler:
         with patch("agent_windows.core.input_controller.type_text") as m:
             r = HANDLERS["type"]({"text": "hello"})
         m.assert_called_once_with("hello")
-        assert "Text: hello" in r["output"]
+        assert "## Type" in r["output"]
+        assert "Text:" not in r["output"]  # P3.2: echo removed (diff replaces it)
         assert "Enter:" not in r["output"]  # P2.2: default enter=False suppressed
-
-    def test_type_truncates_long_text_in_output(self):
-        long = "x" * 100
-        with patch("agent_windows.core.input_controller.type_text"):
-            r = HANDLERS["type"]({"text": long})
-        assert "x" * 50 in r["output"]
-        assert "..." in r["output"]
 
     def test_type_with_at_position_routes_to_type_text_at(self):
         with patch("agent_windows.core.input_controller.type_text_at") as m_at, \
@@ -313,7 +307,7 @@ class TestTypeValueDiff:
         monkeypatch.setattr(t, "focused_field_value", _boom)
         with patch("agent_windows.core.input_controller.type_text"):
             r = HANDLERS["type"]({"text": "x"})  # must not raise
-        assert "Text: x" in r["output"]
+        assert "## Type" in r["output"]
         assert "field_value" not in r
 
 
@@ -704,6 +698,54 @@ class TestTypeAtSelector:
                    side_effect=ValueError("Invalid selector: 'bad'")):
             with pytest.raises(ValueError, match="Invalid selector"):
                 HANDLERS["type"]({"text": "hi", "at_selector": "bad"})
+
+
+class TestTypeClickTargetEcho:
+    """P3.2: click paths (--at / --at-selector) echo the resolved target coord
+    and verify what was hit (P0.1 consistency with click/dblclick/hover/move).
+    The Text: param echo is gone — P0.2's Field value diff reads the field's
+    actual value untruncated, so the old 50-char echo was both redundant and
+    lossy."""
+
+    def test_at_xy_echoes_coord(self):
+        with patch("agent_windows.core.input_controller.type_text_at"):
+            r = HANDLERS["type"]({"text": "hi", "at_x": 10, "at_y": 20})
+        assert "At: (10, 20)" in r["output"]
+        assert "Text:" not in r["output"]
+
+    def test_at_selector_echoes_selector_and_coord(self):
+        with patch("agent_windows.core.tree.resolve_element_center",
+                   return_value=(200, 300)), \
+             patch("agent_windows.core.input_controller.type_text_at"):
+            r = HANDLERS["type"]({"text": "hi", "at_selector": "@e3"})
+        assert "At: @e3 (200, 300)" in r["output"]
+
+    def test_plain_path_has_no_at_line(self):
+        with patch("agent_windows.core.input_controller.type_text"):
+            r = HANDLERS["type"]({"text": "hi"})
+        assert "At:" not in r["output"]
+
+    def test_click_path_hit_focus_verify(self, monkeypatch):
+        # Override the autouse _neutralize_verify fixture (function-scoped) with
+        # canned hit/focus data — same pattern as TestVerifyState.
+        import agent_windows.core.tree as t
+        monkeypatch.setattr(t, "hit_element_at",
+            lambda x, y: {"control_type": "Edit", "name": "Box"})
+        monkeypatch.setattr(t, "foreground_window",
+            lambda: {"hwnd": 1, "title": "App"})
+        with patch("agent_windows.core.input_controller.type_text_at"):
+            r = HANDLERS["type"]({"text": "hi", "at_x": 10, "at_y": 20})
+        assert 'Hit: Edit "Box"' in r["output"]
+        assert 'Focus: "App"' in r["output"]
+
+    def test_click_path_verify_off_keeps_coord_drops_hit_focus(self, monkeypatch):
+        monkeypatch.setattr("agent_windows.utils.config.load_config",
+            lambda: {"input": {"verify": False}})
+        with patch("agent_windows.core.input_controller.type_text_at"):
+            r = HANDLERS["type"]({"text": "hi", "at_x": 10, "at_y": 20})
+        assert "At: (10, 20)" in r["output"]  # coord echo is unconditional
+        assert "Hit:" not in r["output"]      # verify off → no hit/focus
+        assert "Focus:" not in r["output"]
 
 
 # ── system.py handlers ───────────────────────────────────────────────
