@@ -16,10 +16,10 @@ import comtypes
 from comtypes import GUID, IUnknown
 from _ctypes import COMError
 
-# {45BA127D-10A8-46EA-8AB7-56EA9078943C}
+# {45BA127D-10A8-46EA-8AB7-56EA9078943C} (CApplicationActivationManager, twinui.appcore.dll)
 CLSID_ApplicationActivationManager = "{45BA127D-10A8-46EA-8AB7-56EA9078943C}"
-# {2F935CD3-1AF1-4334-9B5C-5C2C6D67C2A0}
-IID_IApplicationActivationManager = "{2F935CD3-1AF1-4334-9B5C-5C2C6D67C2A0}"
+# {2E941141-7F97-4756-BA1D-9DECDE894A3D} (MIDL_INTERFACE in shobjidl_core.h)
+IID_IApplicationActivationManager = "{2E941141-7F97-4756-BA1D-9DECDE894A3D}"
 AO_NONE = 0  # ACTIVATEOPTIONS: normal launch
 
 
