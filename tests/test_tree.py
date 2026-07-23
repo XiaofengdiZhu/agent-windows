@@ -1351,6 +1351,32 @@ class TestRichMetadata:
         assert "..." in rendered
         assert long_val not in rendered
 
+    def test_truncated_value_shows_remaining_count(self):
+        """A truncated value reports how many chars were dropped (+N), so the
+        agent knows there's a tail worth a get-text follow-up rather than
+        reading a silently-cut prefix as the whole value."""
+        from agent_windows.core.tree import render_snapshot
+        long_val = "x" * 100
+        el = ElementInfo(name="Notes", control_type="EditControl",
+                         bbox=BoundingBox(0, 0, 10, 10), is_interactive=True,
+                         metadata={"value": long_val})
+        rendered = render_snapshot({
+            "cursor": (0, 0), "resolution": (100, 100), "displays": 1,
+            "interactive_elements": [el],
+        })
+        assert "(+73)" in rendered  # 27 shown, 73 dropped
+
+    def test_truncated_name_shows_remaining_count(self):
+        """A truncated element name reports the dropped tail length too."""
+        from agent_windows.core.tree import render_snapshot
+        el = ElementInfo(name="N" * 100, control_type="ButtonControl",
+                         bbox=BoundingBox(0, 0, 10, 10), is_interactive=True)
+        rendered = render_snapshot({
+            "cursor": (0, 0), "resolution": (100, 100), "displays": 1,
+            "interactive_elements": [el],
+        })
+        assert "(+60)" in rendered  # 40 shown, 60 dropped
+
     def test_sentinel_not_misread_as_truthy(self):
         """A UIA NotSupported sentinel (a truthy non-None COM object) must NOT be
         misread as is_selected:true or is_password:true. _read_cached filters

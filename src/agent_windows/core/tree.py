@@ -1579,7 +1579,14 @@ def render_snapshot(data: dict[str, Any]) -> str:
             # from control_type + metadata. Kept separate from State so "what to
             # do" isn't diluted by "current state" (toggle_state, value, …).
             action = _action_for(el.control_type, el.metadata)
-            name = el.name[:40] if el.name else ""
+            if el.name:
+                name = el.name[:40]
+                # Surface the dropped tail length so the agent doesn't read a
+                # silently-cut prefix as the whole label. (P3.7)
+                if len(el.name) > 40:
+                    name += f"...(+{len(el.name) - 40})"
+            else:
+                name = ""
             # Truncate the owning window title like the Windows table does, so a
             # long title doesn't blow out the row width. Empty when the element
             # has no owning window (legacy/constructed ElementInfo).
@@ -1605,7 +1612,9 @@ def render_snapshot(data: dict[str, Any]) -> str:
                         continue
                     raw = str(val).replace("\r", " ").replace("\n", " ")
                     if len(raw) > 30:
-                        raw = raw[:27] + "..."
+                        # Append the dropped char count so the agent knows a
+                        # tail remains (worth a get-text follow-up). (P3.7)
+                        raw = raw[:27] + f"...(+{len(raw) - 27})"
                     states.append(f"{key}:{raw.replace('|', '\\|')}")
             state_str = ", ".join(states)
             parts.append(f"| {ref} | {type_name} | {action} | {name} | {window_name} | {pos} | {state_str} |")
