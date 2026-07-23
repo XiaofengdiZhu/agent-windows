@@ -863,7 +863,7 @@ def format_value_diff(pre: dict | None, post: dict | None) -> list[str]:
       - password → single hidden line (no value leak);
       - both values None (no value pattern) → [] (nothing to report);
       - equal → "no change" (input rejected / maxlength / IME-swallowed);
-      - single-line (no \\n) → "old → new" inline;
+      - single-line (no \\r/\\n) → "old → new" inline;
       - multi-line → difflib.unified_diff hunk.
     """
     pre = pre or {}
@@ -881,7 +881,13 @@ def format_value_diff(pre: dict | None, post: dict | None) -> list[str]:
         return ["Field value: (value too large to diff)"]
     if a == b:
         return ["Field value: no change"]
-    if "\n" not in a and "\n" not in b:
+    # Multi-line if EITHER side carries a line separator. Note \\r alone counts:
+    # Win11 Notepad's RichEdit exposes Value with CR (not CRLF/LF) separators, so
+    # a \\n-only check would mis-classify a multi-line document as single-line
+    # and leak the raw \\r into the inline render (terminal renders CR as a
+    # carriage return, scrambling the line). splitlines() below handles all of
+    # \\r/\\n/\\r\\n uniformly.
+    if not any(c in a or c in b for c in "\r\n"):
         return [f"Field value: {_truncate_with_count(a, _VALUE_DIFF_INLINE_LIMIT)} → "
                 f"{_truncate_with_count(b, _VALUE_DIFF_INLINE_LIMIT)}"]
     import difflib

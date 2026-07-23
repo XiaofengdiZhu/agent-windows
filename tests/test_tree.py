@@ -1729,6 +1729,22 @@ class TestFormatValueDiff:
         assert format_value_diff(None, None) == []
         assert format_value_diff({}, {}) == []
 
+    def test_cr_only_newline_treated_as_multiline(self):
+        """Notepad's RichEdit exposes Value with \\r (CR) line separators, not
+        \\n. The multi-line path must trigger on \\r too — otherwise a
+        multi-line document degrades to a single-line inline render that leaks
+        the raw \\r (terminals render CR as a carriage return, scrambling the
+        visible line). Regression for Win11 Notepad field-value readback."""
+        from agent_windows.core.tree import format_value_diff
+        pre = "你好\r世界"
+        post = "你好\r世界！"
+        out = format_value_diff(self._v(pre), self._v(post))
+        assert out[0] == "Field value diff:"
+        joined = "\n".join(out)
+        assert "+世界！" in joined  # unified-diff added-line marker
+        # must NOT be the single-line inline form (leaks the raw \r)
+        assert all(not line.startswith("Field value: ") for line in out)
+
 
 # ── element action hints (TODO #5) ──────────────────────────────────
 
