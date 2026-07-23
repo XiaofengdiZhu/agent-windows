@@ -27,6 +27,8 @@ def _neutralize_verify(monkeypatch):
     monkeypatch.setattr(_tree, "hit_element_at", lambda x, y: None)
     monkeypatch.setattr(_tree, "foreground_window", lambda: {"hwnd": 0, "title": ""})
     monkeypatch.setattr(_tree, "range_percent_at", lambda x, y: None)
+    monkeypatch.setattr(_tree, "focused_field_value", lambda: None)
+    monkeypatch.setattr(_tree, "field_value_at", lambda x, y: None)
 
 
 # ── input.py handlers ────────────────────────────────────────────────
@@ -220,6 +222,99 @@ class TestTypeHandler:
             HANDLERS["type"]({"text": "hi", "clear": True, "caret_position": "start"})
         assert m_vk.call_args_list[0].args[0] == 0x24  # VK_HOME before…
         assert m_vk.call_args_list[1].args[0] == 0x2E  # …VK_DELETE
+
+
+class TestTypeValueDiff:
+    """Default-on post-op field-value diff for type (P0.2). Each test overrides
+    the autouse no-op field-value helpers with canned data (same monkeypatch)."""
+
+    def test_no_coords_reads_focused_pre_before_clear(self, monkeypatch):
+        # pre must be read BEFORE clear_field (so --clear shows old→new, not empty→new)
+        import agent_windows.core.tree as t
+        order = []
+
+        def fv():
+            order.append("read")
+            return {"value": "pre" if len(order) == 1 else "post", "is_password": False}
+        monkeypatch.setattr(t, "focused_field_value", fv)
+        with patch("agent_windows.core.input_controller.clear_field",
+                   lambda: order.append("clear")), \
+             patch("agent_windows.core.input_controller.type_text",
+                   lambda s: order.append("type")), \
+             patch("agent_windows.core.input_controller.move_caret"):
+            HANDLERS["type"]({"text": "x", "clear": True})
+        assert order.index("read") < order.index("clear")  # pre before clear
+
+    def test_single_line_diff_appended_and_sibling(self, monkeypatch):
+        import agent_windows.core.tree as t
+        reads = iter([{"value": "foo", "is_password": False},
+                      {"value": "foobar", "is_password": False}])
+        monkeypatch.setattr(t, "focused_field_value", lambda: next(reads))
+        with patch("agent_windows.core.input_controller.type_text"):
+            r = HANDLERS["type"]({"text": "bar"})
+        assert "Field value: foo → foobar" in r["output"]
+        assert r["field_value"] == {"pre": "foo", "post": "foobar", "is_password": False}
+
+    def test_password_hidden_no_value_leak(self, monkeypatch):
+        import agent_windows.core.tree as t
+        monkeypatch.setattr(t, "focused_field_value",
+                            lambda: {"value": "secret", "is_password": True})
+        with patch("agent_windows.core.input_controller.type_text"):
+            r = HANDLERS["type"]({"text": "more"})
+        assert "(password field, value hidden)" in r["output"]
+        assert "secret" not in r["output"]
+        assert r["field_value"]["is_password"] is True
+        # password value must not leak into the sibling either
+        assert r["field_value"]["pre"] is None and r["field_value"]["post"] is None
+
+    def test_at_coords_uses_field_value_at(self, monkeypatch):
+        import agent_windows.core.tree as t
+        reads = iter([{"value": "old", "is_password": False},
+                      {"value": "oldnew", "is_password": False}])
+        monkeypatch.setattr(t, "field_value_at", lambda x, y: next(reads))
+        monkeypatch.setattr(t, "focused_field_value", lambda: None)  # must NOT be used
+        with patch("agent_windows.core.input_controller.type_text_at"):
+            r = HANDLERS["type"]({"text": "new", "at_x": 10, "at_y": 20})
+        assert "Field value: old → oldnew" in r["output"]
+        assert r["field_value"] == {"pre": "old", "post": "oldnew", "is_password": False}
+
+    def test_no_change_when_value_unchanged(self, monkeypatch):
+        import agent_windows.core.tree as t
+        monkeypatch.setattr(t, "focused_field_value",
+                            lambda: {"value": "same", "is_password": False})
+        with patch("agent_windows.core.input_controller.type_text"):
+            r = HANDLERS["type"]({"text": "x"})
+        assert "Field value: no change" in r["output"]
+
+    def test_verify_off_no_diff_no_sibling(self, monkeypatch):
+        monkeypatch.setattr("agent_windows.utils.config.load_config",
+                            lambda: {"input": {"verify": False}})
+        import agent_windows.core.tree as t
+        monkeypatch.setattr(t, "focused_field_value",
+                            lambda: {"value": "would-show", "is_password": False})
+        with patch("agent_windows.core.input_controller.type_text"):
+            r = HANDLERS["type"]({"text": "x"})
+        assert "Field value" not in r["output"]
+        assert "field_value" not in r
+
+    def test_unreadable_field_no_block(self, monkeypatch):
+        import agent_windows.core.tree as t
+        monkeypatch.setattr(t, "focused_field_value", lambda: None)
+        with patch("agent_windows.core.input_controller.type_text"):
+            r = HANDLERS["type"]({"text": "x"})
+        assert "Field value" not in r["output"]
+        assert "field_value" not in r  # nothing readable → no sibling either
+
+    def test_read_failure_never_breaks_type(self, monkeypatch):
+        import agent_windows.core.tree as t
+
+        def _boom():
+            raise Exception("boom")
+        monkeypatch.setattr(t, "focused_field_value", _boom)
+        with patch("agent_windows.core.input_controller.type_text"):
+            r = HANDLERS["type"]({"text": "x"})  # must not raise
+        assert "Text: x" in r["output"]
+        assert "field_value" not in r
 
 
 class TestScrollHandler:

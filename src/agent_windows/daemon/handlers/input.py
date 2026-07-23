@@ -94,6 +94,49 @@ def _append_drop_slider(lines: list[str], x2: int, y2: int) -> None:
         pass
 
 
+def _safe_field_read(getter) -> dict | None:
+    """Run a field-value getter, degrading to None on any failure so verify
+    never breaks a successful type (P0.2). The tree helpers already swallow
+    internally; this is a second guard against a helper raising unexpectedly.
+    """
+    try:
+        return getter()
+    except Exception:
+        return None
+
+
+def _append_field_diff(lines: list[str], pre, post) -> dict | None:
+    """Append the Field value diff block to *lines*; return a field_value
+    sibling dict (or None). (P0.2)
+
+    pre/post are focused_field_value/field_value_at dicts (or None). Mirrors
+    _append_hit_focus/_append_drop_slider: never raises, no-op when verify off.
+    A password field yields the hidden line + a sibling with null pre/post (no
+    value leak); an unreadable field (no value pattern) yields no block/sibling.
+    """
+    if not _verify_enabled():
+        return None
+    from agent_windows.core.tree import format_value_diff, _truncate_with_count
+    try:
+        block = format_value_diff(pre, post)
+        lines.extend(block)
+        if not block:
+            return None  # nothing readable (no value pattern) → no sibling either
+        is_pw = bool((post or {}).get("is_password")) or \
+            bool((pre or {}).get("is_password"))
+        if is_pw:
+            return {"pre": None, "post": None, "is_password": True}
+        pv = (pre or {}).get("value")
+        qv = (post or {}).get("value")
+        return {
+            "pre": None if pv is None else _truncate_with_count(pv, 500),
+            "post": None if qv is None else _truncate_with_count(qv, 500),
+            "is_password": False,
+        }
+    except Exception:
+        return None
+
+
 @handler("click")
 def _click(params: dict) -> dict[str, Any]:
     """Mouse click at coordinates."""
@@ -200,27 +243,43 @@ def _type(params: dict) -> dict[str, Any]:
         )
 
     at_selector = params.get("at_selector")
+    verify = _verify_enabled()
+    pre = post = None
     if at_selector:
         # TODO #13: @eN ref resolves to bbox center, overriding at_x/at_y.
         # Selector-first mirrors _coords' rule and the screenshot handler.
-        from agent_windows.core.tree import resolve_element_center
+        from agent_windows.core.tree import resolve_element_center, field_value_at
         ax, ay = resolve_element_center(at_selector)
+        if verify:
+            pre = _safe_field_read(lambda: field_value_at(ax, ay))  # P0.2: old value
         type_text_at(text, ax, ay, clear=clear, enter=enter,
                      caret_position=caret_position)
+        if verify:
+            post = _safe_field_read(lambda: field_value_at(ax, ay))  # P0.2: new value
     elif at_x is not None and at_y is not None:
         ax, ay = validate_coordinates(at_x, at_y)
+        if verify:
+            from agent_windows.core.tree import field_value_at
+            pre = _safe_field_read(lambda: field_value_at(ax, ay))
         type_text_at(text, ax, ay, clear=clear, enter=enter,
                      caret_position=caret_position)
+        if verify:
+            post = _safe_field_read(lambda: field_value_at(ax, ay))
     else:
         # No click: operate on the already-focused field. caret_position still
         # applies (Home/End move the caret in the focused field), matching the
         # reference semantics. (TODO #16)
+        from agent_windows.core.tree import focused_field_value
+        if verify:
+            pre = _safe_field_read(focused_field_value)  # P0.2: before keystroke
         move_caret(caret_position)
         if clear:
             clear_field()
         type_text(text)
         if enter:
             _send_vk_key(0x0D)  # VK_RETURN
+        if verify:
+            post = _safe_field_read(focused_field_value)
 
     # P2.2: echo only non-default flags. Enter/Clear default False, Caret
     # defaults "idle" — surfacing them on every call was noise.
@@ -231,7 +290,11 @@ def _type(params: dict) -> dict[str, Any]:
         lines.append("Clear: true")
     if caret_position != "idle":
         lines.append(f"Caret: {caret_position}")
-    return {"output": "\n".join(lines)}
+    sibling = _append_field_diff(lines, pre, post)  # P0.2: field-value diff
+    result: dict[str, Any] = {"output": "\n".join(lines)}
+    if sibling is not None:
+        result["field_value"] = sibling
+    return result
 
 
 @handler("scroll")
