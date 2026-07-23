@@ -404,6 +404,59 @@ class TestKillRecheck:
         assert "killed" not in r
         assert "Status: failed (access denied)" in r["output"]
 
+    @patch("agent_windows.core.process_manager._count_by_image", return_value=-1)
+    @patch("agent_windows.core.process_manager.subprocess.run")
+    def test_name_recheck_failed_reports_unknown(self, mock_run, _cnt):
+        # M1: _count_by_image -1 (recheck itself failed) must NOT read as
+        # "still running (-1 remaining)" — the count is unknown, not a survivor
+        # count. fail-closed on confirmed_dead, distinct recheck_failed sibling.
+        mock_run.return_value = _completed("SUCCESS: terminated", 0)
+        r = pm.kill_process("notepad")
+        assert "still running" not in r["output"]
+        assert "-1 remaining" not in r["output"]
+        assert "unknown" in r["output"] or "recheck failed" in r["output"]
+        assert r["killed"]["confirmed_dead"] is False
+        assert r["killed"]["recheck_failed"] is True
+
+
+class TestCountByImage:
+    """C1 fix: _count_by_image's real parser. ``tasklist /FO CSV /NH`` emits a
+    localized ``INFO: No tasks are running...`` line (rc 0) when nothing
+    matches — the old count of non-empty lines miscounted that single INFO line
+    as 1 survivor, so every successful by-name kill falsely reported 'still
+    running (1 remaining)'. CSV data rows start with a double-quote; the
+    localized INFO line does not, so counting ``startswith('"')`` is
+    locale-independent."""
+
+    def test_no_match_returns_zero_not_one(self):
+        info = ("INFO: No tasks are running which match the specified "
+                "criteria.\n")
+        with patch("agent_windows.core.process_manager.subprocess.run",
+                   return_value=_completed(info, 0)):
+            assert pm._count_by_image("ghost_xyz.exe") == 0
+
+    def test_counts_csv_data_rows(self):
+        out = ('"notepad.exe","123","Console","1","5,120 K"\n'
+               '"notepad.exe","456","Console","1","5,120 K"\n')
+        with patch("agent_windows.core.process_manager.subprocess.run",
+                   return_value=_completed(out, 0)):
+            assert pm._count_by_image("notepad.exe") == 2
+
+    def test_empty_stdout_zero(self):
+        with patch("agent_windows.core.process_manager.subprocess.run",
+                   return_value=_completed("", 0)):
+            assert pm._count_by_image("x.exe") == 0
+
+    def test_nonzero_returncode_is_unknown(self):
+        with patch("agent_windows.core.process_manager.subprocess.run",
+                   return_value=_completed("", 1)):
+            assert pm._count_by_image("x.exe") == -1
+
+    def test_subprocess_exception_is_unknown(self):
+        with patch("agent_windows.core.process_manager.subprocess.run",
+                   side_effect=Exception("boom")):
+            assert pm._count_by_image("x.exe") == -1
+
 
 class TestKillByPidImageNameGate:
     """SEC3-04 (round 2): the PID path must run the SAME critical-name check

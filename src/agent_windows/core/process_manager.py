@@ -131,7 +131,11 @@ def _count_by_image(image: str) -> int:
         return -1
     if r.returncode != 0:
         return -1
-    return sum(1 for ln in r.stdout.splitlines() if ln.strip())
+    # CSV data rows start with a double-quote (``"notepad.exe",...``); the
+    # localized "INFO: No tasks are running..." line tasklist emits on no match
+    # (rc 0) does not. Counting quoted rows is locale-independent and avoids
+    # miscounting that INFO line as a survivor (C1).
+    return sum(1 for ln in r.stdout.splitlines() if ln.startswith('"'))
 
 
 def _open_and_verify_pid(pid: int) -> tuple[str | None, int]:
@@ -392,7 +396,14 @@ def kill_process(pid_or_name: str | int, force: bool = False) -> dict[str, Any]:
             else:
                 # Name path: taskkill /IM kills all matches — count survivors.
                 remaining = _count_by_image(image)
-                if remaining == 0:
+                if remaining < 0:
+                    # Recheck itself failed (tasklist error/timeout) — distinct
+                    # from "still running": we can't confirm dead, but we don't
+                    # know a survivor count either. (M1)
+                    lines.append("Status: unknown (recheck failed; "
+                                 "retry with force=True)")
+                    killed = {"confirmed_dead": False, "recheck_failed": True}
+                elif remaining == 0:
                     lines.append(f"Status: {mode} (confirmed gone)")
                     killed = {"confirmed_dead": True}
                 else:
