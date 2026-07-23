@@ -13,6 +13,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from agent_windows.core import app_manager as am
+from agent_windows.core.tree import WindowInfo, BoundingBox
 
 
 # ── launch_app ───────────────────────────────────────────────────────
@@ -509,42 +510,73 @@ class TestResizeWindow:
 
 
 class TestListWindows:
-    def test_formats_markdown_table(self):
-        win = MagicMock()
-        win.title = "My Window"
-        win.process_name = "app.exe"
-        win.bbox = "0,0,100,200"
-        with patch("agent_windows.core.tree.enumerate_windows", return_value=[win]):
-            result = am.list_windows()
-        assert result["count"] == 1
-        assert "| # | Title | App | Position |" in result["output"]
-        assert "My Window" in result["output"]
-        assert "0,0,100,200" in result["output"]
+    """P4.4: `app list` now mirrors observe's ## Windows table (Status + active/
+    browser markers) PLUS an HWND column for precise targeting, and emits a
+    machine-readable windows[] sibling (daemon-direct + --format json; MCP/CLI
+    text callers see only `output`). Shared renderer: tree.render_windows_table."""
 
-    def test_truncates_long_titles(self):
-        win = MagicMock()
-        win.title = "X" * 200
-        win.process_name = "app.exe"
-        win.bbox = "0,0,1,1"
-        with patch("agent_windows.core.tree.enumerate_windows", return_value=[win]):
-            result = am.list_windows()
-        # title cell is truncated to 50 chars
-        assert "X" * 50 in result["output"]
-        assert "X" * 51 not in result["output"]
+    def _win(self, **kw):
+        defaults = dict(title="W", process_name="app.exe", handle=0x60C,
+                        bbox=BoundingBox(0, 0, 100, 200), status="Normal",
+                        is_active=False, is_browser=False)
+        defaults.update(kw)
+        return WindowInfo(**defaults)
 
-    def test_handles_none_bbox(self):
-        win = MagicMock()
-        win.title = "Win"
-        win.process_name = "app.exe"
-        win.bbox = None
-        with patch("agent_windows.core.tree.enumerate_windows", return_value=[win]):
-            result = am.list_windows()
-        assert "N/A" in result["output"]
+    def test_table_has_hwnd_column_and_aligned_headers(self):
+        with patch("agent_windows.core.tree.enumerate_windows",
+                   return_value=[self._win()]):
+            r = am.list_windows()
+        assert r["count"] == 1
+        assert "## App List" in r["output"]
+        assert "| # | Title | App | Status | HWND | Position |" in r["output"]
+        assert "|---|-------|-----|--------|------|----------|" in r["output"]
 
-    def test_empty_window_list_still_emits_headers(self):
+    def test_row_carries_status_active_browser_hwnd(self):
+        win = self._win(title="GitHub", process_name="chrome.exe", handle=0x10A,
+                        status="Maximized", is_active=True, is_browser=True)
+        with patch("agent_windows.core.tree.enumerate_windows", return_value=[win]):
+            r = am.list_windows()
+        assert "| Maximized (active) |" in r["output"]
+        assert "| chrome.exe (browser) |" in r["output"]
+        assert "| 0x10A |" in r["output"]
+        # bbox renders via BoundingBox.__str__ → (0,0,100,200)
+        assert "(0,0,100,200)" in r["output"]
+
+    def test_title_truncated_to_40(self):
+        win = self._win(title="X" * 60)
+        with patch("agent_windows.core.tree.enumerate_windows", return_value=[win]):
+            r = am.list_windows()
+        assert "X" * 40 in r["output"]
+        assert "X" * 51 not in r["output"]
+
+    def test_none_bbox_shows_na(self):
+        win = self._win(bbox=None)
+        with patch("agent_windows.core.tree.enumerate_windows", return_value=[win]):
+            r = am.list_windows()
+        assert "| N/A |" in r["output"]
+
+    def test_windows_sibling_shape(self):
+        a = self._win(handle=0x60C, title="A", process_name="a.exe",
+                      status="Minimized", is_active=True, is_browser=False)
+        b = self._win(handle=2, title="B", process_name="chrome.exe",
+                      is_browser=True, bbox=None)
+        with patch("agent_windows.core.tree.enumerate_windows", return_value=[a, b]):
+            r = am.list_windows()
+        assert r["count"] == 2
+        assert len(r["windows"]) == 2
+        wa = r["windows"][0]
+        assert set(wa) == {"handle", "title", "process_name", "status",
+                           "is_active", "is_browser", "bbox"}
+        assert wa["handle"] == 0x60C and isinstance(wa["handle"], int)
+        assert wa["status"] == "Minimized" and wa["is_active"] is True
+        assert wa["bbox"] == [0, 0, 100, 200]
+        assert r["windows"][1]["bbox"] is None  # None bbox preserved
+
+    def test_empty_list_still_emits_title_and_headers(self):
         with patch("agent_windows.core.tree.enumerate_windows", return_value=[]):
-            result = am.list_windows()
-        assert result["count"] == 0
-        # header + separator rows present even with no windows
-        assert "| # | Title | App | Position |" in result["output"]
-        assert "|---|-------|-----|----------|" in result["output"]
+            r = am.list_windows()
+        assert r["count"] == 0
+        assert r["windows"] == []
+        assert "## App List" in r["output"]
+        assert "| # | Title | App | Status | HWND | Position |" in r["output"]
+        assert "|---|-------|-----|--------|------|----------|" in r["output"]

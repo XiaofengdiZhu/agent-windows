@@ -662,7 +662,7 @@ agent-windows app list
 
 No parameters.
 
-**Output**: Window list with title, process name, handle, position, active status.
+**Output**: Markdown window table — title, app (with `(browser)` marker), status (with `(active)` marker), HWND (`0x..`), position. Add `--format json` for a machine-readable `windows[]` sibling (handle/title/process_name/status/is_active/is_browser/bbox) and `count`.
 
 ### app resize
 

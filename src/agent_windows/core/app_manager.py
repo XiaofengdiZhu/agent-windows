@@ -220,16 +220,31 @@ def resize_window(name_or_title: str, width: int, height: int, x: int = -1, y: i
 
 
 def list_windows() -> dict[str, Any]:
-    """List all visible top-level windows."""
-    from agent_windows.core.tree import enumerate_windows
+    """List all visible top-level windows.
+
+    Table mirrors observe's ``## Windows`` (Status + active/browser markers) and
+    adds an HWND column — ``app list`` exists to enumerate windows to act on, so
+    the precise handle (``0x..``, round-trips through ``resolve_window``'s
+    ``int(value, 0)``) is worth the column. A ``windows[]`` sibling gives
+    daemon-direct / ``--format json`` callers the structured records without
+    parsing markdown (MCP/CLI text callers see only ``output``).
+    """
+    from agent_windows.core.tree import enumerate_windows, render_windows_table
 
     windows = enumerate_windows()
-    lines = ["## App List", "| # | Title | App | Position |", "|---|-------|-----|----------|"]
-    for i, w in enumerate(windows, 1):
-        pos = str(w.bbox) if w.bbox else "N/A"
-        lines.append(f"| {i} | {w.title[:50]} | {w.process_name} | {pos} |")
+    out = f"## App List\n{render_windows_table(windows, include_hwnd=True)}"
+    return {"output": out, "count": len(windows),
+            "windows": [_window_sibling(w) for w in windows]}
 
-    return {"output": "\n".join(lines), "count": len(windows)}
+
+def _window_sibling(w: "WindowInfo") -> dict[str, Any]:
+    """Build a machine-readable window record for the ``windows[]`` sibling."""
+    bbox = None
+    if w.bbox is not None:
+        bbox = [w.bbox.left, w.bbox.top, w.bbox.right, w.bbox.bottom]
+    return {"handle": w.handle, "title": w.title, "process_name": w.process_name,
+            "status": w.status, "is_active": w.is_active, "is_browser": w.is_browser,
+            "bbox": bbox}
 
 
 def _find_window_by_title(title: str) -> int:

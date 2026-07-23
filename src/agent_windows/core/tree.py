@@ -1683,6 +1683,43 @@ def _control_type_name(type_id: int) -> str:
 # ── Text rendering ────────────────────────────────────────────────
 
 
+def render_windows_table(windows: list[WindowInfo], include_hwnd: bool = False) -> str:
+    """Render the windows markdown table (header + separator + rows).
+
+    Shared by :func:`render_snapshot` (observe's ``## Windows`` block, HWND off)
+    and :func:`agent_windows.core.app_manager.list_windows` (``## App List``,
+    HWND on — app list's job is to enumerate windows to act on, so the precise
+    handle is worth the extra column; observe's table is informational and stays
+    HWND-free). Returns only the table; the caller owns the ``##`` title and any
+    trailing blank line. Always emits header + separator (even when empty) so
+    each caller keeps its own empty-list policy.
+    """
+    if include_hwnd:
+        rows = ["| # | Title | App | Status | HWND | Position |",
+                "|---|-------|-----|--------|------|----------|"]
+    else:
+        rows = ["| # | Title | App | Status | Position |",
+                "|---|-------|-----|--------|----------|"]
+    for i, w in enumerate(windows, 1):
+        # Status reflects placement (Maximized/Minimized/Normal). is_active is
+        # orthogonal (the foreground window can be any of the three), so append
+        # "(active)" rather than overwriting — keeps both signals.
+        status = w.status
+        if w.is_active:
+            status = f"{status} (active)"
+        # Surface is_browser as a marker on the App cell so the hint reaches the
+        # agent (prefer keyboard/tree refs over coord guesses on web content).
+        app = w.process_name
+        if w.is_browser:
+            app = f"{app} (browser)"
+        pos = str(w.bbox) if w.bbox else "N/A"
+        if include_hwnd:
+            rows.append(f"| {i} | {w.title[:40]} | {app} | {status} | 0x{w.handle:X} | {pos} |")
+        else:
+            rows.append(f"| {i} | {w.title[:40]} | {app} | {status} | {pos} |")
+    return "\n".join(rows)
+
+
 def render_snapshot(data: dict[str, Any]) -> str:
     """Render the snapshot data as structured text for AI consumption."""
     parts = []
@@ -1720,30 +1757,12 @@ def render_snapshot(data: dict[str, Any]) -> str:
         parts.append(f'Active Window: "{active.title}" ({active.process_name})')
     parts.append("")
 
-    # Windows table
+    # Windows table (shared renderer; observe shows it HWND-free — `app list`
+    # turns the HWND column on for precise targeting. See render_windows_table.)
     windows = data.get("windows", [])
     if windows:
         parts.append("## Windows")
-        parts.append("| # | Title | App | Status | Position |")
-        parts.append("|---|-------|-----|--------|----------|")
-        for i, w in enumerate(windows, 1):
-            # Status reflects placement (Maximized/Minimized/Normal). is_active is
-            # orthogonal (the foreground window can be any of the three), so append
-            # "(active)" rather than overwriting — keeps both signals. A minimized
-            # window's bbox is an icon rect; the agent should treat it as not a
-            # usable click target (TODO #2).
-            status = w.status
-            if w.is_active:
-                status = f"{status} (active)"
-            # Surface is_browser as a marker on the App cell so the hint actually
-            # reaches the agent (otherwise the field is dead data). Tells it this
-            # window renders a web page — prefer keyboard shortcuts / tree refs
-            # over coordinate guesses on page content (TODO #2).
-            app = w.process_name
-            if w.is_browser:
-                app = f"{app} (browser)"
-            pos = str(w.bbox) if w.bbox else "N/A"
-            parts.append(f"| {i} | {w.title[:40]} | {app} | {status} | {pos} |")
+        parts.append(render_windows_table(windows))
         parts.append("")
 
     # Semantic tree. NOTE: the tree text is NOT display-filtered (TODO #9-B) —

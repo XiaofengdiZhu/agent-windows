@@ -404,6 +404,17 @@ def test_app_resize_fn_requires_width_height():
         sysmod.app_resize_fn(name_or_title="x", width=0, height=0)
 
 
+def test_app_list_fn_returns_output_only():
+    """app_list_fn forwards to app_list and returns str output — the count and
+    windows[] siblings must NOT leak to MCP (sibling-mode). P4.4."""
+    result = {"output": "## App List\n| # | Title | App | Status | HWND | Position |",
+              "count": 2, "windows": [{"handle": 1, "title": "A"}]}
+    with patch.object(sysmod, "_call", return_value=result) as m:
+        out = sysmod.app_list_fn()
+    m.assert_called_once_with("app_list")
+    assert out == result["output"]  # only `output`; siblings dropped
+
+
 def test_fs_write_fn_requires_content():
     with pytest.raises(ValueError):
         sysmod.fs_write_fn(path="p", content=None)

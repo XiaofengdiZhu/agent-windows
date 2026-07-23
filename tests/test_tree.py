@@ -31,6 +31,7 @@ from agent_windows.core.tree import (
     _traverse_window,
     traverse_tree,
     render_snapshot,
+    render_windows_table,
     resolve_element,
     resolve_window,
     ElementInfo,
@@ -346,6 +347,69 @@ class TestWindowStatusRender:
                          bbox=BoundingBox(0, 0, 10, 10), is_browser=True)
         rendered = self._render([win])
         assert "| chrome.exe (browser) |" in rendered
+
+
+class TestRenderWindowsTable:
+    """render_windows_table is the shared renderer behind observe's ## Windows
+    block (include_hwnd=False) and `app list` (include_hwnd=True). P4.4 lifts it
+    out of render_snapshot so both window tables share one source of truth."""
+
+    def test_default_omits_hwnd_column(self):
+        win = WindowInfo(title="W", process_name="app", handle=0x60C,
+                         bbox=BoundingBox(0, 0, 10, 10), status="Normal")
+        out = render_windows_table([win])
+        assert "| # | Title | App | Status | Position |" in out
+        assert "|---|-------|-----|--------|----------|" in out
+        assert "HWND" not in out
+        assert "0x60C" not in out  # handle not surfaced in the HWND-off path
+
+    def test_include_hwnd_adds_handle_column_hex(self):
+        win = WindowInfo(title="W", process_name="app", handle=0x60C,
+                         bbox=BoundingBox(0, 0, 10, 10), status="Normal")
+        out = render_windows_table([win], include_hwnd=True)
+        assert "| # | Title | App | Status | HWND | Position |" in out
+        assert "|---|-------|-----|--------|------|----------|" in out
+        assert "| 0x60C |" in out
+
+    def test_active_and_browser_suffixes_carried(self):
+        win = WindowInfo(title="W", process_name="chrome.exe", handle=1,
+                         bbox=BoundingBox(0, 0, 1, 1), status="Maximized",
+                         is_active=True, is_browser=True)
+        out = render_windows_table([win])
+        assert "| Maximized (active) |" in out
+        assert "| chrome.exe (browser) |" in out
+
+    def test_title_truncated_to_40(self):
+        win = WindowInfo(title="X" * 60, process_name="app", handle=1,
+                         bbox=BoundingBox(0, 0, 1, 1))
+        out = render_windows_table([win])
+        assert "X" * 40 in out
+        assert "X" * 41 not in out
+
+    def test_none_bbox_shows_na(self):
+        win = WindowInfo(title="W", process_name="app", handle=1, bbox=None)
+        out = render_windows_table([win])
+        assert "| N/A |" in out
+
+    def test_empty_list_emits_only_header_and_separator(self):
+        out = render_windows_table([])
+        lines = out.splitlines()
+        assert len(lines) == 2
+        assert lines[0].startswith("| # |")
+        assert lines[1].startswith("|---|")
+
+    def test_render_snapshot_still_uses_hwnd_off_path(self):
+        # Regression guard for the extraction: observe (render_snapshot) must
+        # stay HWND-free even though app list turns the column on.
+        win = WindowInfo(title="W", process_name="app", handle=0x10A,
+                         bbox=BoundingBox(0, 0, 10, 10), status="Normal")
+        rendered = render_snapshot({
+            "cursor": (0, 0), "resolution": (1920, 1080), "displays": 1,
+            "active_window": None, "windows": [win], "semantic_tree": "",
+            "interactive_elements": [],
+        })
+        assert "| # | Title | App | Status | Position |" in rendered
+        assert "0x10A" not in rendered
 
 
 class TestEnumerateWindowStatusFields:
