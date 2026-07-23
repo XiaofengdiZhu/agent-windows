@@ -293,6 +293,8 @@ Key notation for `shortcut`: `ctrl`, `alt`, `shift`, `win` as modifiers, joined 
 
 `type` options: `--at X,Y` or `--at-selector @eN` (click first; `--at-selector` overrides `--at`), `--enter`, `--clear` (select-all + delete first), `--caret start|idle|end` (move caret before typing — `start` presses Home, `end` presses End, `idle` leaves it; applied before `--clear`).
 
+`type` also self-verifies: it reads the field's value before and after injecting and appends a git-diff-style `Field value:` line (or a `Field value diff:` block for multi-line fields), so you can confirm the text actually landed without a follow-up `get-text`/`snapshot`. `Field value: no change` means the input was rejected, maxlength-truncated, or IME-swallowed; password fields show `(password field, value hidden)` and never leak the value. Same `input.verify` toggle.
+
 ### Expand / Collapse
 
 Drive an element's `ExpandCollapsePattern` — combo boxes, tree items, menus, collapsible groups. Call `snapshot` first to find a node whose State shows `expand_collapse_state:collapsed` (or `expanded`), then target its `@eN` ref. Both are idempotent: expanding an already-expanded/leaf node is a no-op; same for collapsing.

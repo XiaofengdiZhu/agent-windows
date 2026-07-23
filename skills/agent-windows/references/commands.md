@@ -494,6 +494,14 @@ agent-windows type "Hello World" [--at X,Y] [--at-selector @eN] [--enter] [--cle
 
 > **Length cap**: `text` is capped at **10000 characters**. Typing is char-by-char with a per-key delay, so an oversized string would block the single worker thread for minutes/hours — a larger payload is rejected with `INVALID_PARAMS`. To enter a long document, write it to a file with `fs write` and paste it, or type it in chunks.
 
+> **Post-op field-value verify (default on).** `type` reads the target field's value before and after injection and appends a git-diff-style block, so you usually don't need a follow-up `snapshot`/`get-text` to confirm the text actually landed:
+> - Single-line change: `Field value: <old> → <new>` (empty string if the field was empty before).
+> - Multi-line change: a `Field value diff:` block with `+`/`-` lines (only the changed lines, each truncated to 120 chars).
+> - `Field value: no change` — the input was rejected, maxlength-truncated, or IME-swallowed.
+> - `Field value: (password field, value hidden)` — password fields never echo the value.
+
+> The `--at`/`--at-selector` path reads by coordinate (`ControlFromPoint`), so pre and post are guaranteed the same field even though focus may be elsewhere before the click; the no-coords path reads the focused field (pre is read **before** `--clear`, so `--clear` shows old→new, not empty→new). Non-text controls exposing no value pattern surface nothing. Same fault-tolerance and `[input] verify` toggle as the mouse commands (`config set input.verify false` for raw speed). A structured `field_value: {pre, post, is_password}` sibling is also returned (pre/post truncated to 500 chars; visible only to direct daemon/IPC clients — MCP and CLI consumers read the `output` block).
+
 **Output**: `{output}`
 
 ### shortcut
