@@ -626,7 +626,7 @@ agent-windows app launch "C:\Program Files\app\test.exe" --flag value
 | `name_or_path` | str | **required** | App name (Start-Menu friendly name, incl. UWP) or executable path |
 | `args` | list[str] | `None` | Trailing positional arguments passed to the app |
 
-**Output**: `PID: N` for a Win32 process; `AppID: ...` (with `PID: 0`) for a UWP/Store app launched via its AppUserModelID.
+**Output**: `## App Launch` with `PID: N` (Win32 path) or `AppID: ...` + `PID: N` (UWP/Store app activated via its AppUserModelID — the Activation Manager returns the real process id).
 
 ### app switch
 

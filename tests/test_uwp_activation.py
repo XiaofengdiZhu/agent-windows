@@ -55,3 +55,31 @@ class TestActivateUwpApp:
         exc = COMError(0x80073D10, "missing", (None, None, 0, None, None))
         with pytest.raises(ValueError, match="0x80073d10"):
             uwp.activate_uwp_app("bad!appid", "", _create=lambda: _FakeMgr(raise_exc=exc))
+
+
+# ── opt-in e2e (mutates desktop) ─────────────────────────────────────
+
+def _e2e_enabled() -> bool:
+    import os
+    return bool(os.environ.get("AGENT_WINDOWS_E2E"))
+
+
+@pytest.mark.e2e
+def test_real_calculator_activation_returns_pid():
+    """Opt-in: activates real Calculator. Mutates the desktop — skip unless
+    AGENT_WINDOWS_E2E=1 is set (mirrors test_e2e_daemon.py)."""
+    import ctypes
+    import comtypes
+
+    if not _e2e_enabled():
+        pytest.skip("Set AGENT_WINDOWS_E2E=1 to run UWP activation e2e")
+    comtypes.CoInitializeEx()  # e2e runs off the daemon STA thread
+    try:
+        pid = uwp.activate_uwp_app("Microsoft.WindowsCalculator_8wekyb3d8bbwe!App")
+    finally:
+        comtypes.CoUninitialize()
+    assert pid > 0
+    SYNCHRONIZE = 0x00100000
+    handle = ctypes.windll.kernel32.OpenProcess(SYNCHRONIZE, False, pid)
+    assert handle, f"activation returned pid {pid} but OpenProcess failed"
+    ctypes.windll.kernel32.CloseHandle(handle)
