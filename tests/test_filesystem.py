@@ -1350,8 +1350,12 @@ class TestDeleteVerify:
         assert r["verified"]["gone"] is True
 
     def test_still_present_flagged_when_path_remains(self, tmp_path):
-        # recycle mock is a no-op → the path still exists → Still present flags
-        # the unexpected survival (the delete "succeeded" but didn't remove).
+        # The Still-present branch is a TOCTOU guard, not a recycle-failure path.
+        # A real _recycle_path either moves the literal path or raises — it never
+        # leaves the path in place silently — so post-op existence can only read
+        # "still there" if something recreated it between the delete and the
+        # recheck. The no-op mock simulates that window without a real
+        # re-creation race, so the branch is exercised deterministically.
         from unittest.mock import patch
         from agent_windows.core.filesystem import delete_path
         f = tmp_path / "a.txt"
@@ -1371,6 +1375,43 @@ class TestDeleteVerify:
         except (OSError, NotImplementedError):
             pytest.skip("symlinks unavailable on this host")
         r = delete_path(str(link))
+        assert "Verified: gone" in r["output"]
+        assert r["verified"]["gone"] is True
+
+    def test_junction_confirms_gone(self, tmp_path):
+        # M1: a junction (reparse point) goes through _remove_path, and
+        # _confirm_gone's is_junction() guard must read it as gone after detach
+        # — the link path returns to "not a reparse point". Symmetric with the
+        # symlink test above; the link-confirms path was only exercised for
+        # symlinks, leaving the junction branch's verified.gone unasserted.
+        from agent_windows.core.filesystem import delete_path
+        target = tmp_path / "real"
+        target.mkdir()
+        (target / "keep.txt").write_text("precious", encoding="utf-8")
+        link = tmp_path / "link"
+        TestReparsePointEvasion._make_junction(link, target)
+        r = delete_path(str(link), recursive=True)
+        assert "Verified: gone" in r["output"]
+        assert r["verified"]["gone"] is True
+        assert target.exists()  # junction target survives (G8)
+
+    def test_recycle_dir_confirms_gone_when_path_disappears(self, tmp_path):
+        # M2: the recycle + directory combination. The file+recycle path was
+        # covered; the dir+recycle path (shutil.rmtree under the recycle mock)
+        # was not. _recycle_path patched to actually clear the literal dir.
+        import shutil
+        from unittest.mock import patch
+        from agent_windows.core.filesystem import delete_path
+        d = tmp_path / "d"
+        d.mkdir()
+        (d / "f.txt").write_text("x", encoding="utf-8")
+
+        def fake_recycle(p):
+            shutil.rmtree(p)
+
+        with patch("agent_windows.core.filesystem._recycle_path",
+                   side_effect=fake_recycle):
+            r = delete_path(str(d), recursive=True)
         assert "Verified: gone" in r["output"]
         assert r["verified"]["gone"] is True
 
