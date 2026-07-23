@@ -379,7 +379,7 @@ class TestDiffHandler:
         """P3.6: when match (no changed_bbox), output says 'Changed region: none'."""
         a, _ = self._two_images(tmp_path)
         result = {"diff_pixels": 0, "total_pixels": 16, "diff_percent": 0.0,
-                  "match": True, "diff_path": "/o/d.png"}
+                  "match": True, "changed_bbox": None, "diff_path": "/o/d.png"}
         with patch("agent_windows.core.screenshot.diff_images", return_value=result), \
              patch("agent_windows.core.filesystem.validate_read_path", side_effect=lambda p: p):
             r = HANDLERS["diff"]({"baseline": str(a)})
@@ -388,7 +388,7 @@ class TestDiffHandler:
     def test_diff_captures_when_no_compare(self, tmp_path):
         a, _ = self._two_images(tmp_path)
         result = {"diff_pixels": 0, "total_pixels": 16, "diff_percent": 0.0,
-                  "match": True, "diff_path": "/o/d.png"}
+                  "match": True, "changed_bbox": None, "diff_path": "/o/d.png"}
         with patch("agent_windows.core.screenshot.diff_images", return_value=result), \
              patch("agent_windows.core.screenshot.capture_screenshot", return_value=_fake_image()) as m_cap, \
              patch("agent_windows.core.filesystem.validate_read_path", side_effect=lambda p: p):
@@ -398,7 +398,7 @@ class TestDiffHandler:
     def test_threshold_default(self, tmp_path):
         a, _ = self._two_images(tmp_path)
         result = {"diff_pixels": 0, "total_pixels": 16, "diff_percent": 0.0,
-                  "match": True, "diff_path": "/o/d.png"}
+                  "match": True, "changed_bbox": None, "diff_path": "/o/d.png"}
         with patch("agent_windows.core.screenshot.diff_images", return_value=result) as m_diff, \
              patch("agent_windows.core.screenshot.capture_screenshot", return_value=_fake_image()), \
              patch("agent_windows.core.filesystem.validate_read_path", side_effect=lambda p: p):
@@ -408,7 +408,7 @@ class TestDiffHandler:
     def test_output_path_validated(self, tmp_path):
         a, _ = self._two_images(tmp_path)
         result = {"diff_pixels": 0, "total_pixels": 16, "diff_percent": 0.0,
-                  "match": True, "diff_path": "/o/d.png"}
+                  "match": True, "changed_bbox": None, "diff_path": "/o/d.png"}
         with patch("agent_windows.core.screenshot.diff_images", return_value=result), \
              patch("agent_windows.core.screenshot.capture_screenshot", return_value=_fake_image()), \
              patch("agent_windows.core.filesystem.validate_read_path", side_effect=lambda p: p), \

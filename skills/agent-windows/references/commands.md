@@ -265,7 +265,7 @@ agent-windows highlight 100 200 500 400 [--label "Button"] [--color blue]
 | `--image` / `-i` | str | `""` | Source image (default: fresh screenshot) |
 | `--output` / `-o` | str | `""` | Save to path |
 
-**Output**: `{output, path, regions}` — `regions` is a list of bbox dicts (`x1/y1/x2/y2/label/color`); output renders each as `(x1,y1)-(x2,y2)`. Sibling is daemon-direct-client only; MCP/CLI return the `output` text.
+**Output**: `{output, path, regions}` — `regions` is a list of bbox dicts (`x1/y1/x2/y2/label/color`); output renders each as `(x1,y1)-(x2,y2)`. Sibling is daemon-direct-client only: MCP surfaces only `output`; the CLI's default text rendering uses `output`; `--format json` (a daemon-direct client) surfaces the structured siblings.
 
 ### diff
 
@@ -282,7 +282,7 @@ agent-windows diff baseline.png [-c current.png] [-t 30]
 | `--threshold` / `-t` | int | `30` | Pixel diff threshold (0-255) |
 | `--output` / `-o` | str | `""` | Save diff image to path |
 
-**Output**: `{output, diff_pixels, total_pixels, diff_percent, match, changed_bbox, diff_path}` — `changed_bbox` is the exclusive `[left, top, right, bottom]` of all changed pixels (`None` when `match`); output adds a `Changed region: (x1,y1)-(x2,y2)` line (or `none`). Sibling is daemon-direct-client only; MCP/CLI return the `output` text.
+**Output**: `{output, diff_pixels, total_pixels, diff_percent, match, changed_bbox, diff_path}` — `changed_bbox` is the exclusive `[left, top, right, bottom]` of all changed pixels (`None` when `match`); output adds a `Changed region: (x1,y1)-(x2,y2)` line (or `none`). Sibling is daemon-direct-client only: MCP surfaces only `output`; the CLI's default text rendering uses `output`; `--format json` (a daemon-direct client) surfaces the structured siblings.
 
 ### cleanup
 

@@ -607,7 +607,7 @@ def diff_images(
         output_path: Save diff visualization. If None, auto-generates.
 
     Returns:
-        Dict with: diff_pixels, total_pixels, diff_percent, match, diff_path.
+        Dict with: diff_pixels, total_pixels, diff_percent, match, changed_bbox, diff_path.
     """
     from PIL import ImageChops
 
@@ -663,8 +663,8 @@ def diff_images(
         mask = diff_gray.point(lambda p: 255 if p > threshold else 0)
         diff_pixels = sum(1 for v in mask.getchannel("L").tobytes() if v > 0)
         total_pixels = mask.width * mask.height
-        # getbbox() returns (l,u,r,l) exclusive — matches the screenshot bbox
-        # convention so changed_bbox round-trips with capture/highlight bboxes.
+        # getbbox() returns (left, upper, right, lower) exclusive — matches the
+        # screenshot bbox convention so changed_bbox round-trips with capture/highlight bboxes.
         bb = mask.getbbox()
         changed_bbox = list(bb) if bb else None
         vis_img = ImageChops.difference(a, b)
