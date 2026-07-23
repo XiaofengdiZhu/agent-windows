@@ -28,8 +28,10 @@ def _ok_run(stdout="", stderr="", returncode=0):
 
 
 def _captured_command(mock_run):
-    """Return the PowerShell command string from a patched subprocess.run call."""
-    return mock_run.call_args.args[0][-1]
+    """Return the PowerShell command string from the FIRST patched subprocess.run
+    call. delete_entry now makes a second list call (P1.3 recheck), so tests
+    asserting the delete command read the first invocation."""
+    return mock_run.call_args_list[0].args[0][-1]
 
 
 # ── _quote (the injection guard) ────────────────────────────────────
@@ -298,6 +300,51 @@ class TestDeleteEntry:
         assert "(default)" in cmd
         # Must NOT be the whole-key delete.
         assert "-Recurse -Force" not in cmd
+
+
+class TestDeleteRecheck:
+    """P1.3: delete_entry lists remaining siblings after a successful delete —
+    same-key value names for a value delete, parent sub-key names for a
+    whole-key delete — so the agent knows what's left without a second call."""
+
+    def test_delete_value_lists_remaining_values(self):
+        # call 1 = delete (rc 0); call 2 = list (stdout "A\nB")
+        runs = [_ok_run(), _ok_run(stdout="A\nB")]
+        with patch("subprocess.run", side_effect=runs):
+            r = delete_entry(r"HKCU:\Soft", "Name")
+        assert "Remaining values:" in r["output"]
+        assert "A, B" in r["output"]
+        assert r["remaining"] == ["A", "B"]
+
+    def test_delete_value_empty_remaining(self):
+        runs = [_ok_run(), _ok_run(stdout="")]
+        with patch("subprocess.run", side_effect=runs):
+            r = delete_entry(r"HKCU:\Soft", "Name")
+        assert "(none)" in r["output"]
+        assert r["remaining"] == []
+
+    def test_delete_key_lists_parent_subkeys(self):
+        runs = [_ok_run(), _ok_run(stdout="Sub1\nSub2")]
+        with patch("subprocess.run", side_effect=runs):
+            r = delete_entry(r"HKCU:\Soft")  # name=None → whole key
+        assert "Remaining sub-keys:" in r["output"]
+        assert "Sub1, Sub2" in r["output"]
+        assert r["remaining"] == ["Sub1", "Sub2"]
+
+    def test_delete_default_value_lists_values(self):
+        runs = [_ok_run(), _ok_run(stdout="Only")]
+        with patch("subprocess.run", side_effect=runs):
+            r = delete_entry(r"HKCU:\Soft", name="")
+        assert "Remaining values:" in r["output"]
+
+    def test_delete_failed_no_list(self):
+        # delete rc!=0 → keep the error output, no recheck (single subprocess)
+        with patch("subprocess.run",
+                   return_value=_ok_run(stderr="not found", returncode=1)) as m:
+            r = delete_entry(r"HKCU:\Soft", "Name")
+        assert "Error deleting" in r["output"]
+        assert "remaining" not in r
+        assert m.call_count == 1
 
 
 class TestListKey:

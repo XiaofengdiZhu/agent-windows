@@ -241,12 +241,27 @@ def delete_entry(path: str, name: str | None = None) -> dict[str, Any]:
         command = f"Remove-ItemProperty -Path {q_path} -Name {q_name} -Force"
         what = f'value "{name}"'
     r = _run(command)
-    out = (
-        f"Registry {what} [{path}] deleted."
-        if r["exit_code"] == 0
-        else f'Error deleting registry {what}: {r["stderr"].strip() or r["stdout"].strip()}'
-    )
-    return {"output": out, **r}
+    if r["exit_code"] != 0:
+        return {"output": f'Error deleting registry {what}: '
+                          f'{r["stderr"].strip() or r["stdout"].strip()}', **r}
+    # P1.3: list remaining siblings so the agent knows what's left without a
+    # second call. A value delete lists the same key's surviving value names;
+    # a whole-key delete lists the parent's surviving sub-key names.
+    if name is None:
+        list_cmd = (f"(Get-ChildItem -Path (Split-Path {q_path} -Parent) "
+                    f"-ErrorAction SilentlyContinue | "
+                    f"Select-Object -ExpandProperty PSChildName) -join \"`n\"")
+        list_what = "sub-keys"
+    else:
+        list_cmd = (f"((Get-Item {q_path} -ErrorAction SilentlyContinue).Property "
+                    f"| Where-Object {{ $_ -notlike 'PS*' }}) -join \"`n\"")
+        list_what = "values"
+    lr = _run(list_cmd)
+    remaining = [s for s in lr["stdout"].splitlines() if s.strip()]
+    rem_line = ", ".join(remaining) if remaining else "(none)"
+    return {"output": f"Registry {what} [{path}] deleted.\n"
+                      f"Remaining {list_what}: {rem_line}",
+            "remaining": remaining, **r}
 
 
 def list_key(path: str) -> dict[str, Any]:
