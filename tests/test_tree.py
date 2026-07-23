@@ -1448,6 +1448,138 @@ class TestRichMetadata:
         assert el.metadata["is_selected"] is True
 
 
+# ── post-op verify helpers (P0.1/P0.3) ─────────────────────────────
+
+class TestVerifyHelpers:
+    """hit_element_at / range_percent_at / foreground_window power the default-
+    on post-op verify on click/hover/move/drag. They must be best-effort and
+    NEVER raise — a successful input op can't become an error from verify. The
+    live-Control reads are faked via ControlFromPoint / uia.core patches."""
+
+    def _ctrl(self, ctype="ButtonControl", name="OK", props=None):
+        """A fake live Control: ControlTypeName + Name + GetPropertyValue(pid)."""
+        c = MagicMock()
+        c.ControlTypeName = ctype
+        c.Name = name
+        c.GetPropertyValue = lambda pid: (props or {}).get(pid)
+        return c
+
+    def test_truncate_with_count_short_unchanged(self):
+        from agent_windows.core.tree import _truncate_with_count
+        assert _truncate_with_count("abc", 40) == "abc"
+        assert _truncate_with_count("", 40) == ""
+
+    def test_truncate_with_count_appends_dropped_count(self):
+        from agent_windows.core.tree import _truncate_with_count
+        assert _truncate_with_count("x" * 100, 40) == "x" * 40 + "...(+60)"
+
+    def test_hit_element_at_returns_compact_label(self):
+        from agent_windows.core.tree import hit_element_at
+        with patch("agent_windows.uia.controls.ControlFromPoint",
+                   return_value=self._ctrl("ButtonControl", "OK")):
+            r = hit_element_at(5, 5)
+        assert r == {"control_type": "Button", "name": "OK"}
+
+    def test_hit_element_at_truncates_long_name(self):
+        from agent_windows.core.tree import hit_element_at
+        with patch("agent_windows.uia.controls.ControlFromPoint",
+                   return_value=self._ctrl("EditControl", "z" * 100)):
+            r = hit_element_at(1, 1)
+        assert r["control_type"] == "Edit"
+        assert r["name"] == "z" * 40 + "...(+60)"
+
+    def test_hit_element_at_strips_control_suffix(self):
+        from agent_windows.core.tree import hit_element_at
+        with patch("agent_windows.uia.controls.ControlFromPoint",
+                   return_value=self._ctrl("ListItemControl", "Row 3")):
+            r = hit_element_at(1, 1)
+        assert r["control_type"] == "ListItem"  # not "ListItemControl"
+
+    def test_hit_element_at_none_on_dead_point(self):
+        from agent_windows.core.tree import hit_element_at
+        with patch("agent_windows.uia.controls.ControlFromPoint", return_value=None):
+            assert hit_element_at(0, 0) is None
+
+    def test_hit_element_at_swallows_comerror(self):
+        """verify must never raise — a COM failure degrades to None."""
+        from agent_windows.core.tree import hit_element_at
+        with patch("agent_windows.uia.controls.ControlFromPoint",
+                   side_effect=COMError("dead", 0, None)):
+            assert hit_element_at(0, 0) is None
+
+    def test_hit_element_at_swallows_label_read_failure(self):
+        from agent_windows.core.tree import hit_element_at
+        ctrl = MagicMock()
+        ctrl.ControlTypeName = "ButtonControl"
+        # Property access raises (e.g. dead element mid-read) — degrade to None.
+        type(ctrl).Name = property(lambda self: (_ for _ in ()).throw(COMError("x", 0, None)))
+        with patch("agent_windows.uia.controls.ControlFromPoint", return_value=ctrl):
+            assert hit_element_at(0, 0) is None
+
+    def test_range_percent_rangevalue(self):
+        from agent_windows.core.tree import range_percent_at
+        props = {PropertyId.RangeValueValueProperty: 6,
+                 PropertyId.RangeValueMinimumProperty: 0,
+                 PropertyId.RangeValueMaximumProperty: 10}
+        with patch("agent_windows.uia.controls.ControlFromPoint",
+                   return_value=self._ctrl("SliderControl", props=props)):
+            assert range_percent_at(1, 1) == 60
+
+    def test_range_percent_scroll_vertical(self):
+        from agent_windows.core.tree import range_percent_at
+        props = {PropertyId.ScrollVerticalScrollPercentProperty: 62.0}
+        with patch("agent_windows.uia.controls.ControlFromPoint",
+                   return_value=self._ctrl("PaneControl", props=props)):
+            assert range_percent_at(1, 1) == 62
+
+    def test_range_percent_ignores_no_scroll_sentinel(self):
+        """NoScrollValue == -1 must not read as a real percentage."""
+        from agent_windows.core.tree import range_percent_at
+        props = {PropertyId.ScrollVerticalScrollPercentProperty: -1}
+        with patch("agent_windows.uia.controls.ControlFromPoint",
+                   return_value=self._ctrl("PaneControl", props=props)):
+            assert range_percent_at(1, 1) is None
+
+    def test_range_percent_none_when_no_pattern(self):
+        from agent_windows.core.tree import range_percent_at
+        with patch("agent_windows.uia.controls.ControlFromPoint",
+                   return_value=self._ctrl("EditControl")):  # no range/scroll props
+            assert range_percent_at(1, 1) is None
+
+    def test_range_percent_none_on_dead_point(self):
+        from agent_windows.core.tree import range_percent_at
+        with patch("agent_windows.uia.controls.ControlFromPoint", return_value=None):
+            assert range_percent_at(1, 1) is None
+
+    def test_range_percent_swallows_comerror(self):
+        from agent_windows.core.tree import range_percent_at
+        with patch("agent_windows.uia.controls.ControlFromPoint",
+                   side_effect=COMError("dead", 0, None)):
+            assert range_percent_at(1, 1) is None
+
+    def test_foreground_window_returns_title_and_hwnd(self):
+        from agent_windows.core.tree import foreground_window
+        with patch("agent_windows.uia.core.GetForegroundWindow", return_value=4242), \
+             patch("agent_windows.uia.core.GetWindowText", return_value="Settings"):
+            r = foreground_window()
+        assert r == {"hwnd": 4242, "title": "Settings"}
+
+    def test_foreground_window_truncates_long_title(self):
+        from agent_windows.core.tree import foreground_window
+        with patch("agent_windows.uia.core.GetForegroundWindow", return_value=1), \
+             patch("agent_windows.uia.core.GetWindowText", return_value="Z" * 100):
+            r = foreground_window()
+        assert r["title"] == "Z" * 40 + "...(+60)"
+
+    def test_foreground_window_degrades_on_failure(self):
+        """A Win32 failure returns hwnd 0 / empty title — never raises."""
+        from agent_windows.core.tree import foreground_window
+        with patch("agent_windows.uia.core.GetForegroundWindow",
+                   side_effect=OSError("no desktop")):
+            r = foreground_window()
+        assert r == {"hwnd": 0, "title": ""}
+
+
 # ── element action hints (TODO #5) ──────────────────────────────────
 
 

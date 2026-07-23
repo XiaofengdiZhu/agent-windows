@@ -691,6 +691,100 @@ def _resolve_live_control(selector: str):
     return control
 
 
+# ── Post-op verify helpers (P0.1 / P0.3) ────────────────────────────
+#
+# Unlike _resolve_live_control (above), these are *decoration* on an already-
+# completed input op: they must NEVER raise. Any COM/Win32 failure degrades to
+# None / empty so a successful click/drag can't turn into an error from verify.
+
+
+def _truncate_with_count(s: str, limit: int) -> str:
+    """Truncate *s* to *limit* chars, suffixing ``...(+N)`` with the dropped
+    count (P3.7 style) so a cut prefix isn't read as the whole label."""
+    if len(s) <= limit:
+        return s
+    return s[:limit] + f"...(+{len(s) - limit})"
+
+
+def hit_element_at(x: int, y: int) -> dict[str, Any] | None:
+    """Best-effort: the live UIA element under (x, y) as a compact
+    ``{control_type, name}`` (name truncated P3.7-style). Returns None if the
+    point is unreachable or the read fails — verify must never raise.
+
+    Powers the ``Hit:`` line on click/hover/move/dblclick and the ``Drop:``
+    line on drag (P0.1 / P0.3).
+    """
+    from agent_windows.uia.controls import ControlFromPoint
+    try:
+        control = ControlFromPoint(x, y)
+    except Exception:
+        logger.debug("verify: ControlFromPoint failed at (%s, %s)", x, y, exc_info=True)
+        return None
+    if control is None:
+        return None
+    try:
+        ctype = control.ControlTypeName.replace("Control", "")
+        name = _truncate_with_count(control.Name or "", 40)
+    except Exception:
+        logger.debug("verify: control label read failed", exc_info=True)
+        return None
+    return {"control_type": ctype, "name": name}
+
+
+def range_percent_at(x: int, y: int) -> int | None:
+    """Best-effort slider/scroll position at (x, y) as an int percent 0-100.
+
+    Tries RangeValuePattern (value/min/max) then Scroll pattern (vertical then
+    horizontal). Returns None if no pattern is exposed, the point is
+    unreachable, or any read fails. Mirrors the slider + scroll blocks of
+    _collect_rich_metadata (below) but on a live Control via GetPropertyValue
+    instead of GetCachedPropertyValue. Powers the ``Slider:`` line on drag
+    (P0.3). Native Win32/WPF sliders expose RangeValue on the thumb control;
+    scrollbars / custom canvas sliders may not — best-effort, not guaranteed.
+    """
+    from agent_windows.uia.controls import ControlFromPoint
+    try:
+        control = ControlFromPoint(x, y)
+    except Exception:
+        return None
+    if control is None:
+        return None
+    try:
+        rv = control.GetPropertyValue(PropertyId.RangeValueValueProperty)
+        rmin = control.GetPropertyValue(PropertyId.RangeValueMinimumProperty)
+        rmax = control.GetPropertyValue(PropertyId.RangeValueMaximumProperty)
+        if all(not _is_uia_sentinel(v) for v in (rv, rmin, rmax)) and rmax != rmin:
+            return round((float(rv) - float(rmin)) / (float(rmax) - float(rmin)) * 100)
+    except Exception:
+        pass
+    try:
+        for pid in (PropertyId.ScrollVerticalScrollPercentProperty,
+                    PropertyId.ScrollHorizontalScrollPercentProperty):
+            pct = control.GetPropertyValue(pid)
+            if pct is not None and not _is_uia_sentinel(pct):
+                n = round(float(pct))
+                if n >= 0:  # ScrollPattern.NoScrollValue == -1
+                    return n
+    except Exception:
+        pass
+    return None
+
+
+def foreground_window() -> dict[str, Any]:
+    """Best-effort current foreground window ``{hwnd, title}`` (title truncated
+    P3.7-style). Win32 only (no COM), thread-safe. title is "" on any failure.
+    Powers the ``Focus:`` line on click/hover/move/dblclick (P0.1).
+    """
+    from agent_windows.uia.core import GetForegroundWindow, GetWindowText
+    try:
+        hwnd = GetForegroundWindow()
+        title = _truncate_with_count(GetWindowText(hwnd) or "", 40)
+    except Exception:
+        logger.debug("verify: foreground read failed", exc_info=True)
+        return {"hwnd": 0, "title": ""}
+    return {"hwnd": hwnd, "title": title}
+
+
 # ExpandCollapseExpandCollapseStateProperty int → human-readable state. Shared
 # with _collect_rich_metadata; the value map is the single source of truth so
 # expand_element/collapse_element report states consistent with the tree.
@@ -1580,11 +1674,9 @@ def render_snapshot(data: dict[str, Any]) -> str:
             # do" isn't diluted by "current state" (toggle_state, value, …).
             action = _action_for(el.control_type, el.metadata)
             if el.name:
-                name = el.name[:40]
                 # Surface the dropped tail length so the agent doesn't read a
                 # silently-cut prefix as the whole label. (P3.7)
-                if len(el.name) > 40:
-                    name += f"...(+{len(el.name) - 40})"
+                name = _truncate_with_count(el.name, 40)
             else:
                 name = ""
             # Truncate the owning window title like the Windows table does, so a
