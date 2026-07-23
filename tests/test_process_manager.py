@@ -186,7 +186,10 @@ class TestKillByName:
         # which the mock_run below would intercept with taskkill's stdout and
         # miscount as 1 survivor. Stub it to 0 (confirmed gone) so these tests
         # stay focused on taskkill argv/classification — the recheck itself is
-        # covered by TestKillRecheck.
+        # covered by TestKillRecheck and its real CSV parser by TestCountByImage.
+        # (That isolation is also what let the C1 locale-safe-parse bug hide:
+        # the real _count_by_image never ran under these mocks, so its INFO-line
+        # miscount only surfaced once the parser was tested in isolation.)
         monkeypatch.setattr(pm, "_count_by_image", lambda image: 0)
 
     @patch("agent_windows.core.process_manager.subprocess.run")
@@ -284,6 +287,18 @@ class TestKillByName:
         assert "rm -rf" in argv[2]
         assert mock_run.call_args.kwargs.get("shell") in (None, False)
 
+    @patch("agent_windows.core.process_manager.subprocess.run")
+    def test_name_path_single_taskkill_no_retry(self, mock_run):
+        """M3: a name-path success runs taskkill exactly once. The recheck is a
+        read-only tasklist count (_count_by_image, stubbed to 0 by this class's
+        autouse fixture), never a second kill. Pins the no-retry design on the
+        name path — the PID path's no-retry is already pinned in
+        test_pid_still_running_no_retry; both paths must stay single-shot."""
+        mock_run.return_value = _completed("SUCCESS: terminated", 0)
+        r = pm.kill_process("notepad")
+        assert "confirmed gone" in r["output"]
+        assert mock_run.call_count == 1
+
 
 # ── kill_process by PID ────────────────────────────────────────────────
 
@@ -345,6 +360,13 @@ class TestKillRecheck:
            return_value=None)
     @patch("agent_windows.core.process_manager.subprocess.run")
     def test_pid_confirmed_dead_when_image_gone(self, mock_run, _img):
+        # M2: _image_name_for_pid returns None for a dead PID AND for a live PID
+        # we're access-denied to (OpenProcess fails either way) — the two are
+        # indistinguishable. The recheck reads None optimistically as "confirmed
+        # gone": kill already ran, so a best-effort confirmation beats failing
+        # closed on the ambiguity. This pins that known limitation — a protected
+        # survivor could be misreported gone. (The pre-kill identity check fails
+        # CLOSED on the same None: different context, opposite call.)
         mock_run.return_value = _completed("SUCCESS: signal", 0)
         with patch("agent_windows.core.process_manager._open_and_verify_pid",
                    return_value=("notepad.exe", 0)):

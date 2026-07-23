@@ -379,8 +379,13 @@ def kill_process(pid_or_name: str | int, force: bool = False) -> dict[str, Any]:
             lines = ["## Process Kill", label]
             if pid is not None:
                 # Let the graceful close settle, then confirm the PID is gone.
-                # _image_name_for_pid returns None when the PID no longer
-                # resolves (gone) — fail-closed on any read error.
+                # _image_name_for_pid returns None for a dead PID AND for a live
+                # PID we're access-denied to (OpenProcess fails either way) — the
+                # two are indistinguishable here. Kill already ran, so read None
+                # optimistically as "confirmed gone"; contrast the pre-kill
+                # identity check, which fails CLOSED on the same None (a recycled
+                # critical PID is the case we can't confirm safe). A resolver
+                # exception is the third case → fail-closed "still running".
                 time.sleep(0.3)
                 try:
                     still = _image_name_for_pid(pid)
