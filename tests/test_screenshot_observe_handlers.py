@@ -181,7 +181,10 @@ class TestScreenshotMetadata:
         assert "Coordinate Scale: 2" in r["output"]
         assert "multiply image pixel coords by 2" in r["output"]
 
-    def test_backend_field_reported(self, mock_config):
+    def test_backend_as_structured_field_not_in_output(self, mock_config):
+        """The capture backend is exposed as a structured `backend` field (for
+        debug/diagnostics) but kept out of the markdown output — it carries no
+        decision value for the agent. (P2.3)"""
         img = _fake_image()
         with patch("agent_windows.core.screenshot.capture_screenshot", return_value=img), \
              patch("agent_windows.core.screenshot.save_and_cleanup", return_value="p"), \
@@ -189,7 +192,7 @@ class TestScreenshotMetadata:
              patch("agent_windows.core.screenshot.get_capture_backend", return_value="dxcam"):
             r = HANDLERS["screenshot"]({})
         assert r["backend"] == "dxcam"
-        assert "Backend: dxcam" in r["output"]
+        assert "Backend:" not in r["output"]
 
     def test_region_from_explicit_bbox(self, mock_config):
         """An explicit bbox surfaces verbatim as the region (edge form)."""

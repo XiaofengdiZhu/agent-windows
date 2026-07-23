@@ -197,8 +197,9 @@ def _screenshot(params: dict) -> dict[str, Any]:
         )
     if region is not None:
         lines.append(f"Region: {region[0]}, {region[1]}, {region[2]}, {region[3]}")
-    if backend:
-        lines.append(f"Backend: {backend}")
+    # Backend intentionally omitted from the markdown output — it carries no
+    # decision value for the agent and stays available as a structured field
+    # below for diagnostics. (P2.3)
 
     # Screenshot profiling (TODO #3): capture dominates (backend-dependent);
     # resize is the scale_screenshot cost. Logged only under is_debug().
