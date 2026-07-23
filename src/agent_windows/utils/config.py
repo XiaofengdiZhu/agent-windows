@@ -198,6 +198,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         # constants (MAX_TYPE_TEXT_LEN / MAX_KEY_HOLD_SECONDS) stay as fallback.
         "type_text_len": 10000,  # type / multi_edit text length (SEC3-05)
         "key_hold_seconds": 60,  # key_down --hold duration (F11)
+        # P0: post-op UIA verify on click/dblclick/hover/move (hit element +
+        # focus window) and drag (drop target + slider %). ms-level hit-test,
+        # far cheaper than a follow-up snapshot; toggle off for raw speed.
+        "verify": True,
     },
     "wait": {
         "poll_interval": 0.5,  # seconds between polls when waiting for element/text
