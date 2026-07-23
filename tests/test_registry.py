@@ -280,6 +280,38 @@ class TestGetValue:
         collapsed = cmd.replace("''", "")
         assert collapsed.count("'") % 2 == 0
 
+    def test_returns_expandstring_with_type(self):
+        """Lock decision #3: ExpandString carries its kind. Expansion itself is
+        a PowerShell-side behavior (can't be unit-tested under the mocked
+        subprocess), but the JSON dispatch + kind tag can."""
+        with patch("subprocess.run", return_value=_ok_run(
+                stdout=r'{"Kind":"ExpandString","Value":"C:\\Users"}')):
+            r = get_value(r"HKCU:\Soft", "Path")
+        assert r["reg_type"] == "ExpandString"
+        assert r["value"] == "C:\\Users"
+        assert "type: ExpandString" in r["output"]
+
+    def test_returns_qword_as_int(self):
+        with patch("subprocess.run", return_value=_ok_run(
+                stdout='{"Kind":"QWord","Value":4294967296}')):
+            r = get_value(r"HKCU:\Soft", "Big")
+        assert r["value"] == 4294967296
+        assert isinstance(r["value"], int)
+        assert r["reg_type"] == "QWord"
+
+    def test_injection_in_path_contained(self):
+        """A hostile path (valid hive prefix) can't break out of the quoted
+        literal — it's interpolated into Get-Item -Path via _quote. Mirrors
+        delete_entry's path-injection test."""
+        hostile = r"HKCU:\Soft'; Get-Process; '"
+        with patch("subprocess.run", return_value=_ok_run(
+                stdout='{"Kind":"String","Value":"x"}')) as m:
+            get_value(hostile, "Name")
+        cmd = _captured_command(m)
+        assert _quote(hostile) in cmd
+        collapsed = cmd.replace("''", "")
+        assert collapsed.count("'") % 2 == 0
+
 
 class TestDisplay:
     """_display renders native-typed values for the human-readable output line."""
