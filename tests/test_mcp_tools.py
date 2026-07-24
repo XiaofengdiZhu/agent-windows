@@ -328,14 +328,21 @@ import agent_windows.mcp.tools.input as inp
 def test_click_fn_with_coords():
     with patch.object(inp, "_call", return_value={"output": "clicked"}) as m:
         out = inp.click_fn(loc=[10, 20], selector=None, right=True, double=False)
-    m.assert_called_once_with("click", x=10, y=20, right=True, double=False)
+    m.assert_called_once_with("click", x=10, y=20, right=True, double=False, background=False)
     assert out == "clicked"
 
 
 def test_click_fn_with_selector():
     with patch.object(inp, "_call", return_value={"output": "ok"}) as m:
         inp.click_fn(loc=None, selector="@e5", right=False, double=False)
-    m.assert_called_once_with("click", selector="@e5", right=False, double=False)
+    m.assert_called_once_with("click", selector="@e5", right=False, double=False, background=False)
+
+
+def test_click_fn_background_forwards():
+    """background=True forwards to _call (T5: no-focus-steal click)."""
+    with patch.object(inp, "_call", return_value={"output": "ok"}) as m:
+        inp.click_fn(loc=[1, 2], selector=None, background=True)
+    m.assert_called_once_with("click", x=1, y=2, right=False, double=False, background=True)
 
 
 def test_click_fn_requires_loc_or_selector():

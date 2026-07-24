@@ -42,13 +42,21 @@ class TestInputCommands:
         assert result.exit_code == 0
         method, params = _cmd_calls(mock_cmd)[0]
         assert method == "click"
-        assert params == {"x": 100, "y": 200, "right": True, "double": True}
+        assert params == {"x": 100, "y": 200, "right": True, "double": True, "background": False}
+
+    @patch("agent_windows.cli.commands.input._cmd")
+    def test_click_background_flag_forwards(self, mock_cmd):
+        """--background forwards background=True (T5: no-focus-steal click)."""
+        result = runner.invoke(app, ["click", "100", "200", "--background"])
+        assert result.exit_code == 0
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params["background"] is True
 
     @patch("agent_windows.cli.commands.input._cmd")
     def test_click_defaults(self, mock_cmd):
         runner.invoke(app, ["click", "1", "2"])
         _, params = _cmd_calls(mock_cmd)[0]
-        assert params == {"x": 1, "y": 2, "right": False, "double": False}
+        assert params == {"x": 1, "y": 2, "right": False, "double": False, "background": False}
 
     @patch("agent_windows.cli.commands.input._cmd")
     def test_type_with_at_option_parses_coords(self, mock_cmd):
@@ -135,7 +143,7 @@ class TestInputCommands:
         result = runner.invoke(app, ["click", "--selector", "@e3", "--right"])
         assert result.exit_code == 0
         _, params = _cmd_calls(mock_cmd)[0]
-        assert params == {"selector": "@e3", "right": True, "double": False}
+        assert params == {"selector": "@e3", "right": True, "double": False, "background": False}
 
     @patch("agent_windows.cli.commands.input._cmd")
     def test_click_short_flag_selector(self, mock_cmd):
@@ -150,7 +158,7 @@ class TestInputCommands:
         """Backward compat: bare X Y still produces x/y params."""
         runner.invoke(app, ["click", "100", "200"])
         _, params = _cmd_calls(mock_cmd)[0]
-        assert params == {"x": 100, "y": 200, "right": False, "double": False}
+        assert params == {"x": 100, "y": 200, "right": False, "double": False, "background": False}
 
     @patch("agent_windows.cli.commands.input._cmd")
     def test_click_missing_coords_and_selector_errors(self, mock_cmd):
@@ -285,7 +293,7 @@ class TestNegativeCoordinates:
                                 "agent_windows.cli.commands.input")
         assert code == 0
         _, params = calls[0]
-        assert params == {"x": -1, "y": -1, "right": True, "double": True}
+        assert params == {"x": -1, "y": -1, "right": True, "double": True, "background": False}
 
     def test_click_negative_coords_after_option_reach_parser(self):
         """`click -1 -1 --right -100`: the negative `-100` after the option is
