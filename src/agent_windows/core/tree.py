@@ -179,6 +179,16 @@ class ElementInfo:
     # lifetime. ``int`` with a 0 default so existing constructors/fixtures stay
     # backward-compatible.
     window_handle: int = 0
+    # UIA RuntimeId of the element (tuple of int). Stable for the element's
+    # lifetime (survives move/redraw/occlusion); invalid only once the element
+    # is destroyed. Cached during traversal (zero extra COM cost) so selector
+    # commands can re-resolve the live control via FindFirst by RuntimeId
+    # instead of ControlFromPoint (which reads the visual z-order topmost, not
+    # the intended element — the bug D3 fixes). Empty () when the provider
+    # didn't expose one → _resolve_live_control falls back to the coordinate
+    # path (D3 D2). ``tuple`` (immutable, hashable) with an empty default so
+    # existing constructors/fixtures stay backward-compatible.
+    runtime_id: tuple[int, ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -1123,6 +1133,11 @@ def _build_traversal_cache(client):
     # WindowIsModal lets _traverse_node detect modal dialogs and mark their
     # subtree so render_snapshot can promote those elements (PERF3-06).
     cache.AddProperty(PropertyId.WindowIsModalProperty)
+    # RuntimeId (D3): cached so each element's stable UIA identity is a local
+    # lookup during traversal, not a live cross-process COM round-trip per
+    # node. Selector commands re-resolve the live control via FindFirst by
+    # RuntimeId instead of ControlFromPoint (Task 3).
+    cache.AddProperty(PropertyId.RuntimeIdProperty)
     # TODO #15: richer element attributes surfaced in ElementInfo.metadata —
     # toggle/expand/value/range/selection/shortcut/help/password. Cached so each
     # is a local lookup, not a live COM round-trip per property.
@@ -1322,6 +1337,35 @@ def _traverse_node(
                 logger.debug("Failed to get cached node property", exc_info=True)
         this_in_modal = in_modal_subtree or is_modal_window
 
+        # RuntimeId for selector re-resolution (D3). Prefer the cached value
+        # (zero COM cost — RuntimeIdProperty is in _build_traversal_cache); fall
+        # back to live GetRuntimeId if the provider didn't cache it. Spike
+        # finding (Task 1 Minor): GetCachedPropertyValue swallows COMError →
+        # None, BUT UIA's "not supported" is a TRUTHY ReservedNotSupported
+        # sentinel (not None), so a bare `if cached_rid` falsy-check would pass
+        # the sentinel through. Coerce to tuple[int]; None/sentinel/non-int
+        # raise TypeError/ValueError and trigger the live fallback. Live read
+        # is also wrapped: a stale/disconnected element raises here, not in the
+        # caller. Empty () on total failure → _resolve_live_control's coordinate
+        # fallback (D3 D2). Computed unconditionally (cheap) but consumed only
+        # on the interactive branch below; non-interactive nodes don't need an
+        # @eN ref, so the field stays () for them.
+        runtime_id: tuple[int, ...] = ()
+        try:
+            cached_rid = node.GetCachedPropertyValue(
+                PropertyId.RuntimeIdProperty)
+            runtime_id = tuple(int(v) for v in cached_rid)
+        except (TypeError, ValueError):
+            runtime_id = ()
+        if not runtime_id:
+            try:
+                runtime_id = tuple(
+                    int(v) for v in (node.GetRuntimeId() or []))
+            except Exception:
+                logger.debug(
+                    "RuntimeId live read failed for node", exc_info=True)
+                runtime_id = ()
+
         # Add to interactive elements list. Done for depth>0 nodes only (the
         # window root at depth 0 is never an element) and UNCONDITIONALLY w.r.t.
         # tree-line pruning — so the interactive list and @eN refs are
@@ -1341,6 +1385,7 @@ def _traverse_node(
                 is_modal=this_in_modal,
                 window_name=window.title,
                 window_handle=window.handle,
+                runtime_id=runtime_id,
                 metadata=metadata,
             ))
 

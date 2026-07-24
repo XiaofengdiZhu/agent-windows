@@ -68,7 +68,7 @@ class FakeElement:
     def __init__(self, *, name="", control_type=TEXT, is_enabled=True,
                  is_offscreen=False, rect=RECT_ONSCREEN, has_keyboard_focus=False,
                  children=None, raise_on=None, raise_on_build_updated=False,
-                 is_modal=False, extra_props=None):
+                 is_modal=False, extra_props=None, runtime_id=None):
         self._name = name
         self._control_type = control_type
         self._is_enabled = is_enabled
@@ -84,6 +84,11 @@ class FakeElement:
         self._is_modal = is_modal
         # TODO #15: additional cached property values keyed by PropertyId attr.
         self._extra = dict(extra_props) if extra_props else {}
+        # D3: live RuntimeId returned by GetRuntimeId(). None means "live read
+        # returns nothing" (the _traverse_node fallback coerces via `or []` so
+        # None → ()). Used by Task 2 to drive the live-fallback branch when the
+        # provider doesn't expose RuntimeId via the cache.
+        self._runtime_id = runtime_id
 
     def GetCachedPropertyValue(self, prop_id):
         if self._raise_on == prop_id:
@@ -103,6 +108,13 @@ class FakeElement:
         if prop_id == PropertyId.WindowIsModalProperty:
             return self._is_modal
         return self._extra.get(prop_id)
+
+    def GetRuntimeId(self):
+        """Live RuntimeId stand-in (D3 Task 2 fallback path). Returns whatever
+        was passed as ``runtime_id=`` (None if unset) so the live-fallback branch
+        of _traverse_node exercises both the success ([int, ...]) and the
+        empty-result (None) cases."""
+        return self._runtime_id
 
     def BuildUpdatedCache(self, children_req):
         """Bulk-fetch entry point (PERF3-05). Returns a wrapper whose
@@ -2713,6 +2725,100 @@ def test_render_snapshot_diff_uses_orig_idx_refs():
     out = render_snapshot_diff(d, cur)
     assert "@e7" in out
     assert "@e1" not in out
+
+
+# ── ElementInfo.runtime_id caching (D3 Task 2) ──────────────────────
+#
+# D3 in one line: selector commands re-resolve the live UIA element via
+# FindFirst by RuntimeId instead of ControlFromPoint (visual z-order topmost).
+# Task 2 is the cache side: every traversed element's RuntimeId is read into
+# ElementInfo during the tree walk — zero extra COM cost (cached) with a live
+# GetRuntimeId fallback when the provider doesn't expose it via the cache.
+# Task 3 consumes the field; here we only lock the populate contract.
+
+
+class TestRuntimeIdCaching:
+    """_traverse_node reads RuntimeId from the cached node (zero extra COM
+    round-trip) and stores it on ElementInfo. The value is normalized to a
+    tuple[int, ...]; the read is sentinel-robust (Task 1 spike found UIA's
+    ReservedNotSupported is a TRUTHY non-None COM object, so a bare truthy
+    check would pass it through). Falls back to live GetRuntimeId when the
+    cache doesn't expose one."""
+
+    def test_elementinfo_runtime_id_default_empty(self):
+        """runtime_id defaults to () so existing constructors/fixtures stay
+        backward-compatible (no runtime_id passed → empty, D3 fallback path)."""
+        el = ElementInfo(name="x", control_type="ButtonControl", bbox=None)
+        assert el.runtime_id == ()
+
+    def test_traverse_fills_runtime_id_from_cache(self):
+        """A node whose cached RuntimeId is [42, 7, 99] surfaces as a tuple on
+        ElementInfo — the zero-extra-COM cached path D3 prefers."""
+        node = FakeElement(
+            name="OK", control_type=BUTTON,
+            extra_props={PropertyId.RuntimeIdProperty: [42, 7, 99]})
+        root = FakeElement(control_type=PANE, children=[node])
+        _, interactive = traverse(FakeClient(root), root)
+        assert len(interactive) == 1
+        assert interactive[0].runtime_id == (42, 7, 99)
+
+    def test_traverse_runtime_id_falls_back_to_live_when_uncached(self):
+        """If the provider doesn't cache RuntimeId (GetCachedPropertyValue
+        returns None for it), _traverse_node falls back to the live
+        node.GetRuntimeId() — one COM round-trip, only on the miss path."""
+        # No extra_props[RuntimeIdProperty] → GetCachedPropertyValue returns
+        # None via _extra.get(); the fake's GetRuntimeId returns the live list.
+        node = FakeElement(name="OK", control_type=BUTTON, runtime_id=[5, 6])
+        root = FakeElement(control_type=PANE, children=[node])
+        _, interactive = traverse(FakeClient(root), root)
+        assert interactive[0].runtime_id == (5, 6)
+
+    def test_traverse_runtime_id_sentinel_does_not_misread_as_truthy(self):
+        """UIA's ReservedNotSupported is a TRUTHY non-None sentinel (Task 1
+        spike). A bare `if cached_rid` would pass it through; the impl must
+        coerce to tuple[int] and fall back when that raises TypeError. Here the
+        sentinel is non-iterable → TypeError → live fallback → live also empty
+        (GetRuntimeId returns None) → runtime_id stays ()."""
+        class _Sentinel:
+            # Stand-in for ReservedNotSupportedValue: truthy, non-primitive,
+            # and non-iterable so `for v in sentinel` raises TypeError.
+            def __bool__(self):
+                return True
+
+        node = FakeElement(
+            name="OK", control_type=BUTTON,
+            extra_props={PropertyId.RuntimeIdProperty: _Sentinel()})
+        root = FakeElement(control_type=PANE, children=[node])
+        _, interactive = traverse(FakeClient(root), root)
+        assert interactive[0].runtime_id == ()
+
+    def test_traverse_runtime_id_empty_when_neither_cached_nor_live(self):
+        """No cached RuntimeId and live GetRuntimeId returns None → runtime_id
+        stays () — the _resolve_live_control coordinate-fallback path (D3 D2)."""
+        node = FakeElement(name="OK", control_type=BUTTON)  # no extra, no live
+        root = FakeElement(control_type=PANE, children=[node])
+        _, interactive = traverse(FakeClient(root), root)
+        assert interactive[0].runtime_id == ()
+
+    def test_build_traversal_cache_requests_runtime_id(self):
+        """_build_traversal_cache must include RuntimeIdProperty in the cache
+        request so GetCachedPropertyValue(RuntimeIdProperty) is a local lookup,
+        not a live cross-process COM round-trip per node. Guards against a future
+        refactor dropping the AddProperty line. (The fake CacheRequest accepts
+        AddProperty as a no-op; we spy on it.)"""
+        calls = []
+
+        class _SpyCacheRequest(FakeCacheRequest):
+            def AddProperty(self, prop_id, *args):
+                calls.append(prop_id)
+                super().AddProperty(prop_id, *args)
+
+        client = FakeClient(FakeElement(control_type=PANE))
+        with patch.object(client.IUIAutomation, "CreateCacheRequest",
+                          _SpyCacheRequest):
+            tree._build_traversal_cache(client)
+        assert PropertyId.RuntimeIdProperty in calls
+
 
 
 
