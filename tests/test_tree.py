@@ -2411,6 +2411,59 @@ def test_expand_element_no_pattern_raises_valueerror(monkeypatch):
         expand_element("@e1")
 
 
+def test_collapse_element_runs_collapse_under_bypass(monkeypatch):
+    """collapse_element fires Collapse inside run_pattern_background."""
+    from agent_windows.core import tree
+    from agent_windows.core.tree import collapse_element
+    pat = _FakeExpandCollapsePattern(ExpandCollapseState.Expanded)
+    ctrl = _FakeLiveControl(pat)
+    monkeypatch.setattr(tree, "_resolve_live_control", lambda sel: ctrl)
+    captured = {}
+
+    def _spy(control, action):
+        captured["control"] = control
+        captured["action"] = action
+        action()
+
+    monkeypatch.setattr("agent_windows.core.uia_bypass.run_pattern_background", _spy)
+
+    res = collapse_element("@e1")
+
+    assert captured["control"] is ctrl
+    assert captured["action"] == pat.Collapse
+    assert pat.ExpandCollapseState == ExpandCollapseState.Collapsed
+    assert res["action"] == "collapsed"
+    assert res["skipped"] is False
+
+
+def test_collapse_element_skip_does_not_bypass(monkeypatch):
+    from agent_windows.core import tree
+    from agent_windows.core.tree import collapse_element
+    pat = _FakeExpandCollapsePattern(ExpandCollapseState.Collapsed)
+    ctrl = _FakeLiveControl(pat)
+    monkeypatch.setattr(tree, "_resolve_live_control", lambda sel: ctrl)
+
+    def _spy(*a, **k):
+        raise AssertionError("bypass must not run on the skip path")
+
+    monkeypatch.setattr("agent_windows.core.uia_bypass.run_pattern_background", _spy)
+
+    res = collapse_element("@e1")
+
+    assert res["action"] == "skipped"
+    assert res["skipped"] is True
+
+
+def test_collapse_element_no_pattern_raises_valueerror(monkeypatch):
+    from agent_windows.core import tree
+    from agent_windows.core.tree import collapse_element
+    ctrl = _FakeLiveControl(None)
+    monkeypatch.setattr(tree, "_resolve_live_control", lambda sel: ctrl)
+
+    with pytest.raises(ValueError, match="does not support expand/collapse"):
+        collapse_element("@e1")
+
+
 def test_diff_pure_added_removed():
     from agent_windows.core.tree import diff_snapshots
     base = {"interactive_elements": [_el("A", bbox=(0, 0, 10, 10))],

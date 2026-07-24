@@ -1009,7 +1009,8 @@ def collapse_element(selector: str) -> dict[str, Any]:
     state = _read_expand_collapse_state(pattern)
     if state == "collapsed" or state == "leaf":
         return {"action": "skipped", "state": state, "skipped": True}
-    ok = pattern.Collapse()
+    from agent_windows.core.uia_bypass import run_pattern_background
+    run_pattern_background(control, pattern.Collapse)
     new_state = _read_expand_collapse_state(pattern) or "collapsed"
     return {"action": "collapsed", "state": new_state, "skipped": False}
 
