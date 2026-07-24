@@ -139,21 +139,44 @@ def _append_field_diff(lines: list[str], pre, post) -> dict | None:
 
 @handler("click")
 def _click(params: dict) -> dict[str, Any]:
-    """Mouse click at coordinates."""
+    """Mouse click at coordinates, or a no-focus-steal UIA pattern click."""
     from agent_windows.core.input_controller import click
+    from agent_windows.core.uia_bypass import (
+        invoke_background, BackgroundUnavailableError)
 
-    x, y = _coords(params)
+    background = bool(params.get("background", False))
+    selector = params.get("selector")
     right = params.get("right", False)
     double = params.get("double", False)
-    click(x, y, right=right, double=double)
-    # P2.2: echo only non-default flags — a plain left single click is the
-    # common case, so Button/Double lines appear only when they deviate.
-    lines = ["## Click", f"Position: ({x}, {y})"]
-    if right:
-        lines.append("Button: right")
-    if double:
-        lines.append("Double: true")
-    _append_hit_focus(lines, x, y)  # P0.1: post-op verify
+
+    if background:
+        if right or double:
+            raise BackgroundUnavailableError(
+                "background mode supports left single-click only "
+                "(no Invoke semantics for right/double); retry without --background")
+        # Pattern delivery ignores pixel coords; x/y are echo/verify-only and
+        # best-effort — a stale/off-screen echo coord must NOT fail a click whose
+        # Invoke/Toggle/Select fires regardless. An unconditional _coords here
+        # would force a selector->center snapshot read and could raise
+        # CoordinateRangeError, gating delivery on irrelevant coords.
+        try:
+            x, y = _coords(params)
+        except Exception:
+            x, y = params.get("x", 0), params.get("y", 0)
+        res = invoke_background(x, y, selector)
+        lines = ["## Click", f"Position: ({x}, {y})",
+                 f"Delivery: background ({res['action']})"]
+    else:
+        x, y = _coords(params)
+        click(x, y, right=right, double=double)
+        # P2.2: echo only non-default flags — a plain left single click is the
+        # common case, so Button/Double lines appear only when they deviate.
+        lines = ["## Click", f"Position: ({x}, {y})"]
+        if right:
+            lines.append("Button: right")
+        if double:
+            lines.append("Double: true")
+    _append_hit_focus(lines, x, y)  # Focus: line unchanged on success ⇒ bypass worked
     return {"output": "\n".join(lines)}
 
 

@@ -272,3 +272,68 @@ def test_invoke_background_disables_host_around_pattern(monkeypatch):
     bypass.invoke_background(1, 2, selector="@e1")
 
     assert enables == [(888, False), (888, True)]
+
+
+# --- click handler --background branch (Task 4) -------------------------------
+# The brief's handler called _coords unconditionally; for a selector that forces
+# a snapshot-cache read (resolve_element_center) which (a) raises in-unit (no
+# snapshot loaded) and (b) could spuriously fail a background click in prod via
+# CoordinateRangeError on a stale echo-center. Pattern delivery ignores pixel
+# coords, so echo-coord validation must never gate it. The corrected handler
+# wraps _coords in try/except (best-effort echo) on the background path.
+from agent_windows.daemon.handlers import input as input_handlers
+
+
+def test_click_background_right_raises():
+    # right + background has no Invoke semantics → BackgroundUnavailableError,
+    # raised BEFORE _coords/invoke_background run — so no resolve patch or
+    # EnableWindow isolation fixture is needed (nothing reaches EnableWindow).
+    with pytest.raises(bypass.BackgroundUnavailableError):
+        input_handlers._click({"x": 1, "y": 2, "right": True, "background": True})
+
+
+def test_click_background_skips_sendinput(monkeypatch, no_real_enable_window):
+    from agent_windows.uia.enums import PatternId
+
+    sent = {"clicks": []}
+    monkeypatch.setattr("agent_windows.core.input_controller.click",
+                        lambda *a, **k: sent["clicks"].append((a, k)))
+    # Drive _coords to raise deterministically. The real _coords("@e1") would
+    # call resolve_element_center → get_tree_snapshot → traverse the LIVE UIA
+    # tree (no snapshot is loaded in-unit), which on the test host triggers a
+    # native COM fatal exception (0x80040155 SEH) — a host-dependent live-
+    # desktop read. The corrected handler's contract is that _coords is
+    # best-effort on the background path, so simulate its failure directly and
+    # assert the degrade-to-(0,0)+deliver path instead of touching the desktop.
+    def _coords_no_snapshot(_params):
+        raise RuntimeError("no snapshot loaded for @e1")
+    monkeypatch.setattr(input_handlers, "_coords", _coords_no_snapshot)
+    # invoke_background does a function-body `from ...tree import
+    # _resolve_live_control`, which shadows a bypass.-level patch — retarget
+    # to the SOURCE module (same discipline as the invoke_background tests).
+    monkeypatch.setattr("agent_windows.core.tree._resolve_live_control",
+                        lambda sel: _FakeControl(
+                            {PatternId.InvokePattern: _FakePattern("invoke")},
+                            ancestor_window=_FakeWindowControl(123)))
+    # No live-desktop reads in a unit test: kill the post-op Hit/Focus verify
+    # lines (the Focus-stays-put assertion belongs to the Task 6 e2e, not here).
+    monkeypatch.setattr(input_handlers, "_verify_enabled", lambda: False)
+
+    res = input_handlers._click({"selector": "@e1", "background": True})
+
+    assert sent["clicks"] == []                       # SendInput never called
+    assert "Delivery: background (invoke)" in res["output"]
+
+
+def test_click_default_unchanged(monkeypatch):
+    sent = {"clicks": []}
+    monkeypatch.setattr("agent_windows.core.input_controller.click",
+                        lambda *a, **k: sent["clicks"].append((a, k)))
+    monkeypatch.setattr("agent_windows.core.tree.hit_element_at", lambda x, y: None)
+    monkeypatch.setattr("agent_windows.core.tree.foreground_window",
+                        lambda: {"hwnd": 0, "title": ""})
+
+    res = input_handlers._click({"x": 5, "y": 6})
+
+    assert sent["clicks"] == [((5, 6), {"right": False, "double": False})]
+    assert "Delivery" not in res["output"]
