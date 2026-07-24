@@ -974,7 +974,8 @@ def expand_element(selector: str) -> dict[str, Any]:
     # remaining children, so let the provider decide rather than hard-skip.
     if state == "expanded" or state == "leaf":
         return {"action": "skipped", "state": state, "skipped": True}
-    pattern.Expand()
+    from agent_windows.core.uia_bypass import run_pattern_background
+    run_pattern_background(control, pattern.Expand)
     new_state = _read_expand_collapse_state(pattern) or "expanded"
     return {"action": "expanded", "state": new_state, "skipped": False}
 

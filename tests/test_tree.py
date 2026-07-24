@@ -2327,6 +2327,90 @@ def test_element_info_window_handle_field_default_and_kwarg():
     assert el2.window_handle == 4242
 
 
+# ── expand/collapse EnableWindow bypass (TODO #4) ──────────────────────
+
+
+class _FakeExpandCollapsePattern:
+    """Stand-in for ExpandCollapsePattern: Expand/Collapse flip the state."""
+    def __init__(self, state):
+        self.ExpandCollapseState = state
+
+    def Expand(self):
+        self.ExpandCollapseState = ExpandCollapseState.Expanded
+
+    def Collapse(self):
+        self.ExpandCollapseState = ExpandCollapseState.Collapsed
+
+
+class _FakeLiveControl:
+    """Stand-in for a live UIA Control returned by _resolve_live_control."""
+    def __init__(self, pattern):
+        self._pattern = pattern
+
+    def GetPattern(self, _pattern_id):
+        return self._pattern
+
+
+def test_expand_element_runs_expand_under_bypass(monkeypatch):
+    """expand_element fires Expand inside run_pattern_background (not bare)."""
+    from agent_windows.core import tree
+    from agent_windows.core.tree import expand_element
+    pat = _FakeExpandCollapsePattern(ExpandCollapseState.Collapsed)
+    ctrl = _FakeLiveControl(pat)
+    monkeypatch.setattr(tree, "_resolve_live_control", lambda sel: ctrl)
+    captured = {}
+
+    def _spy(control, action):
+        captured["control"] = control
+        captured["action"] = action
+        action()  # actually fire so the post-state read sees Expanded
+
+    # expand_element does a function-body `from ...uia_bypass import
+    # run_pattern_background`, which shadows a tree.-level patch — patch the
+    # SOURCE module (same discipline as the invoke_background tests).
+    monkeypatch.setattr("agent_windows.core.uia_bypass.run_pattern_background", _spy)
+
+    res = expand_element("@e1")
+
+    assert captured["control"] is ctrl
+    assert captured["action"] == pat.Expand               # Expand passed in
+    assert pat.ExpandCollapseState == ExpandCollapseState.Expanded  # it fired
+    assert res["action"] == "expanded"
+    assert res["skipped"] is False
+
+
+def test_expand_element_skip_does_not_bypass(monkeypatch):
+    """An already-expanded control skips (idempotent) WITHOUT touching the
+    bypass — no EnableWindow churn when no pattern call is needed."""
+    from agent_windows.core import tree
+    from agent_windows.core.tree import expand_element
+    pat = _FakeExpandCollapsePattern(ExpandCollapseState.Expanded)
+    ctrl = _FakeLiveControl(pat)
+    monkeypatch.setattr(tree, "_resolve_live_control", lambda sel: ctrl)
+
+    def _spy(*a, **k):
+        raise AssertionError("bypass must not run on the skip path")
+
+    monkeypatch.setattr("agent_windows.core.uia_bypass.run_pattern_background", _spy)
+
+    res = expand_element("@e1")
+
+    assert res["action"] == "skipped"
+    assert res["skipped"] is True
+
+
+def test_expand_element_no_pattern_raises_valueerror(monkeypatch):
+    """no ExpandCollapsePattern is still ValueError (-32602), not
+    BackgroundUnavailableError — expand has no foreground retry (spec D3)."""
+    from agent_windows.core import tree
+    from agent_windows.core.tree import expand_element
+    ctrl = _FakeLiveControl(None)  # GetPattern -> None
+    monkeypatch.setattr(tree, "_resolve_live_control", lambda sel: ctrl)
+
+    with pytest.raises(ValueError, match="does not support expand/collapse"):
+        expand_element("@e1")
+
+
 def test_diff_pure_added_removed():
     from agent_windows.core.tree import diff_snapshots
     base = {"interactive_elements": [_el("A", bbox=(0, 0, 10, 10))],
