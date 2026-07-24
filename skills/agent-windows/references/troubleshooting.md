@@ -199,7 +199,7 @@ recover the stranded window with `window enable` afterward.
 | `-1003` | `WAIT_TIMEOUT` | `wait`/`wait-for` exceeded timeout, or a `shell` command exceeded `shell.timeout` |
 | `-1004` | `PERMISSION_DENIED` | UAC or access denied |
 | `-1005` | `VISION_API_ERROR` | Vision model API call failed |
-| `-1007` | `BACKGROUND_UNAVAILABLE` | A `--background` click could not land (no Invoke/Toggle/Select pattern, occluded UI-virtualized element, or host window has no HWND); retry foreground |
+| `-1007` | `BACKGROUND_UNAVAILABLE` | A `--background` click could not land (no UIA element at the point, no Invoke/Toggle/Select pattern — often an occluded or UI-virtualized element, host window has no HWND, or the pattern COM call failed); retry foreground |
 | `-1999` | `DAEMON_INTERNAL_ERROR` | Unhandled exception in daemon |
 
 ## Debug Mode

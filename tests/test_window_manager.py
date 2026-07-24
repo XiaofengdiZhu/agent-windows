@@ -227,7 +227,8 @@ class TestEnable:
         r, m32 = self._run(root_enabled=False, children={})
         assert r["enabled_count"] == 1
         assert r["enabled"] is True
-        assert "Re-enabled" in r["output"]
+        assert "re-enabled" in r["output"]
+        assert "Enabled: yes" in r["output"]
         # Root enabled with TRUE.
         m32.EnableWindow.assert_called_once_with(100, True)
 
@@ -241,13 +242,20 @@ class TestEnable:
         assert (200, True) in enable_args
         assert (202, True) in enable_args
         assert (201, True) not in enable_args  # already enabled, untouched
+        # The subtree walk actually ran (descendants reached via EnumChildWindows
+        # because UWP/WinUI content is hosted in child HWNDs — the reason this
+        # op recurses, not just re-enables the root).
+        assert m32.EnumChildWindows.call_count == 1
+        assert m32.EnumChildWindows.call_args.args[0] == 100  # parent HWND
+        assert m32.EnumChildWindows.call_args.args[2] == 0     # lparam
 
     def test_never_disables(self):
         # Across all re-enable paths, EnableWindow is never called with FALSE.
-        self._run(root_enabled=False, children={200: False})
-        _, m32 = self._run(root_enabled=True, children={200: False, 201: False})
-        for call in m32.EnableWindow.call_args_list:
-            assert call.args[1] is True or call.args[1] == 1
+        _, m1 = self._run(root_enabled=False, children={200: False})
+        _, m2 = self._run(root_enabled=True, children={200: False, 201: False})
+        for m32 in (m1, m2):
+            for call in m32.EnableWindow.call_args_list:
+                assert call.args[1] is True or call.args[1] == 1
 
     def test_enabled_sibling_even_if_confirmed(self):
         r, _ = self._run(root_enabled=False, children={})

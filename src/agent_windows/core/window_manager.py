@@ -187,13 +187,16 @@ def enable_window(target: str = "") -> dict[str, Any]:
     total = (1 if root_was_disabled else 0) + children_reenabled
     confirmed = bool(user32.IsWindowEnabled(hwnd))
     if total == 0:
-        state = "Enabled: yes (already enabled)"
+        state = ("Enabled: yes (already enabled)" if confirmed
+                 else "Enabled: no (still disabled)")
     else:
         parts = []
         if root_was_disabled:
             parts.append("root")
         if children_reenabled:
             parts.append(f"{children_reenabled} child window(s)")
-        state = f"Re-enabled: {total} window(s) ({', '.join(parts)})"
+        detail = f"re-enabled {total} window(s) ({', '.join(parts)})"
+        state = (f"Enabled: yes ({detail})" if confirmed
+                 else f"Enabled: no ({detail}; still disabled)")
     return _result("Enable", title, hwnd, state, warn,
                    enabled_count=total, enabled=confirmed)
