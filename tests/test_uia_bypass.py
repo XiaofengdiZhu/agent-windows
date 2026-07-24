@@ -14,10 +14,10 @@ def test_run_with_uia_bypass_disables_then_restores(monkeypatch):
 
     monkeypatch.setattr(bypass, "_enable_window", fake_enable_window)
 
-    result = bypass.run_with_uia_bypass(4242, lambda: "done")
+    result = bypass.run_with_uia_bypass(4242, lambda: calls.append(("action",)) or "done")
 
     assert result == "done"
-    assert calls == [(4242, False), (4242, True)]
+    assert calls == [(4242, False), ("action",), (4242, True)]
 
 
 def test_run_with_uia_bypass_restores_even_when_action_raises(monkeypatch):
