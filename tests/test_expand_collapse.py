@@ -19,6 +19,18 @@ from agent_windows.core.tree import expand_element, collapse_element
 from agent_windows.uia.enums import ExpandCollapseState
 
 
+@pytest.fixture(autouse=True)
+def _bypass_action_foreground(monkeypatch):
+    """run_pattern_background fires the action foreground (no EnableWindow /
+    ctypes). The EnableWindow wrapping itself is unit-tested in
+    test_uia_bypass.py (test_run_pattern_background_*); here we exercise the
+    expand/collapse control-acquisition + state logic without touching Win32.
+    Idempotent-skip / no-pattern / not-reachable / dead-element paths return
+    or raise before run_pattern_background, so this is a no-op for them."""
+    monkeypatch.setattr("agent_windows.core.uia_bypass.run_pattern_background",
+                        lambda control, action: action())
+
+
 def _fake_pattern(state: int, *, expand_ok: bool = True, collapse_ok: bool = True):
     """A fake ExpandCollapsePattern. ``state`` is the ExpandCollapseState int
     the pattern reports; expand_ok/collapse_ok drive the bool return of the
