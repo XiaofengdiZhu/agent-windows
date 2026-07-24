@@ -692,7 +692,7 @@ agent-windows app resize "Notepad" --width 800 --height 600 --x 100 --y 100
 
 **Output**: New window position and size.
 
-### window minimize / maximize / restore / close / focus
+### window minimize / maximize / restore / close / focus / enable
 
 Direct window operations by HWND, title substring, or process name — no `target` means the foreground window. Replaces the indirect `shortcut win+down` convention (which only acts on the foreground window and can't target by HWND). Each op confirms the resulting state.
 
@@ -703,6 +703,7 @@ agent-windows window maximize "Notepad"        # by title substring
 agent-windows window restore chrome            # by process name
 agent-windows window focus "Settings"
 agent-windows window close "Notepad"           # graceful — app may prompt to save
+agent-windows window enable "Calculator"       # re-enable a window frozen by an interrupted --background click
 ```
 
 | Parameter | Type | Default | Description |
@@ -715,11 +716,12 @@ agent-windows window close "Notepad"           # graceful — app may prompt to 
 ## Window Minimize
 Window: "Notepad"
 Handle: 197642
-Minimized: yes                # or: Maximized: yes / Restored: yes / Foreground: yes / Closed: yes
+Minimized: yes                # or: Maximized: yes / Restored: yes / Foreground: yes / Closed: yes / Enabled: yes
 ```
 
 - `focus` restores first if the target is minimized (focus won't stick on an iconic window), then re-reads the foreground window to confirm (P0.4 — `SetForegroundWindow`'s BOOL is advisory; focus-stealing prevention can block it without erroring).
 - `close` is a graceful `PostMessage(WM_CLOSE)` — the app may show a "save changes?" dialog and keep the window, reported as `Closed: no`. For a forceful process-level kill use `process kill`. No force flag: there's no clean window-level force API (`DestroyWindow` is same-thread only).
+- `enable` recovers a window left disabled (frozen) by an interrupted `--background` click — title-bar buttons still respond but every body control goes dead, because the bypass restores the window only on a Python exception, not a process kill or a hung Invoke. It walks the root + disabled descendants (UWP/WinUI content is in child windows) and never disables anything; reports `enabled_count` (how many re-enabled) and `enabled` (confirmation). See [Troubleshooting: window frozen after a background click](troubleshooting.md#window-frozen-after-a-background-click).
 - Multiple matches by title/process: the first is used and a `⚠ Matched N windows ...` warning is appended — pass the HWND for determinism.
 
 Machine-readable sibling keys: `hwnd` (int), the op state (`minimized` / `maximized` / `restored` / `foreground_confirmed` / `closed`, bool), and `warning` (str, only on multi-match). Daemon-direct clients (including `--format json`) read these; MCP/CLI text rendering uses `output`.
