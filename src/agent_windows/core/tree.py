@@ -573,7 +573,9 @@ def resolve_element(selector: str) -> ElementInfo:
         ElementInfo for the matched element.
 
     Raises:
-        ValueError: If selector format is invalid.
+        ValueError: If selector format is invalid, or no tree snapshot is
+            loaded (``@eN`` indexes a prior snapshot, so auto-traversing would
+            mask the caller bug — run ``snapshot``/``observe`` first).
         IndexError: If element index is out of range.
     """
     if not selector.startswith("@e"):

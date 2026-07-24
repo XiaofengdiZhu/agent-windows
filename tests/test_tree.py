@@ -20,6 +20,7 @@ TreeScope on the clone, both no-ops on the fake.
 (TEST3-01)
 """
 import time
+from contextlib import contextmanager
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -695,17 +696,18 @@ class TestResolveElementParsing:
     """resolve_element parses @eN then reads interactive_elements from the
     snapshot. We monkeypatch get_tree_snapshot + load_config to avoid real UIA."""
 
+    @contextmanager
     def _patch_snapshot(self, elements):
         # Patch BOTH get_tree_snapshot (so resolve_element gets the fake
         # interactive_elements without a live UIA traverse) AND _tree_cache (so
         # resolve_element's no-snapshot fail-fast sees a snapshot as loaded).
-        from contextlib import ExitStack
-        stack = ExitStack()
-        stack.enter_context(patch("agent_windows.core.tree.get_tree_snapshot",
-                                  return_value={"interactive_elements": elements}))
-        stack.enter_context(patch("agent_windows.core.tree._tree_cache",
-                                  {"interactive_elements": elements}))
-        return stack
+        # @contextmanager (not a returned ExitStack) keeps the patches active
+        # only inside the `with` block — no enter-before-with leak footgun.
+        with patch("agent_windows.core.tree.get_tree_snapshot",
+                   return_value={"interactive_elements": elements}), \
+                patch("agent_windows.core.tree._tree_cache",
+                      {"interactive_elements": elements}):
+            yield
 
     def _patch_config(self):
         return patch("agent_windows.utils.config.load_config", return_value={})
@@ -772,17 +774,18 @@ class TestResolveElementCenter:
 
     _VSCREEN = (0, 0, 1920, 1080)
 
+    @contextmanager
     def _patch_snapshot(self, elements):
         # Patch BOTH get_tree_snapshot (so resolve_element gets the fake
         # interactive_elements without a live UIA traverse) AND _tree_cache (so
         # resolve_element's no-snapshot fail-fast sees a snapshot as loaded).
-        from contextlib import ExitStack
-        stack = ExitStack()
-        stack.enter_context(patch("agent_windows.core.tree.get_tree_snapshot",
-                                  return_value={"interactive_elements": elements}))
-        stack.enter_context(patch("agent_windows.core.tree._tree_cache",
-                                  {"interactive_elements": elements}))
-        return stack
+        # @contextmanager (not a returned ExitStack) keeps the patches active
+        # only inside the `with` block — no enter-before-with leak footgun.
+        with patch("agent_windows.core.tree.get_tree_snapshot",
+                   return_value={"interactive_elements": elements}), \
+                patch("agent_windows.core.tree._tree_cache",
+                      {"interactive_elements": elements}):
+            yield
 
     def _patch_config(self):
         return patch("agent_windows.utils.config.load_config", return_value={})
@@ -834,6 +837,19 @@ class TestResolveElementCenter:
         with self._patch_snapshot([]), self._patch_config():
             with pytest.raises(ValueError, match="Invalid selector"):
                 resolve_element_center("not-a-selector")
+
+    def test_no_snapshot_loaded_fails_fast(self):
+        """resolve_element_center delegates to resolve_element, so the no-snapshot
+        fail-fast applies here too — guards against a future try/except wrapper
+        swallowing it. Asserts get_tree_snapshot is never reached."""
+        from agent_windows.core import tree as tree_mod
+        from agent_windows.core.tree import resolve_element_center
+        with patch.object(tree_mod, "_tree_cache", {}), \
+                patch.object(tree_mod, "get_tree_snapshot",
+                             side_effect=AssertionError(
+                                 "fail-fast must raise before get_tree_snapshot")):
+            with pytest.raises(ValueError, match="no tree snapshot"):
+                resolve_element_center("@e1")
 
 
 # ── child-iteration failure is swallowed (QUAL-02 outer block) ───────
