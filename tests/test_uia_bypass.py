@@ -343,28 +343,49 @@ def test_click_background_bad_selector_bubbles(monkeypatch):
         input_handlers._click({"selector": "@bad", "background": True})
 
 
-def test_click_background_non_numeric_coord_degrades_safely(monkeypatch):
-    """A non-numeric x/y (CoordinateRangeError — the same exception an off-screen
-    echo raises) degrades best-effort so delivery still fires, but the degraded
-    echo is coerced to int: the strings "invalid"/"bad" never reach
-    ControlFromPoint. (The foreground path raises -1002 for the same input;
-    background treats coords as echo-only.)"""
+def test_click_background_no_selector_bad_coord_bubbles(monkeypatch):
+    """No selector → ControlFromPoint(x, y) targets, so coords are authoritative:
+    a non-numeric x (CoordinateRangeError) must surface (→ -1002), NOT degrade
+    to a silent misclick at (0,0). (v1's broad except left the bad value in place
+    and crashed visibly at ControlFromPoint; this surfaces a clean error.)"""
     from agent_windows.daemon.router import CoordinateRangeError
 
     def _bad_coord(_params):
         raise CoordinateRangeError("coordinate 'x' must be a number, got str")
     monkeypatch.setattr(input_handlers, "_coords", _bad_coord)
 
+    def _fail_invoke(*a, **k):
+        raise AssertionError("delivery ran on a bad no-selector coord")
+    monkeypatch.setattr("agent_windows.core.uia_bypass.invoke_background",
+                        _fail_invoke)
+
+    with pytest.raises(CoordinateRangeError, match="must be a number"):
+        input_handlers._click({"x": "invalid", "y": 5, "background": True})
+
+
+def test_click_background_selector_stale_echo_degrades(monkeypatch):
+    """With a selector, coords are echo/verify-only (Invoke targets the resolved
+    element), so a stale/off-screen echo center (CoordinateRangeError) degrades
+    best-effort — delivery still fires, with the echo coerced to int so a bad
+    value never reaches the Position: line."""
+    from agent_windows.daemon.router import CoordinateRangeError
+
+    def _stale_echo(_params):
+        raise CoordinateRangeError("element center is off-screen")
+    monkeypatch.setattr(input_handlers, "_coords", _stale_echo)
+
     delivered = {}
     def _cap_invoke(x, y, selector):
-        delivered["x"], delivered["y"] = x, y
+        delivered["x"], delivered["y"], delivered["sel"] = x, y, selector
         return {"action": "invoke", "host_hwnd": 1}
     monkeypatch.setattr("agent_windows.core.uia_bypass.invoke_background",
                         _cap_invoke)
     monkeypatch.setattr(input_handlers, "_verify_enabled", lambda: False)
 
-    res = input_handlers._click({"x": "invalid", "y": "bad", "background": True})
-    assert delivered["x"] == 0 and delivered["y"] == 0  # coerced, not the strings
+    res = input_handlers._click({"selector": "@e1", "x": "stale", "y": None,
+                                 "background": True})
+    assert delivered["sel"] == "@e1"                   # selector drives targeting
+    assert delivered["x"] == 0 and delivered["y"] == 0  # bad echo coerced to int
     assert "Delivery: background (invoke)" in res["output"]
 
 

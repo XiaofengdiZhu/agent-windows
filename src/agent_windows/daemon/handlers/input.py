@@ -40,6 +40,15 @@ def _coords(params: dict) -> tuple[int, int]:
     return validate_coordinates(require(params, "x"), require(params, "y"))
 
 
+def _echo_int(v) -> int:
+    """Coerce a degraded echo coord to int (str/None/list/bool/float → 0).
+
+    Used only on the background best-effort degrade path so a non-numeric echo
+    value never reaches the Position: line (coords are echo-only there).
+    """
+    return v if isinstance(v, int) and not isinstance(v, bool) else 0
+
+
 def _verify_enabled() -> bool:
     """Whether post-op verify lines are appended to input command output.
 
@@ -154,24 +163,25 @@ def _click(params: dict) -> dict[str, Any]:
             raise BackgroundUnavailableError(
                 "background mode supports left single-click only "
                 "(no Invoke semantics for right/double); retry without --background")
-        # Pattern delivery ignores pixel coords; x/y are echo/verify-only and
-        # best-effort — a stale/off-screen echo coord (CoordinateRangeError) or a
-        # snapshot/COM hiccup (RuntimeError) must NOT fail a click whose
-        # Invoke/Toggle/Select fires regardless. Those two degrade; anything else
-        # (a bad selector → ValueError/IndexError, or an unexpected error) bubbles
-        # so a malformed request surfaces as INVALID_PARAMS instead of silently
-        # clicking (0,0). The degraded echo is coerced to int so a non-numeric
-        # value that raised never reaches ControlFromPoint as a string.
+        # Two targeting modes, from invoke_background:
+        # - selector present → Invoke fires on the resolved element; x/y are
+        #   echo/verify-only and best-effort. A stale/off-screen echo center
+        #   (CoordinateRangeError) or a snapshot/COM hiccup (RuntimeError) must
+        #   not gate delivery, so those degrade (coerced to int so a bad echo
+        #   value never reaches the Position: line). A bad selector
+        #   (ValueError/IndexError) bubbles → INVALID_PARAMS.
+        # - no selector → ControlFromPoint(x, y) IS the targeting mechanism, so
+        #   coords are authoritative: validate strictly. A non-numeric or
+        #   off-screen point surfaces (CoordinateRangeError → -1002) instead of
+        #   silently misclicking at (0,0).
         from agent_windows.daemon.router import CoordinateRangeError
-        try:
+        if selector:
+            try:
+                x, y = _coords(params)
+            except (CoordinateRangeError, RuntimeError):
+                x, y = _echo_int(params.get("x", 0)), _echo_int(params.get("y", 0))
+        else:
             x, y = _coords(params)
-        except (CoordinateRangeError, RuntimeError):
-            x = params.get("x", 0)
-            y = params.get("y", 0)
-            if not (isinstance(x, int) and not isinstance(x, bool)):
-                x = 0
-            if not (isinstance(y, int) and not isinstance(y, bool)):
-                y = 0
         res = invoke_background(x, y, selector)
         lines = ["## Click", f"Position: ({x}, {y})",
                  f"Delivery: background ({res['action']})"]
