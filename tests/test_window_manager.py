@@ -180,6 +180,80 @@ class TestClose:
         assert "Closed: yes" in r["output"]
 
 
+class TestEnable:
+    """Re-enable a window (and its disabled descendants) left disabled by an
+    interrupted ``--background`` click (EnableWindow-bypass ``finally`` only
+    runs on a Python exception, not a process kill / hung Invoke). Mirrors the
+    recovery contract: ``EnableWindow(hwnd, TRUE)`` the root if disabled, then
+    ``EnumChildWindows`` to reach any disabled children — UWP content is hosted
+    in the frame's child windows. Never disables anything; reports how many it
+    re-enabled."""
+
+    def _run(self, root_enabled: bool, children: dict[int, bool]):
+        """Track per-HWND enabled state across IsWindowEnabled/EnableWindow and
+        replay EnumChildWindows by calling back once per configured child."""
+        m32 = MagicMock()
+        state: dict[int, bool] = {100: root_enabled, **children}
+
+        def _is_enabled(h):
+            return state.get(h, True)
+
+        def _enable(h, v):
+            state[h] = bool(v)
+            return 1  # prior state, nonzero = was enabled (unused here)
+
+        def _enum(parent, enum_proc, lparam):
+            # enum_proc is a WNDENUMPROC wrapper; calling it runs _cb.
+            for c in children:
+                enum_proc(c, lparam)
+            return 1
+
+        m32.IsWindowEnabled.side_effect = _is_enabled
+        m32.EnableWindow.side_effect = _enable
+        m32.EnumChildWindows.side_effect = _enum
+        with patch.object(wm, "user32", m32), \
+             patch.object(wm, "resolve_window", return_value=(_wi(100), None)):
+            return wm.enable_window("Notepad"), m32
+
+    def test_already_enabled_noop(self):
+        r, m32 = self._run(root_enabled=True, children={})
+        assert r["enabled_count"] == 0
+        assert r["enabled"] is True
+        m32.EnableWindow.assert_not_called()
+        assert "already enabled" in r["output"]
+        assert "## Window Enable" in r["output"]
+
+    def test_disabled_root_reenabled(self):
+        r, m32 = self._run(root_enabled=False, children={})
+        assert r["enabled_count"] == 1
+        assert r["enabled"] is True
+        assert "Re-enabled" in r["output"]
+        # Root enabled with TRUE.
+        m32.EnableWindow.assert_called_once_with(100, True)
+
+    def test_disabled_children_reenabled(self):
+        # Root enabled, two disabled children + one already-enabled child.
+        r, m32 = self._run(root_enabled=True,
+                           children={200: False, 201: True, 202: False})
+        assert r["enabled_count"] == 2  # 200 and 202
+        assert r["enabled"] is True
+        enable_args = [c.args for c in m32.EnableWindow.call_args_list]
+        assert (200, True) in enable_args
+        assert (202, True) in enable_args
+        assert (201, True) not in enable_args  # already enabled, untouched
+
+    def test_never_disables(self):
+        # Across all re-enable paths, EnableWindow is never called with FALSE.
+        self._run(root_enabled=False, children={200: False})
+        _, m32 = self._run(root_enabled=True, children={200: False, 201: False})
+        for call in m32.EnableWindow.call_args_list:
+            assert call.args[1] is True or call.args[1] == 1
+
+    def test_enabled_sibling_even_if_confirmed(self):
+        r, _ = self._run(root_enabled=False, children={})
+        assert r["enabled"] is True
+
+
 class TestWarningSurfacing:
     """A multi-match warning appears in output AND as a sibling (so a
     daemon-direct caller can detect ambiguity without parsing text)."""

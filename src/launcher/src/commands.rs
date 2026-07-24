@@ -974,9 +974,9 @@ fn parse_app(rest: &[String]) -> Result<Action, ParseError> {
 }
 
 fn parse_window(rest: &[String]) -> Result<Action, ParseError> {
-    const VALID: &[&str] = &["minimize", "maximize", "restore", "close", "focus"];
+    const VALID: &[&str] = &["minimize", "maximize", "restore", "close", "focus", "enable"];
     let sub = rest.first().ok_or_else(|| {
-        missing("Missing window subcommand (minimize/maximize/restore/close/focus)")
+        missing("Missing window subcommand (minimize/maximize/restore/close/focus/enable)")
     })?;
     let p = ParsedArgs::parse(&rest[1..], &[]);
     // target is optional (default "" = the foreground window).
@@ -987,6 +987,7 @@ fn parse_window(rest: &[String]) -> Result<Action, ParseError> {
         "restore" => "window_restore",
         "close" => "window_close",
         "focus" => "window_focus",
+        "enable" => "window_enable",
         _ => return Err(unknown_subcommand("window", sub, VALID)),
     };
     Ok(Action::Call {
@@ -1534,7 +1535,7 @@ mod tests {
         for (sub, method) in [
             ("minimize", "window_minimize"), ("maximize", "window_maximize"),
             ("restore", "window_restore"), ("close", "window_close"),
-            ("focus", "window_focus"),
+            ("focus", "window_focus"), ("enable", "window_enable"),
         ] {
             match parse(&argv(&["window", sub, "Notepad"]), &g) {
                 Ok(Action::Call { method: m, params }) => {

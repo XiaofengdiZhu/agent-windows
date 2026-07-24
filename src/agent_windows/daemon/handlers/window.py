@@ -52,6 +52,17 @@ def _window_focus(params: dict) -> dict[str, Any]:
     return focus_window(_target(params))
 
 
+@handler("window_enable")
+def _window_enable(params: dict) -> dict[str, Any]:
+    """Re-enable a window stranded disabled by an interrupted --background click.
+
+    Non-destructive recovery: re-enables the root + disabled descendants.
+    ``target`` is the only parameter.
+    """
+    from agent_windows.core.window_manager import enable_window
+    return enable_window(_target(params))
+
+
 @handler("window_close")
 def _window_close(params: dict) -> dict[str, Any]:
     """Gracefully close a window via PostMessage(WM_CLOSE).

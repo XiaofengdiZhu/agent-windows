@@ -15,10 +15,10 @@ from agent_windows.cli.main import app
 runner = CliRunner()
 
 
-def test_window_group_lists_five_subcommands():
+def test_window_group_lists_six_subcommands():
     r = runner.invoke(app, ["window", "--help"])
     assert r.exit_code == 0
-    for sub in ("minimize", "maximize", "restore", "close", "focus"):
+    for sub in ("minimize", "maximize", "restore", "close", "focus", "enable"):
         assert sub in r.output
 
 
@@ -28,6 +28,7 @@ def test_window_group_lists_five_subcommands():
     ("restore", "window_restore"),
     ("close", "window_close"),
     ("focus", "window_focus"),
+    ("enable", "window_enable"),
 ])
 def test_subcommand_forwards_target(sub, method):
     with patch("agent_windows.cli.commands.window._cmd") as m:

@@ -480,7 +480,7 @@ def test_process_list_fn_forwards_filter_params():
     m.assert_called_once_with("process_list", sort_by="cpu", limit=10, name="edge")
 
 
-@pytest.mark.parametrize("op", ["minimize", "maximize", "restore", "close", "focus"])
+@pytest.mark.parametrize("op", ["minimize", "maximize", "restore", "close", "focus", "enable"])
 def test_window_op_fn_forwards_target(op):
     """Each window_<op>_fn forwards method window_<op> + target and returns the
     str output (siblings never leak — MCP reads only `output`). P4.2 added these

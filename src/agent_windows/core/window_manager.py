@@ -25,6 +25,13 @@ user32 = ctypes.windll.user32
 user32.GetForegroundWindow.restype = ctypes.wintypes.HWND
 user32.IsWindow.restype = ctypes.wintypes.BOOL
 
+# EnumChildWindows callback signature (BOOL CALLBACK). Hosted as a module-level
+# factory so enable_window can build a fresh pointer per call; EnumChildWindows
+# must never reuse a ctypes callback object after it has been GC'd, but here the
+# pointer is held alive by the call frame for the duration of the enumeration.
+WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.wintypes.BOOL, ctypes.wintypes.HWND,
+                                 ctypes.wintypes.LPARAM)
+
 WM_CLOSE = 0x0010
 # WM_CLOSE is asynchronous — the app receives it on its own message loop and
 # may take a beat to tear down (or show a save-changes dialog). Poll IsWindow a
@@ -138,3 +145,55 @@ def close_window(target: str = "") -> dict[str, Any]:
     state = ("Closed: yes" if gone
              else "Closed: no (window remains — app may be prompting to save)")
     return _result("Close", title, hwnd, state, warn, closed=gone)
+
+
+def _enable_subtree(hwnd: int) -> tuple[bool, int]:
+    """Re-enable ``hwnd`` and any of its disabled descendants.
+
+    Returns ``(root_was_disabled, children_reenabled)``. ``EnableWindow(hwnd,
+    TRUE)`` the root only if it is currently disabled, then ``EnumChildWindows``
+    walks the subtree — UWP/WinUI content is hosted in the frame's child
+    windows, so a stranded disable can affect descendants too. Never disables
+    anything; an already-enabled window (root or child) is left untouched.
+    """
+    root_was_disabled = not bool(user32.IsWindowEnabled(hwnd))
+    children_reenabled = 0
+
+    def _cb(child, _lparam):
+        nonlocal children_reenabled
+        if not user32.IsWindowEnabled(child):
+            user32.EnableWindow(child, True)
+            children_reenabled += 1
+        return True
+
+    if root_was_disabled:
+        user32.EnableWindow(hwnd, True)
+    user32.EnumChildWindows(hwnd, WNDENUMPROC(_cb), 0)
+    return root_was_disabled, children_reenabled
+
+
+def enable_window(target: str = "") -> dict[str, Any]:
+    """Re-enable a window stranded disabled by an interrupted ``--background`` click.
+
+    The EnableWindow-bypass ``finally`` restores the host window on a Python
+    exception, but not on a process kill or a UIA Invoke that hangs — the window
+    is left disabled (title-bar min/max/close still work, body buttons dead).
+    This walks the root + children re-enabling anything disabled and reports
+    how many it touched. Never disables. ``target`` resolves like the other
+    window ops; no target = the foreground window.
+    """
+    hwnd, title, warn = _resolve(target)
+    root_was_disabled, children_reenabled = _enable_subtree(hwnd)
+    total = (1 if root_was_disabled else 0) + children_reenabled
+    confirmed = bool(user32.IsWindowEnabled(hwnd))
+    if total == 0:
+        state = "Enabled: yes (already enabled)"
+    else:
+        parts = []
+        if root_was_disabled:
+            parts.append("root")
+        if children_reenabled:
+            parts.append(f"{children_reenabled} child window(s)")
+        state = f"Re-enabled: {total} window(s) ({', '.join(parts)})"
+    return _result("Enable", title, hwnd, state, warn,
+                   enabled_count=total, enabled=confirmed)

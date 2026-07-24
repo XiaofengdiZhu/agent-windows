@@ -11,7 +11,7 @@ from agent_windows.cli.dispatcher import _cmd
 _TARGET_HELP = ("Window HWND (e.g. 0x1234), title substring, or process name "
                 "(default: the foreground window)")
 
-window_cmd = typer.Typer(help="Window management (minimize/maximize/restore/close/focus)")
+window_cmd = typer.Typer(help="Window management (minimize/maximize/restore/close/focus/enable)")
 
 
 @window_cmd.command("minimize")
@@ -47,3 +47,10 @@ def window_focus(ctx: typer.Context,
                  target: str = typer.Argument("", help=_TARGET_HELP)) -> None:
     """Focus (bring to foreground) a window."""
     _cmd(ctx, "window_focus", target=target)
+
+
+@window_cmd.command("enable")
+def window_enable(ctx: typer.Context,
+                  target: str = typer.Argument("", help=_TARGET_HELP)) -> None:
+    """Re-enable a window left disabled by an interrupted --background click."""
+    _cmd(ctx, "window_enable", target=target)

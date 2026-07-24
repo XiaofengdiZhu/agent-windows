@@ -54,6 +54,10 @@ def window_close_fn(target: str = "") -> str:
     return str(_call("window_close", target=target).get("output", ""))
 
 
+def window_enable_fn(target: str = "") -> str:
+    return str(_call("window_enable", target=target).get("output", ""))
+
+
 # ── shell ──────────────────────────────────────────────────────────────
 
 def shell_fn(command: str, timeout: int | None = None) -> str:
@@ -253,6 +257,15 @@ def register(mcp) -> None:
     ), annotations=_REG(title="Window Close", readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False))
     def _window_close(target: str = "") -> str:
         return window_close_fn(target=target)
+
+    @mcp.tool(name="window_enable", description=(
+        "Re-enable a window left disabled by an interrupted background click "
+        "(title bar works, body buttons dead). target is a window HWND, title "
+        "substring, or process name; omit for the foreground window. "
+        "Keywords: enable window, unfreeze window, unblock window, re-enable window."
+    ), annotations=_REG(title="Window Enable", readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))
+    def _window_enable(target: str = "") -> str:
+        return window_enable_fn(target=target)
 
     @mcp.tool(name="shell", description=(
         "Run a PowerShell command and return stdout/stderr. "

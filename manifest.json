@@ -106,6 +106,7 @@
     { "name": "wait", "description": "Wait for a duration, an element (@eN selector) to appear, or text to appear in an interactive element's name." },
     { "name": "wait_for", "description": "Wait until a UI condition holds." },
     { "name": "window_close", "description": "Close a window gracefully (the app may prompt to save). target is a HWND, title substring, or process name; omit for the foreground window." },
+    { "name": "window_enable", "description": "Re-enable a window left disabled by an interrupted background click (title bar works, body buttons dead). target is a HWND, title substring, or process name; omit for the foreground window." },
     { "name": "window_focus", "description": "Focus (bring to foreground) a window. target is a HWND, title substring, or process name; omit for the foreground window." },
     { "name": "window_maximize", "description": "Maximize a window. target is a HWND, title substring, or process name; omit for the foreground window." },
     { "name": "window_minimize", "description": "Minimize a window. target is a HWND, title substring, or process name; omit for the foreground window." },

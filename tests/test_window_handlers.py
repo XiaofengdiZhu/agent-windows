@@ -16,6 +16,7 @@ _NON_DESTRUCTIVE = [
     ("window_maximize", "maximize_window"),
     ("window_restore", "restore_window"),
     ("window_focus", "focus_window"),
+    ("window_enable", "enable_window"),
 ]
 
 

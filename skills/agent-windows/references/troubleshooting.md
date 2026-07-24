@@ -86,6 +86,40 @@ agent-windows observe
 2. Re-observe after any action that might shift the UI
 3. Verify with `observe` after clicking
 
+## Window Frozen After a Background Click
+
+**Symptom**: After a `click --background`, the target window appears frozen —
+the title-bar minimize/maximize/close buttons still work, but every button and
+control in the window body is dead.
+
+**Cause**: `--background` works by wrapping the UIA Invoke/Toggle/Select
+pattern in `EnableWindow(host, FALSE) … pattern() … EnableWindow(host, TRUE)`.
+The kernel accessibility channel carries the pattern while the host top-level
+window *cannot* become foreground — no focus steal, no flash. A `finally` block
+restores the window on a Python exception, but **not** if the daemon is killed
+mid-bypass (e.g. `Stop-Process`, host crash) or the UIA `Invoke` call itself
+hangs. The window is then stranded in the disabled state — only title-bar
+chrome, which Win32 keeps on a separate code path, stays responsive.
+
+**Recovery**: `window enable` re-enables the root window plus any disabled
+descendants (UWP/WinUI content is hosted in the frame's child windows). It never
+disables anything:
+
+```bash
+agent-windows window enable          # the frozen foreground window
+agent-windows window enable "Calc"   # by title substring / HWND / process
+```
+
+The output reports how many windows were re-enabled (`enabled_count` /
+`enabled` siblings). `0` means the window was already enabled — the freeze has
+another cause (see "UIA Tree Is Empty or Incomplete"). From an MCP client the
+tool is `window_enable`.
+
+**Prevention**: don't kill the daemon while a `--background` click is in flight.
+If a background click hangs, the per-submit `STA_SUBMIT_TIMEOUT_S` (300 s,
+advisory) disconnects the request but cannot cancel the in-flight UIA call —
+recover the stranded window with `window enable` afterward.
+
 ## Type Doesn't Work
 
 **Causes**:
@@ -165,6 +199,7 @@ agent-windows observe
 | `-1003` | `WAIT_TIMEOUT` | `wait`/`wait-for` exceeded timeout, or a `shell` command exceeded `shell.timeout` |
 | `-1004` | `PERMISSION_DENIED` | UAC or access denied |
 | `-1005` | `VISION_API_ERROR` | Vision model API call failed |
+| `-1007` | `BACKGROUND_UNAVAILABLE` | A `--background` click could not land (no Invoke/Toggle/Select pattern, occluded UI-virtualized element, or host window has no HWND); retry foreground |
 | `-1999` | `DAEMON_INTERNAL_ERROR` | Unhandled exception in daemon |
 
 ## Debug Mode
