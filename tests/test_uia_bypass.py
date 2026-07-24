@@ -51,3 +51,20 @@ def test_run_with_uia_bypass_restores_prior_disabled_state(monkeypatch):
     bypass.run_with_uia_bypass(7, lambda: None)
 
     assert calls == [False, False]
+
+
+from agent_windows.daemon.router import handler, route_request
+from agent_windows.ipc.protocol import JSONRPCRequest, BACKGROUND_UNAVAILABLE
+
+
+def test_route_request_maps_background_unavailable():
+    @handler("__test_bg_unavail__")
+    def _raises(_params):
+        raise bypass.BackgroundUnavailableError("no invoke pattern")
+
+    req = JSONRPCRequest(id=1, method="__test_bg_unavail__", params={})
+    resp = route_request(req)
+
+    assert resp.error is not None
+    assert resp.error["code"] == BACKGROUND_UNAVAILABLE
+    assert "no invoke pattern" in resp.error["message"]

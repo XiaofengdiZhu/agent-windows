@@ -21,6 +21,7 @@ from agent_windows.ipc.protocol import (
     DAEMON_INTERNAL_ERROR,
     WAIT_TIMEOUT,
     PERMISSION_DENIED,
+    BACKGROUND_UNAVAILABLE,
 )
 from agent_windows.uia.exceptions import (
     UIAException,
@@ -32,6 +33,7 @@ from agent_windows.uia.exceptions import (
     UIATimeoutError,
     UIAAccessDeniedError,
 )
+from agent_windows.core.uia_bypass import BackgroundUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -239,6 +241,11 @@ def route_request(request: JSONRPCRequest) -> JSONRPCResponse:
             # Both = "request is valid JSON-RPC but the element can't satisfy it"
             # (disabled element, or unsupported property/pattern) → INVALID_PARAMS.
             return make_error(INVALID_PARAMS, str(e), request.id)
+        except BackgroundUnavailableError as e:
+            # Background delivery can't land (no Invoke/Toggle/Select pattern,
+            # no live control, no host HWND, or pattern COM failure). The caller
+            # decides whether to retry the default (foreground) path.
+            return make_error(BACKGROUND_UNAVAILABLE, str(e), request.id)
         except UIATimeoutError as e:
             # UIA/RPC timeout — the typed mirror of the stdlib TimeoutError clause
             # above: WAIT_TIMEOUT (-1003). (TODO #6 decision 2)
