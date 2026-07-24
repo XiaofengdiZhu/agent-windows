@@ -333,6 +333,15 @@ agent-windows click -s @e3                          # short form
 
 **Output**: `{output}`
 
+> **`click --background` (no-focus-steal).** `click -s @eN --background`
+> delivers the click through the element's UIA pattern (Invoke/Toggle/Select)
+> wrapped in an `EnableWindow` bypass, so the target fires **without stealing
+> foreground or flashing** — drive a background app while the user keeps typing
+> in another window. Left single-click only (no `--right`/`--double`); errors
+> with `BACKGROUND_UNAVAILABLE (-1007)` if the element exposes no invokable
+> pattern, so retry without `--background`. The `Focus:` verify line is
+> unchanged on success — that's the proof no focus moved.
+
 ### dblclick
 
 Double-click at coordinates or an element.
