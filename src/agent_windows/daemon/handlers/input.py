@@ -59,18 +59,54 @@ def _verify_enabled() -> bool:
     return bool(load_config().get("input", {}).get("verify", True))
 
 
-def _append_hit_focus(lines: list[str], x: int, y: int) -> None:
+def _resolve_verify_control(selector):
+    """Best-effort live UIA ``Control`` for selector-path verify (D3 Task 4).
+
+    Returns None when ``selector`` is falsy (coordinate path — nothing to
+    resolve) or when ``_resolve_live_control`` raises (element rebuilt/hidden
+    post-op, owning window closed, provider disconnecting mid-FindFirst). verify
+    must never block a successful op, so every failure degrades to None and the
+    caller falls back to ``hit_element_at(x, y)``. Lazy import keeps this off the
+    launcher cold path.
+    """
+    if not selector:
+        return None
+    try:
+        from agent_windows.core.tree import _resolve_live_control
+        return _resolve_live_control(selector)
+    except Exception:
+        return None
+
+
+def _append_hit_focus(lines: list[str], x: int, y: int,
+                      control=None) -> None:
     """Append best-effort Hit + Focus verify lines (P0.1).
 
-    Never raises — the tree helpers are already fault-tolerant (degrade to
-    None/empty) and this wraps them in a second guard, so a successful op can
-    never become an error from verify. No-op when verify is disabled.
+    D3 Task 4: when ``control`` is given (selector path — the FindFirst-resolved
+    live element), ``Hit:`` reads it via ``hit_element_of(control)`` instead of
+    ``hit_element_at(x, y)`` (which is ``ControlFromPoint`` = visual z-order
+    topmost, wrong for an occluded target). Falls back to ``hit_element_at`` if
+    ``control`` is None, the read returns None, or raises. Never raises — the
+    tree helpers are already fault-tolerant (degrade to None/empty) and this
+    wraps them in a second guard, so a successful op can never become an error
+    from verify. No-op when verify is disabled.
     """
     if not _verify_enabled():
         return
-    from agent_windows.core.tree import hit_element_at, foreground_window
+    from agent_windows.core.tree import (
+        hit_element_at, hit_element_of, foreground_window)
     try:
-        hit = hit_element_at(x, y)
+        hit = None
+        if control is not None:
+            # Per-call guard: a raise from hit_element_of degrades to None so
+            # the hit_element_at fallback below runs (the outer try/except
+            # alone would skip the fallback entirely on a raise).
+            try:
+                hit = hit_element_of(control)
+            except Exception:
+                hit = None
+        if hit is None:
+            hit = hit_element_at(x, y)
         lines.append(
             f"Hit: {hit['control_type']} \"{hit['name']}\""
             if hit else "Hit: (none)")
@@ -81,19 +117,34 @@ def _append_hit_focus(lines: list[str], x: int, y: int) -> None:
         pass
 
 
-def _append_drop_slider(lines: list[str], x2: int, y2: int) -> None:
+def _append_drop_slider(lines: list[str], x2: int, y2: int,
+                        control=None) -> None:
     """Append best-effort Drop + Slider verify lines for drag (P0.3).
 
-    Single hit-test at the destination (x2, y2): the drop target element, and —
-    if that element exposes a RangeValue/Scroll pattern — the post-drag slider
+    D3 Task 4: when ``control`` is given (selector path), ``Drop:`` reads it via
+    ``hit_element_of``; else ``hit_element_at(x2, y2)``. Same degrade-on-failure
+    rule as ``_append_hit_focus``.
+
+    Single hit-test at the destination: the drop target element, and — if that
+    element exposes a RangeValue/Scroll pattern — the post-drag slider
     percentage. File drags surface Drop only; slider drags surface both. Never
     raises; no-op when verify is disabled.
     """
     if not _verify_enabled():
         return
-    from agent_windows.core.tree import hit_element_at, range_percent_at
+    from agent_windows.core.tree import (
+        hit_element_at, hit_element_of, range_percent_at)
     try:
-        drop = hit_element_at(x2, y2)
+        drop = None
+        if control is not None:
+            # Same per-call guard as _append_hit_focus: a raise here must
+            # degrade to None so hit_element_at runs (not skip the fallback).
+            try:
+                drop = hit_element_of(control)
+            except Exception:
+                drop = None
+        if drop is None:
+            drop = hit_element_at(x2, y2)
         if drop:
             lines.append(f"Drop: {drop['control_type']} \"{drop['name']}\"")
         pct = range_percent_at(x2, y2)
@@ -195,7 +246,14 @@ def _click(params: dict) -> dict[str, Any]:
             lines.append("Button: right")
         if double:
             lines.append("Double: true")
-    _append_hit_focus(lines, x, y)  # Focus: line unchanged on success ⇒ bypass worked
+    # D3 Task 4: selector (non-background) path — verify reads the
+    # FindFirst-resolved control, not ElementFromPoint at the click coord (which
+    # would name the visual z-order topmost if the element is occluded).
+    # Background delivery uses Invoke and is excluded: coords are echo-only on
+    # that branch. Best-effort: a FindFirst miss (element rebuilt/hidden
+    # post-click — common) degrades to None and verify falls back to coords.
+    verify_control = None if background else _resolve_verify_control(selector)
+    _append_hit_focus(lines, x, y, control=verify_control)
     return {"output": "\n".join(lines)}
 
 
@@ -206,11 +264,13 @@ def _dblclick(params: dict) -> dict[str, Any]:
 
     x, y = _coords(params)
     right = params.get("right", False)
+    selector = params.get("selector")
     click(x, y, right=right, double=True)
     lines = ["## Double Click", f"Position: ({x}, {y})"]
     if right:
         lines.append("Button: right")
-    _append_hit_focus(lines, x, y)  # P0.1: post-op verify
+    _append_hit_focus(lines, x, y,
+                      control=_resolve_verify_control(selector))  # D3 Task 4
     return {"output": "\n".join(lines)}
 
 
@@ -220,9 +280,11 @@ def _hover(params: dict) -> dict[str, Any]:
     from agent_windows.core.input_controller import hover
 
     x, y = _coords(params)
+    selector = params.get("selector")
     hover(x, y)
     lines = ["## Hover", f"Position: ({x}, {y})"]
-    _append_hit_focus(lines, x, y)  # P0.1: post-op verify
+    _append_hit_focus(lines, x, y,
+                      control=_resolve_verify_control(selector))  # D3 Task 4
     return {"output": "\n".join(lines)}
 
 
@@ -346,7 +408,10 @@ def _type(params: dict) -> dict[str, Any]:
     if caret_position != "idle":
         lines.append(f"Caret: {caret_position}")
     if clicked:
-        _append_hit_focus(lines, ax, ay)  # P0.1: verify what the click hit
+        # D3 Task 4: at_selector path verify reads the FindFirst-resolved
+        # control; at_x/at_y path passes None (no selector) → hit_element_at.
+        _append_hit_focus(lines, ax, ay,
+                          control=_resolve_verify_control(at_selector))
     sibling = _append_field_diff(lines, pre, post)  # P0.2: field-value diff
     result: dict[str, Any] = {"output": "\n".join(lines)}
     if sibling is not None:
@@ -407,9 +472,11 @@ def _move(params: dict) -> dict[str, Any]:
     from agent_windows.core.input_controller import move_to
 
     x, y = _coords(params)
+    selector = params.get("selector")
     move_to(x, y)
     lines = ["## Move", f"Position: ({x}, {y})"]
-    _append_hit_focus(lines, x, y)  # P0.1: post-op verify
+    _append_hit_focus(lines, x, y,
+                      control=_resolve_verify_control(selector))  # D3 Task 4
     return {"output": "\n".join(lines)}
 
 

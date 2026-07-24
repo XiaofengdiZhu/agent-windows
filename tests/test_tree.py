@@ -1639,6 +1639,40 @@ class TestVerifyHelpers:
         with patch("agent_windows.uia.controls.ControlFromPoint", return_value=ctrl):
             assert hit_element_at(0, 0) is None
 
+    # ── hit_element_of (D3 Task 4): selector-path verify label ──────────
+    # Mirrors hit_element_at's tests but takes the control directly (e.g. a
+    # FindFirst result) instead of resolving it via ControlFromPoint. Shares
+    # _control_label with hit_element_at, so the Hit:/Drop: line format is
+    # identical regardless of which path produced it.
+
+    def test_hit_element_of_returns_compact_label(self):
+        from agent_windows.core.tree import hit_element_of
+        r = hit_element_of(self._ctrl("ButtonControl", "OK"))
+        assert r == {"control_type": "Button", "name": "OK"}
+
+    def test_hit_element_of_truncates_long_name(self):
+        from agent_windows.core.tree import hit_element_of
+        r = hit_element_of(self._ctrl("EditControl", "z" * 100))
+        assert r["control_type"] == "Edit"
+        assert r["name"] == "z" * 40 + "...(+60)"
+
+    def test_hit_element_of_strips_control_suffix(self):
+        from agent_windows.core.tree import hit_element_of
+        r = hit_element_of(self._ctrl("ListItemControl", "Row 3"))
+        assert r["control_type"] == "ListItem"
+
+    def test_hit_element_of_none_on_none_control(self):
+        from agent_windows.core.tree import hit_element_of
+        assert hit_element_of(None) is None
+
+    def test_hit_element_of_swallows_label_read_failure(self):
+        """verify must never raise — a property access failure degrades to None."""
+        from agent_windows.core.tree import hit_element_of
+        ctrl = MagicMock()
+        ctrl.ControlTypeName = "ButtonControl"
+        type(ctrl).Name = property(lambda self: (_ for _ in ()).throw(COMError("x", 0, None)))
+        assert hit_element_of(ctrl) is None
+
     def test_range_percent_rangevalue(self):
         from agent_windows.core.tree import range_percent_at
         props = {PropertyId.RangeValueValueProperty: 6,

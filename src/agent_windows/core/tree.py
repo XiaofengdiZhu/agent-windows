@@ -811,6 +811,24 @@ def _truncate_with_count(s: str, limit: int) -> str:
     return s[:limit] + f"...(+{len(s) - limit})"
 
 
+def _control_label(control) -> dict[str, Any] | None:
+    """Best-effort compact ``{control_type, name}`` label for a LIVE UIA
+    ``control`` (name truncated P3.7-style, ``ControlTypeName`` stripped of
+    the ``Control`` suffix). Returns None on any read failure — shared by
+    ``hit_element_at`` (coordinate path, ``ControlFromPoint``) and
+    ``hit_element_of`` (selector path, FindFirst-resolved control) so the
+    ``Hit:`` / ``Drop:`` line format is identical regardless of how the
+    control was obtained. Never raises.
+    """
+    try:
+        ctype = control.ControlTypeName.replace("Control", "")
+        name = _truncate_with_count(control.Name or "", 40)
+    except Exception:
+        logger.debug("verify: control label read failed", exc_info=True)
+        return None
+    return {"control_type": ctype, "name": name}
+
+
 def hit_element_at(x: int, y: int) -> dict[str, Any] | None:
     """Best-effort: the live UIA element under (x, y) as a compact
     ``{control_type, name}`` (name truncated P3.7-style). Returns None if the
@@ -827,13 +845,24 @@ def hit_element_at(x: int, y: int) -> dict[str, Any] | None:
         return None
     if control is None:
         return None
-    try:
-        ctype = control.ControlTypeName.replace("Control", "")
-        name = _truncate_with_count(control.Name or "", 40)
-    except Exception:
-        logger.debug("verify: control label read failed", exc_info=True)
+    return _control_label(control)
+
+
+def hit_element_of(control) -> dict[str, Any] | None:
+    """Best-effort label of a LIVE ``control`` as ``{control_type, name}``
+    (name truncated P3.7-style). Mirror of ``hit_element_at`` that takes the
+    control directly (e.g. a ``FindFirst`` result from
+    ``_resolve_live_control``) instead of resolving it by coordinate — so
+    post-op verify on the selector path reads the intended element, not the
+    visual z-order topmost under the click point (D3 Task 4). Returns None
+    when ``control`` is None or any read fails (verify must never raise).
+
+    Powers the ``Hit:`` line on click/dblclick/hover/move and the ``Drop:``
+    line on drag when the handler resolved the live control via a selector.
+    """
+    if control is None:
         return None
-    return {"control_type": ctype, "name": name}
+    return _control_label(control)
 
 
 def range_percent_at(x: int, y: int) -> int | None:
