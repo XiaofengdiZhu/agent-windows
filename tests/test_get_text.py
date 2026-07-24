@@ -9,6 +9,9 @@ from agent_windows.core.tree import BoundingBox, resolve_element, get_tree_snaps
 # ── resolve_element tests ───────────────────────────────────────────
 
 
+# Non-empty _tree_cache so resolve_element's no-snapshot fail-fast passes;
+# get_tree_snapshot is still mocked to return the fake elements.
+@patch("agent_windows.core.tree._tree_cache", {"interactive_elements": []})
 @patch("agent_windows.core.tree.get_tree_snapshot")
 @patch("agent_windows.utils.config.load_config")
 def test_resolve_element_valid(mock_config, mock_snapshot, make_element):
@@ -21,6 +24,9 @@ def test_resolve_element_valid(mock_config, mock_snapshot, make_element):
     assert result.name == "el2"
 
 
+# Non-empty _tree_cache so resolve_element's no-snapshot fail-fast passes;
+# get_tree_snapshot is still mocked to return the fake elements.
+@patch("agent_windows.core.tree._tree_cache", {"interactive_elements": []})
 @patch("agent_windows.core.tree.get_tree_snapshot")
 @patch("agent_windows.utils.config.load_config")
 def test_resolve_element_first(mock_config, mock_snapshot, make_element):
@@ -33,6 +39,9 @@ def test_resolve_element_first(mock_config, mock_snapshot, make_element):
     assert result.name == "first"
 
 
+# Non-empty _tree_cache so resolve_element's no-snapshot fail-fast passes;
+# get_tree_snapshot is still mocked to return the fake elements.
+@patch("agent_windows.core.tree._tree_cache", {"interactive_elements": []})
 @patch("agent_windows.core.tree.get_tree_snapshot")
 @patch("agent_windows.utils.config.load_config")
 def test_resolve_element_out_of_range(mock_config, mock_snapshot, make_element):

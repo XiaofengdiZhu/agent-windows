@@ -696,8 +696,16 @@ class TestResolveElementParsing:
     snapshot. We monkeypatch get_tree_snapshot + load_config to avoid real UIA."""
 
     def _patch_snapshot(self, elements):
-        return patch("agent_windows.core.tree.get_tree_snapshot",
-                     return_value={"interactive_elements": elements})
+        # Patch BOTH get_tree_snapshot (so resolve_element gets the fake
+        # interactive_elements without a live UIA traverse) AND _tree_cache (so
+        # resolve_element's no-snapshot fail-fast sees a snapshot as loaded).
+        from contextlib import ExitStack
+        stack = ExitStack()
+        stack.enter_context(patch("agent_windows.core.tree.get_tree_snapshot",
+                                  return_value={"interactive_elements": elements}))
+        stack.enter_context(patch("agent_windows.core.tree._tree_cache",
+                                  {"interactive_elements": elements}))
+        return stack
 
     def _patch_config(self):
         return patch("agent_windows.utils.config.load_config", return_value={})
@@ -738,6 +746,21 @@ class TestResolveElementParsing:
             with pytest.raises(ValueError, match="Invalid selector"):
                 resolve_element("@eabc")
 
+    def test_no_snapshot_loaded_fails_fast(self):
+        """An @eN ref with no snapshot loaded fails fast (ValueError) instead of
+        auto-traversing the live UIA tree — which on a host without COM
+        initialized for the walk is a native COM fatal (0x80040155 SEH), and even
+        where it works would silently index into an unrelated fresh tree, masking
+        the caller bug. resolve_element must NOT reach get_tree_snapshot (the
+        mock asserts it never runs)."""
+        from agent_windows.core import tree as tree_mod
+        with patch.object(tree_mod, "_tree_cache", {}), \
+                patch.object(tree_mod, "get_tree_snapshot",
+                             side_effect=AssertionError(
+                                 "fail-fast must raise before get_tree_snapshot")):
+            with pytest.raises(ValueError, match="no tree snapshot"):
+                resolve_element("@e3")
+
 
 # ── resolve_element_center @eN → bbox center (TODO #13) ──────────────
 
@@ -750,8 +773,16 @@ class TestResolveElementCenter:
     _VSCREEN = (0, 0, 1920, 1080)
 
     def _patch_snapshot(self, elements):
-        return patch("agent_windows.core.tree.get_tree_snapshot",
-                     return_value={"interactive_elements": elements})
+        # Patch BOTH get_tree_snapshot (so resolve_element gets the fake
+        # interactive_elements without a live UIA traverse) AND _tree_cache (so
+        # resolve_element's no-snapshot fail-fast sees a snapshot as loaded).
+        from contextlib import ExitStack
+        stack = ExitStack()
+        stack.enter_context(patch("agent_windows.core.tree.get_tree_snapshot",
+                                  return_value={"interactive_elements": elements}))
+        stack.enter_context(patch("agent_windows.core.tree._tree_cache",
+                                  {"interactive_elements": elements}))
+        return stack
 
     def _patch_config(self):
         return patch("agent_windows.utils.config.load_config", return_value={})

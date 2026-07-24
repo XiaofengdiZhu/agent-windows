@@ -585,6 +585,20 @@ def resolve_element(selector: str) -> ElementInfo:
     if index < 0:
         raise ValueError(f"Invalid selector: {selector!r} (index must be ≥ 1)")
 
+    # Fail fast before any live UIA walk: an @eN ref indexes a PRIOR snapshot's
+    # interactive-element list, so resolving one with no snapshot loaded is
+    # meaningless — ``get_tree_snapshot`` would otherwise auto-traverse the live
+    # UIA tree (a native COM fatal 0x80040155 on hosts without COM initialized
+    # for the walk, and a wasted traversal even where it works) and silently
+    # index into an unrelated fresh tree, masking the caller bug. Require an
+    # explicit ``snapshot``/``observe`` first. (TODO #3)
+    with _tree_cache_lock:
+        snapshot_loaded = bool(_tree_cache)
+    if not snapshot_loaded:
+        raise ValueError(
+            "no tree snapshot loaded — run `snapshot` or `observe` before using "
+            "an @eN element selector")
+
     from agent_windows.utils.config import load_config
     cfg = load_config().get("tree", {})
     data = get_tree_snapshot(
