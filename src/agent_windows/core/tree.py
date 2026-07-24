@@ -735,8 +735,11 @@ def _resolve_live_control(selector: str):
             ``resolve_element``); FindFirst miss (element destroyed →
             "Re-snapshot and retry"); owning window closed
             (``ControlFromHandle`` None → "window ... closed since snapshot").
-        UIADeadElementError: target process died during the reverse-lookup
-            (coordinate fallback path only, TODO #6 decision 2).
+        UIADeadElementError: target process died during the lookup — either
+            ``ControlFromHandle`` (owning window tearing down) or
+            ``FindFirst``/``create_runtime_id_condition`` (provider disconnecting
+            mid-call) raised COMError, mapped via ``from_com_error``. Also from
+            the coordinate fallback path (TODO #6 decision 2).
         CoordinateRangeError: bbox center off-screen (coordinate fallback).
         IndexError: out-of-range @eN index (propagated from resolve_element).
     """
@@ -752,7 +755,14 @@ def _resolve_live_control(selector: str):
         return _resolve_live_via_point(selector)
 
     if el.window_handle:
-        root = ControlFromHandle(el.window_handle)
+        # ControlFromHandle hits the live UIA provider of the owning process;
+        # if that process is tearing down mid-call it raises COMError (e.g.
+        # RPC_E_DISCONNECTED) which must surface as a typed UIAException, not
+        # DAEMON_INTERNAL_ERROR. Same wrap as FindFirst below.
+        try:
+            root = ControlFromHandle(el.window_handle)
+        except COMError as e:
+            raise from_com_error(e) from e
         if root is None:
             # Owning window closed since the snapshot — a stale @eN ref. Don't
             # fall back to coordinates (the whole window is gone); surface as a
@@ -765,9 +775,13 @@ def _resolve_live_control(selector: str):
         # No owning window recorded (legacy/0 HWND) → search the whole desktop.
         root = _AutomationClient.instance().IUIAutomation.GetRootElement()
 
+    # Both calls go through the live UIA provider: create_runtime_id_condition
+    # builds a typed SAFEARRAY VARIANT via IUIAutomation.CreatePropertyCondition,
+    # and FindFirst walks the tree. Wrap them together so either's COMError
+    # (provider disconnecting mid-condition-build or mid-walk) surfaces typed.
     # typed SAFEARRAY(I4); see uia.core.create_runtime_id_condition (spike R2).
-    cond = create_runtime_id_condition(rid)
     try:
+        cond = create_runtime_id_condition(rid)
         control = root.FindFirst(TreeScope.TreeScope_Subtree, cond)
     except COMError as e:
         raise from_com_error(e) from e

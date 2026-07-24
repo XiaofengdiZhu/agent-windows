@@ -2937,6 +2937,33 @@ def test_resolve_live_control_empty_rid_falls_back_to_point(monkeypatch):
     assert ctrl == "POINT_CONTROL"
 
 
+def test_resolve_live_via_point_comerror_maps_to_typed(monkeypatch):
+    """Empty-rid coordinate fallback: ControlFromPoint raising COMError must
+    surface as a typed UIAException (via from_com_error), not leak as
+    DAEMON_INTERNAL_ERROR. Covers the `_resolve_live_via_point` COMError arm
+    that the expand_collapse suite (which patches _resolve_live_control
+    directly) leaves uncovered. RPC_E_DISCONNECTED → UIADeadElementError."""
+    from agent_windows.core.tree import _resolve_live_control
+    from agent_windows.uia.exceptions import UIADeadElementError
+
+    el = ElementInfo(name="OK", control_type="ButtonControl",
+                     bbox=BoundingBox(10, 20, 30, 40),
+                     window_handle=777, runtime_id=())  # empty → point fallback
+    monkeypatch.setattr(tree, "resolve_element", lambda sel: el)
+    monkeypatch.setattr(tree, "resolve_element_center", lambda sel: (20, 30))
+    # Raw IUIAutomation.ElementFromPoint with no internal COM wrap — a dead
+    # target raises COMError directly. Match the construction used by the
+    # traversal suite's dead-element test.
+    monkeypatch.setattr(
+        "agent_windows.uia.controls.ControlFromPoint",
+        lambda x, y: (_ for _ in ()).throw(
+            COMError(UIAError.RPC_E_DISCONNECTED, "gone",
+                     (None, None, None, None, None))))
+
+    with pytest.raises(UIADeadElementError):
+        _resolve_live_control("@e1")
+
+
 def test_resolve_live_control_window_closed_raises(monkeypatch):
     """window_handle set but ControlFromHandle returns None (window closed
     since snapshot) -> stale raise."""
