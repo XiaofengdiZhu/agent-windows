@@ -111,6 +111,8 @@ class _FakeControl:
 
     def GetAncestorControl(self, condition):
         # condition(control, depth) -> bool; the real walker looks for WindowControl.
+        # The fake holds a single ancestor, so both branches return it; the
+        # ``condition`` check is decorative, kept only to mirror the real walker.
         if self._ancestor_window is not None and condition(self._ancestor_window, -1):
             return self._ancestor_window
         return self._ancestor_window
@@ -126,7 +128,21 @@ def _comerror():
     return COMError(0x80004005, "fail", (None, None, 0, None, None))
 
 
-def test_invoke_via_pattern_prefers_invoke(monkeypatch):
+@pytest.fixture
+def no_real_enable_window(monkeypatch):
+    """Stub the real Win32 ``EnableWindow`` for invoke_background tests.
+
+    Bogus HWNDs (555/321/888/0) can collide with live recycled windows on the
+    test host and disable them mid-run, so no invoke_background test may reach
+    the real ``user32.EnableWindow``. This returns prior state = enabled, making
+    ``run_with_uia_bypass``'s restore a harmless no-op. Tests that assert
+    disable/restore ordering (``test_invoke_background_disables_host_around_pattern``)
+    patch ``_enable_window`` themselves and opt out of this fixture.
+    """
+    monkeypatch.setattr(bypass, "_enable_window", lambda hwnd, en: 1)
+
+
+def test_invoke_via_pattern_prefers_invoke(monkeypatch, no_real_enable_window):
     from agent_windows.uia.enums import PatternId
 
     invoke = _FakePattern("invoke")
@@ -144,7 +160,7 @@ def test_invoke_via_pattern_prefers_invoke(monkeypatch):
     assert invoke.called and not toggle.called
 
 
-def test_invoke_via_pattern_falls_through_to_toggle(monkeypatch):
+def test_invoke_via_pattern_falls_through_to_toggle(monkeypatch, no_real_enable_window):
     from agent_windows.uia.enums import PatternId
 
     toggle = _FakePattern("toggle")
@@ -159,7 +175,22 @@ def test_invoke_via_pattern_falls_through_to_toggle(monkeypatch):
     assert toggle.called
 
 
-def test_invoke_via_pattern_raises_when_no_pattern(monkeypatch):
+def test_invoke_via_pattern_falls_through_to_select(monkeypatch, no_real_enable_window):
+    from agent_windows.uia.enums import PatternId
+
+    select = _FakePattern("select")
+    ctrl = _FakeControl({PatternId.SelectionItemPattern: select},
+                        ancestor_window=_FakeWindowControl(555))
+    monkeypatch.setattr("agent_windows.core.tree._resolve_live_control",
+                        lambda sel: ctrl)
+
+    res = bypass.invoke_background(10, 20, selector="@e1")
+
+    assert res == {"action": "select", "host_hwnd": 555}
+    assert select.called
+
+
+def test_invoke_via_pattern_raises_when_no_pattern(monkeypatch, no_real_enable_window):
     ctrl = _FakeControl({}, ancestor_window=_FakeWindowControl(555))
     monkeypatch.setattr("agent_windows.core.tree._resolve_live_control",
                         lambda sel: ctrl)
@@ -168,7 +199,7 @@ def test_invoke_via_pattern_raises_when_no_pattern(monkeypatch):
         bypass.invoke_background(10, 20, selector="@e1")
 
 
-def test_invoke_via_pattern_wraps_comerror(monkeypatch):
+def test_invoke_via_pattern_wraps_comerror(monkeypatch, no_real_enable_window):
     from agent_windows.uia.enums import PatternId
 
     class _BoomInvoke:
@@ -184,7 +215,7 @@ def test_invoke_via_pattern_wraps_comerror(monkeypatch):
         bypass.invoke_background(10, 20, selector="@e1")
 
 
-def test_host_hwnd_missing_raises(monkeypatch):
+def test_host_hwnd_no_ancestor_raises(monkeypatch, no_real_enable_window):
     ctrl = _FakeControl({})  # ancestor_window=None
     monkeypatch.setattr("agent_windows.core.tree._resolve_live_control",
                         lambda sel: ctrl)
@@ -193,7 +224,18 @@ def test_host_hwnd_missing_raises(monkeypatch):
         bypass.invoke_background(10, 20, selector="@e1")
 
 
-def test_invoke_background_uses_controlfrompoint_when_no_selector(monkeypatch):
+def test_host_hwnd_zero_raises(monkeypatch, no_real_enable_window):
+    # Ancestor is a WindowControl but reports NativeWindowHandle == 0.
+    ctrl = _FakeControl({}, ancestor_window=_FakeWindowControl(0))
+    monkeypatch.setattr("agent_windows.core.tree._resolve_live_control",
+                        lambda sel: ctrl)
+
+    with pytest.raises(bypass.BackgroundUnavailableError, match="HWND"):
+        bypass.invoke_background(10, 20, selector="@e1")
+
+
+def test_invoke_background_uses_controlfrompoint_when_no_selector(monkeypatch,
+                                                                   no_real_enable_window):
     from agent_windows.uia.enums import PatternId
 
     invoke = _FakePattern("invoke")
@@ -207,7 +249,7 @@ def test_invoke_background_uses_controlfrompoint_when_no_selector(monkeypatch):
     assert res == {"action": "invoke", "host_hwnd": 321}
 
 
-def test_invoke_background_controlfrompoint_none_raises(monkeypatch):
+def test_invoke_background_controlfrompoint_none_raises(monkeypatch, no_real_enable_window):
     monkeypatch.setattr("agent_windows.uia.controls.ControlFromPoint",
                         lambda x, y: None)
 
