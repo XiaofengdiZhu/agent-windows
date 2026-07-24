@@ -227,7 +227,7 @@ pub fn parse(argv: &[String], global: &GlobalFlags) -> Result<Action, ParseError
         "is" => parse_is(rest),
 
         // ── Input (mouse) ─────────────────────────────────────────────────
-        "click" => parse_xy_opts(rest, "click", &["right", "double"]),
+        "click" => parse_xy_opts(rest, "click", &["right", "double", "background"]),
         "dblclick" => parse_xy_opts(rest, "dblclick", &["right"]),
         "hover" => parse_xy(rest, "hover"),
         "move" => parse_xy(rest, "move"),
@@ -2086,6 +2086,21 @@ mod tests {
             Ok(Action::Call { params, .. }) => {
                 assert_eq!(params["selector"], "@e3");
                 assert_eq!(params["right"], true);
+            }
+            other => panic!("got {:?}", other),
+        }
+        // click --background forwards the background flag (UIA bypass path)
+        match parse(&argv(&["click", "-s", "@e3", "--background"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert_eq!(params["selector"], "@e3");
+                assert_eq!(params["background"], true);
+            }
+            other => panic!("got {:?}", other),
+        }
+        // click without --background → background absent/false (default foreground)
+        match parse(&argv(&["click", "-s", "@e3"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert_eq!(params["background"], false);
             }
             other => panic!("got {:?}", other),
         }
