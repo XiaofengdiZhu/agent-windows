@@ -56,10 +56,18 @@ def click(
     selector: str = typer.Option("", "--selector", "-s", help="Element ref (@eN); overrides X Y"),
     right: bool = typer.Option(False, "--right", help="Right-click"),
     double: bool = typer.Option(False, "--double", help="Double-click"),
+    background: bool = typer.Option(False, "--background",
+                                    help="No-focus-steal click via UIA pattern (Invoke/Toggle/Select); "
+                                         "left single-click only, errors if unsupported"),
 ) -> None:
-    """Mouse click at (X, Y) or at an element (@eN via --selector)."""
+    """Mouse click at (X, Y) or at an element (@eN via --selector).
+
+    --background delivers the click through the element's UIA pattern without
+    stealing foreground (no flash) — works on UWP/WinUI3/packaged apps. Errors
+    with BACKGROUND_UNAVAILABLE (-1007) if the element has no invokable pattern.
+    """
     _cmd(ctx, "click", **_xy_or_selector(coords, selector),
-         right=right, double=double)
+         right=right, double=double, background=background)
 
 
 @app.command()

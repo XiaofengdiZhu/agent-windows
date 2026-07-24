@@ -12,9 +12,10 @@ from agent_windows.mcp._call import _call, xy_or_selector
 
 
 def click_fn(loc: list[int] | None = None, selector: str | None = None,
-             right: bool = False, double: bool = False) -> str:
+             right: bool = False, double: bool = False,
+             background: bool = False) -> str:
     return str(_call("click", **xy_or_selector(loc, selector),
-                     right=right, double=double).get("output", ""))
+                     right=right, double=double, background=background).get("output", ""))
 
 
 def dblclick_fn(loc: list[int] | None = None, selector: str | None = None,
@@ -110,12 +111,17 @@ def register(mcp) -> None:
         "Mouse click at [x, y] or at a UI element (@eN selector from a prior "
         "snapshot). Keywords: click, tap, press, mouse click, left click, "
         "select, left-click. right=True for a context-menu click, double=True "
-        "for a double-click. Provide either loc OR selector."
+        "for a double-click. background=True delivers a no-focus-steal click via "
+        "the element's UIA pattern (Invoke/Toggle/Select) — left single-click "
+        "only, errors (BACKGROUND_UNAVAILABLE) if unsupported. Provide either "
+        "loc OR selector."
     ), annotations=ToolAnnotations(title="Click", readOnlyHint=False,
                                    destructiveHint=True, idempotentHint=False, openWorldHint=False))
     def _click(loc: list[int] | None = None, selector: str | None = None,
-               right: bool = False, double: bool = False) -> str:
-        return click_fn(loc=loc, selector=selector, right=right, double=double)
+               right: bool = False, double: bool = False,
+               background: bool = False) -> str:
+        return click_fn(loc=loc, selector=selector, right=right, double=double,
+                        background=background)
 
     @mcp.tool(name="dblclick", description=(
         "Double-click at [x, y] or at a UI element (@eN). "
