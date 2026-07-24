@@ -103,6 +103,7 @@ COORDINATE_OUT_OF_RANGE = -1002
 WAIT_TIMEOUT = -1003
 PERMISSION_DENIED = -1004
 VISION_API_ERROR = -1005
+BACKGROUND_UNAVAILABLE = -1007  # background delivery can't land (no Invoke pattern / occluded); caller retries foreground. (-1006 reserved for future SERVICE_BUSY.)
 DAEMON_INTERNAL_ERROR = -1999
 
 
