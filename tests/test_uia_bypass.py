@@ -325,6 +325,49 @@ def test_click_background_skips_sendinput(monkeypatch, no_real_enable_window):
     assert "Delivery: background (invoke)" in res["output"]
 
 
+def test_click_background_bad_selector_bubbles(monkeypatch):
+    """A bad selector (ValueError/IndexError from resolve_element_center) is NOT
+    swallowed by the background best-effort except — it bubbles (→ INVALID_PARAMS
+    via route_request) instead of silently degrading to (0,0). Only
+    CoordinateRangeError and RuntimeError degrade."""
+    def _bad_selector(_params):
+        raise ValueError("bad selector format")
+    monkeypatch.setattr(input_handlers, "_coords", _bad_selector)
+
+    def _fail_invoke(*a, **k):
+        raise AssertionError("delivery ran on a bad selector")
+    monkeypatch.setattr("agent_windows.core.uia_bypass.invoke_background",
+                        _fail_invoke)
+
+    with pytest.raises(ValueError, match="bad selector"):
+        input_handlers._click({"selector": "@bad", "background": True})
+
+
+def test_click_background_non_numeric_coord_degrades_safely(monkeypatch):
+    """A non-numeric x/y (CoordinateRangeError — the same exception an off-screen
+    echo raises) degrades best-effort so delivery still fires, but the degraded
+    echo is coerced to int: the strings "invalid"/"bad" never reach
+    ControlFromPoint. (The foreground path raises -1002 for the same input;
+    background treats coords as echo-only.)"""
+    from agent_windows.daemon.router import CoordinateRangeError
+
+    def _bad_coord(_params):
+        raise CoordinateRangeError("coordinate 'x' must be a number, got str")
+    monkeypatch.setattr(input_handlers, "_coords", _bad_coord)
+
+    delivered = {}
+    def _cap_invoke(x, y, selector):
+        delivered["x"], delivered["y"] = x, y
+        return {"action": "invoke", "host_hwnd": 1}
+    monkeypatch.setattr("agent_windows.core.uia_bypass.invoke_background",
+                        _cap_invoke)
+    monkeypatch.setattr(input_handlers, "_verify_enabled", lambda: False)
+
+    res = input_handlers._click({"x": "invalid", "y": "bad", "background": True})
+    assert delivered["x"] == 0 and delivered["y"] == 0  # coerced, not the strings
+    assert "Delivery: background (invoke)" in res["output"]
+
+
 def test_click_default_unchanged(monkeypatch):
     sent = {"clicks": []}
     monkeypatch.setattr("agent_windows.core.input_controller.click",

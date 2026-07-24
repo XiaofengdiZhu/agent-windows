@@ -155,14 +155,23 @@ def _click(params: dict) -> dict[str, Any]:
                 "background mode supports left single-click only "
                 "(no Invoke semantics for right/double); retry without --background")
         # Pattern delivery ignores pixel coords; x/y are echo/verify-only and
-        # best-effort — a stale/off-screen echo coord must NOT fail a click whose
-        # Invoke/Toggle/Select fires regardless. An unconditional _coords here
-        # would force a selector->center snapshot read and could raise
-        # CoordinateRangeError, gating delivery on irrelevant coords.
+        # best-effort — a stale/off-screen echo coord (CoordinateRangeError) or a
+        # snapshot/COM hiccup (RuntimeError) must NOT fail a click whose
+        # Invoke/Toggle/Select fires regardless. Those two degrade; anything else
+        # (a bad selector → ValueError/IndexError, or an unexpected error) bubbles
+        # so a malformed request surfaces as INVALID_PARAMS instead of silently
+        # clicking (0,0). The degraded echo is coerced to int so a non-numeric
+        # value that raised never reaches ControlFromPoint as a string.
+        from agent_windows.daemon.router import CoordinateRangeError
         try:
             x, y = _coords(params)
-        except Exception:
-            x, y = params.get("x", 0), params.get("y", 0)
+        except (CoordinateRangeError, RuntimeError):
+            x = params.get("x", 0)
+            y = params.get("y", 0)
+            if not (isinstance(x, int) and not isinstance(x, bool)):
+                x = 0
+            if not (isinstance(y, int) and not isinstance(y, bool)):
+                y = 0
         res = invoke_background(x, y, selector)
         lines = ["## Click", f"Position: ({x}, {y})",
                  f"Delivery: background ({res['action']})"]
