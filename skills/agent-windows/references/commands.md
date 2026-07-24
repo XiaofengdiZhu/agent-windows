@@ -328,6 +328,7 @@ agent-windows click -s @e3                          # short form
 | `--selector` / `-s` | str | `""` | Element ref (`@eN`); overrides `X Y` |
 | `--right` | bool | `false` | Right-click |
 | `--double` | bool | `false` | Double-click |
+| `--background` | bool | `false` | No-focus-steal click via the element's UIA pattern (left single-click only; see note below) |
 
 \* `X Y` is required unless `--selector` is given.
 
