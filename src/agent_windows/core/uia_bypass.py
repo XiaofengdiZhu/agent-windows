@@ -135,3 +135,35 @@ def invoke_background(x: int, y: int, selector: str | None) -> dict:
     host_hwnd = _host_hwnd_of(control)
     action = run_with_uia_bypass(host_hwnd, lambda: _invoke_via_pattern(control))
     return {"action": action, "host_hwnd": host_hwnd}
+
+
+def run_pattern_background(control, action) -> None:
+    """Run a UIA pattern ``action`` under an EnableWindow bypass.
+
+    Used by expand/collapse (and any future pure-pattern handler) to fire a
+    pattern without letting the host top-level window become foreground — the
+    same no-focus-steal property click's ``--background`` gains via
+    ``invoke_background``. ``ExpandCollapsePattern`` travels the same kernel
+    accessibility channel as Invoke/Toggle/Select, so the bypass applies.
+
+    Mirrors ``invoke_background``'s host resolution: resolve the top-level
+    window HWND via ``_host_hwnd_of`` (raises ``BackgroundUnavailableError``
+    if none / no HWND), then run ``action`` inside ``run_with_uia_bypass``.
+
+    A silent foreground degrade is intentionally NOT offered: it could steal
+    focus without the caller knowing, which is the exact failure mode this
+    feature exists to prevent (spec D2). expand/collapse has no
+    ``--background`` flag to drop, so the error is terminal (-1007), not a
+    "retry foreground" hint.
+
+    Args:
+        control: a live UIA ``Control`` (from ``_resolve_live_control``) whose
+            top-level window ancestor will be briefly disabled.
+        action: zero-arg callable performing the pattern call
+            (e.g. ``pattern.Expand``).
+
+    Raises:
+        BackgroundUnavailableError: no window ancestor or no host HWND.
+    """
+    host_hwnd = _host_hwnd_of(control)
+    run_with_uia_bypass(host_hwnd, action)

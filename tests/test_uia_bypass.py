@@ -401,3 +401,33 @@ def test_click_default_unchanged(monkeypatch):
 
     assert sent["clicks"] == [((5, 6), {"right": False, "double": False})]
     assert "Delivery" not in res["output"]
+
+
+# --- run_pattern_background helper (Task 1) ------------------------------------
+
+def test_run_pattern_background_wraps_action(monkeypatch, no_real_enable_window):
+    """run_pattern_background runs action inside run_with_uia_bypass:
+    EnableWindow(FALSE) -> action -> restore, same ordering as invoke_background."""
+    enables = []
+    monkeypatch.setattr(bypass, "_enable_window",
+                        lambda hwnd, en: enables.append((hwnd, en)) or 1)
+    ctrl = _FakeControl({}, ancestor_window=_FakeWindowControl(777))
+    fired = {"action": False}
+
+    bypass.run_pattern_background(ctrl, lambda: fired.__setitem__("action", True))
+
+    assert enables == [(777, False), (777, True)]   # disable, then restore
+    assert fired["action"] is True                   # action ran between
+
+
+def test_run_pattern_background_host_fail_raises_no_action(monkeypatch):
+    """Host-HWND failure raises BackgroundUnavailableError and action NEVER runs
+    — no silent foreground degrade (D2, consistent with click --background)."""
+    # ancestor_window=None -> _host_hwnd_of -> GetAncestorControl returns None -> raise
+    ctrl = _FakeControl({}, ancestor_window=None)
+    fired = {"action": False}
+
+    with pytest.raises(bypass.BackgroundUnavailableError):
+        bypass.run_pattern_background(ctrl, lambda: fired.__setitem__("action", True))
+
+    assert fired["action"] is False
