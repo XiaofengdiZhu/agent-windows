@@ -2449,6 +2449,41 @@ def CreatePropertyCondition(propertyId: int, value):
     return _AutomationClient.instance().IUIAutomation.CreatePropertyCondition(propertyId, value)
 
 
+def create_runtime_id_condition(rid):
+    """Build a UIA property condition matching an element RuntimeId.
+
+    Spike-validated (tests/test_runtime_id_spike.py R2): comtypes marshals a
+    Python ``list[int]`` as ``SAFEARRAY(VARIANT)`` (vt=8204), but UIA's
+    ``RuntimeIdProperty`` is typed ``SAFEARRAY(I4)`` (vt = ``VT_I4|VT_ARRAY``
+    = 8195). The mismatch makes the naive ``CreatePropertyCondition(prop,
+    list)`` raise ``E_INVALIDARG``. Fix: build a typed
+    ``_midlSAFEARRAY(c_long)``, wrap it in a ``VARIANT`` (auto-sets vt=8195),
+    then call ``IUIAutomation.CreatePropertyCondition`` directly (NOT the
+    module-level ``CreatePropertyCondition`` wrapper, which passes the value
+    through untyped).
+
+    Used by ``core.tree._resolve_live_control`` to resolve the live control
+    via ``FindFirst(TreeScope_Subtree, <this condition>)`` — an identity
+    lookup independent of visual z-order (D3).
+
+    Args:
+        rid: element RuntimeId as a sequence of int (ElementInfo.runtime_id).
+
+    Returns:
+        An ``IUIAutomationCondition`` for use with ``Control.FindFirst``.
+    """
+    import ctypes
+    from comtypes.automation import VARIANT, _midlSAFEARRAY
+
+    from agent_windows.uia.enums import PropertyId
+
+    sa_int = _midlSAFEARRAY(ctypes.c_long)
+    v = VARIANT()
+    v.value = sa_int.from_param(list(rid))  # auto-sets v.vt = VT_I4|VT_ARRAY
+    ia = _AutomationClient.instance().IUIAutomation
+    return ia.CreatePropertyCondition(PropertyId.RuntimeIdProperty, v)
+
+
 def CreateAndCondition(condition1, condition2):
     """
     Create a condition that is the logical AND of two conditions.

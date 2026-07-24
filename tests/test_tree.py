@@ -2820,6 +2820,133 @@ class TestRuntimeIdCaching:
         assert PropertyId.RuntimeIdProperty in calls
 
 
+# ── D3 Task 3: create_runtime_id_condition + _resolve_live_control ────
+#
+# _resolve_live_control now resolves the live control via FindFirst by
+# RuntimeId (identity lookup, z-order-independent) instead of ControlFromPoint
+# (visual z-order topmost). These tests pin the new contract:
+#   - FindFirst hit in the owning window's subtree (TreeScope_Subtree)
+#   - FindFirst miss (element destroyed) -> ValueError("Re-snapshot")
+#   - empty runtime_id -> coordinate fallback (NOT a raise)
+#   - owning window closed (ControlFromHandle None) -> ValueError("window")
+# We patch tree.resolve_element directly so the tests stay focused on the
+# _resolve_live_control rewrite (resolve_element parsing is covered by
+# TestResolveElementParsing above). uia.core.create_runtime_id_condition and
+# uia.controls.ControlFromHandle / ControlFromPoint are patched at the SOURCE
+# module because _resolve_live_control imports them in its function body.
 
 
+def test_create_runtime_id_condition_builds_typed_safearray(monkeypatch):
+    """create_runtime_id_condition hands IUIAutomation.CreatePropertyCondition
+    a VARIANT with vt = VT_I4|VT_ARRAY (8195) — NOT the naive list (vt=8204)
+    that raises E_INVALIDARG (spike R2 finding). Captures the VARIANT without
+    a real UIA call."""
+    from comtypes.automation import VT_ARRAY, VT_I4
+    from agent_windows.uia import core as uia_core
+    from agent_windows.uia.enums import PropertyId
+
+    captured = {}
+
+    class _FakeIA:
+        def CreatePropertyCondition(self, prop_id, value):
+            captured["prop_id"] = prop_id
+            captured["vt"] = value.vt
+            return "COND"
+
+    class _FakeClient:
+        def instance(self):
+            class _I:
+                IUIAutomation = _FakeIA()
+            return _I()
+
+    monkeypatch.setattr(uia_core, "_AutomationClient", _FakeClient())
+
+    cond = uia_core.create_runtime_id_condition((42, 7, 99))
+    assert cond == "COND"
+    assert captured["prop_id"] == PropertyId.RuntimeIdProperty
+    assert captured["vt"] == VT_I4 | VT_ARRAY  # 8195, not 8204
+
+
+def test_resolve_live_control_findfirst_hit(monkeypatch):
+    """selector with a cached runtime_id resolves via FindFirst by RuntimeId in
+    the owning window's subtree — not ControlFromPoint (D3 core fix)."""
+    from agent_windows.core.tree import _resolve_live_control
+    from agent_windows.uia.enums import TreeScope
+
+    el = ElementInfo(name="OK", control_type="ButtonControl",
+                     bbox=None, window_handle=777, runtime_id=(42, 7))
+    monkeypatch.setattr(tree, "resolve_element", lambda sel: el)
+
+    captured = {}
+
+    class _FakeRoot:
+        def FindFirst(self, scope, cond):
+            captured["scope"] = scope
+            captured["cond"] = cond
+            return "LIVE_CONTROL"
+
+    monkeypatch.setattr("agent_windows.uia.controls.ControlFromHandle",
+                        lambda h: _FakeRoot() if h == 777 else None)
+    # _resolve_live_control builds the condition via create_runtime_id_condition
+    # (typed SAFEARRAY, touches COM). Patch it so this stays a pure unit test.
+    monkeypatch.setattr("agent_windows.uia.core.create_runtime_id_condition",
+                        lambda rid: "COND")
+
+    ctrl = _resolve_live_control("@e1")
+    assert ctrl == "LIVE_CONTROL"
+    assert captured["cond"] == "COND"
+    assert captured["scope"] == TreeScope.TreeScope_Subtree
+
+
+def test_resolve_live_control_miss_raises(monkeypatch):
+    """FindFirst miss (element destroyed) -> ValueError (-> INVALID_PARAMS /
+    ELEMENT_NOT_FOUND) with re-snapshot hint. NOT a coordinate fallback —
+    falling back would click the visual topmost (the bug D3 fixes)."""
+    from agent_windows.core.tree import _resolve_live_control
+
+    el = ElementInfo(name="OK", control_type="ButtonControl",
+                     bbox=None, window_handle=777, runtime_id=(1, 2))
+    monkeypatch.setattr(tree, "resolve_element", lambda sel: el)
+    monkeypatch.setattr(
+        "agent_windows.uia.controls.ControlFromHandle",
+        lambda h: type("_R", (),
+                       {"FindFirst": lambda s, sc, c: None})())
+    monkeypatch.setattr("agent_windows.uia.core.create_runtime_id_condition",
+                        lambda rid: "COND")
+    with pytest.raises(ValueError, match="Re-snapshot"):
+        _resolve_live_control("@e1")
+
+
+def test_resolve_live_control_empty_rid_falls_back_to_point(monkeypatch):
+    """Empty runtime_id (cache failed) -> coordinate fallback (D3 D2
+    empty-fallback). Must NOT raise — the element is fine, the tool just
+    didn't get an id."""
+    from agent_windows.core.tree import _resolve_live_control
+
+    el = ElementInfo(name="OK", control_type="ButtonControl",
+                     bbox=BoundingBox(10, 20, 30, 40),
+                     window_handle=777, runtime_id=())  # empty
+    monkeypatch.setattr(tree, "resolve_element", lambda sel: el)
+    # _resolve_live_via_point -> resolve_element_center (bbox center) +
+    # ControlFromPoint. Patch resolve_element_center directly so the test is
+    # robust to its snapshot read.
+    monkeypatch.setattr(tree, "resolve_element_center", lambda sel: (20, 30))
+    monkeypatch.setattr("agent_windows.uia.controls.ControlFromPoint",
+                        lambda x, y: "POINT_CONTROL")
+    ctrl = _resolve_live_control("@e1")
+    assert ctrl == "POINT_CONTROL"
+
+
+def test_resolve_live_control_window_closed_raises(monkeypatch):
+    """window_handle set but ControlFromHandle returns None (window closed
+    since snapshot) -> stale raise."""
+    from agent_windows.core.tree import _resolve_live_control
+
+    el = ElementInfo(name="OK", control_type="ButtonControl",
+                     bbox=None, window_handle=777, runtime_id=(1,))
+    monkeypatch.setattr(tree, "resolve_element", lambda sel: el)
+    monkeypatch.setattr("agent_windows.uia.controls.ControlFromHandle",
+                        lambda h: None)  # window gone
+    with pytest.raises(ValueError, match="window"):
+        _resolve_live_control("@e1")
 

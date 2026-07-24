@@ -662,27 +662,26 @@ def resolve_element_center(selector: str) -> tuple[int, int]:
     return validate_coordinates(cx, cy)
 
 
-def _resolve_live_control(selector: str):
-    """Resolve an ``@eN`` selector to a LIVE UIA ``Control`` for Pattern calls.
+def _resolve_live_via_point(selector: str):
+    """Coordinate fallback for ``_resolve_live_control``.
 
-    The snapshot's ``ElementInfo`` only stores a bbox (no COM handle), so
-    pattern-based operations (expand/collapse) must re-acquire a live element.
-    We resolve the cached bbox center (already screen-validated) and reverse-
-    look it up via ``ControlFromPoint``. This is the same staleness trade-off
-    click makes: the 2s-TTL snapshot may be stale, but ``resolve_element_center``
-    re-checks the center is on-screen.
+    Resolves the cached bbox center and reverse-looks it up via
+    ``ControlFromPoint`` (visual z-order topmost). Used only when the cached
+    ``runtime_id`` is empty — the element is fine, the snapshot just didn't get
+    an id (D3 D2 empty-fallback). Preserves the original COMError-wrapping +
+    None→ValueError contract so callers (expand/collapse/invoke_background,
+    TODO #6) keep seeing typed errors.
 
     Args:
         selector: Element reference like ``"@e3"``.
 
     Returns:
-        A live ``Control`` (from ``agent_windows.uia.controls``) at the
-        element's bbox center.
+        A live ``Control`` at the element's bbox center.
 
     Raises:
         ValueError: If the element moved/vanished (ControlFromPoint returned
-            None) — surfaces as INVALID_PARAMS at the router with an actionable
-            "re-snapshot and retry" hint — or propagated from
+            None) — surfaces as INVALID_PARAMS at the router with an
+            actionable "Re-snapshot and retry" hint — or propagated from
             ``resolve_element_center`` for a bad selector format.
         UIADeadElementError: If the target's process died / disconnected during
             the reverse-lookup — surfaces as ELEMENT_NOT_FOUND at the router
@@ -690,11 +689,7 @@ def _resolve_live_control(selector: str):
             ``IUIAutomation.ElementFromPoint`` with no COM wrapping (unlike the
             vendored GetPattern/Expand, which swallow internally), so a dead
             target would otherwise leak a bare ``COMError`` as
-            DAEMON_INTERNAL_ERROR. NOTE: this covers the *lookup* only — a dead
-            element during the *subsequent* pattern call is swallowed by the
-            vendored layer (GetPattern returns None → "does not support";
-            Expand/Collapse swallow and report success), so the typed error is
-            only raised here, not from expand/collapse's pattern step.
+            DAEMON_INTERNAL_ERROR.
         IndexError: Propagated from ``resolve_element_center`` for an
             out-of-range index.
         CoordinateRangeError: If the bbox center is off-screen.
@@ -713,6 +708,76 @@ def _resolve_live_control(selector: str):
         raise ValueError(
             f"Element {selector} not reachable at ({x}, {y}) — it may have "
             f"moved, been obscured, or closed. Re-snapshot and retry."
+        )
+    return control
+
+
+def _resolve_live_control(selector: str):
+    """Resolve an ``@eN`` selector to a LIVE UIA ``Control`` for Pattern calls.
+
+    D3: prefer ``FindFirst`` by ``RuntimeId`` (z-order-independent identity
+    lookup) over ``ControlFromPoint`` (visual z-order topmost). The snapshot
+    caches each element's ``RuntimeId`` (Task 2); we scope the search to the
+    owning window (``ElementInfo.window_handle`` → ``ControlFromHandle``) and
+    ``FindFirst`` by ``RuntimeIdProperty``. Falls back to the coordinate path
+    (``_resolve_live_via_point``) only when ``runtime_id`` is empty (the cache
+    didn't get an id) — never on a miss (a miss means the element was
+    destroyed; falling back would click the visual topmost = the bug D3 fixes).
+
+    Args:
+        selector: Element reference like ``"@e3"``.
+
+    Returns:
+        A live ``Control`` (from ``agent_windows.uia.controls``).
+
+    Raises:
+        ValueError: bad selector format / index (propagated from
+            ``resolve_element``); FindFirst miss (element destroyed →
+            "Re-snapshot and retry"); owning window closed
+            (``ControlFromHandle`` None → "window ... closed since snapshot").
+        UIADeadElementError: target process died during the reverse-lookup
+            (coordinate fallback path only, TODO #6 decision 2).
+        CoordinateRangeError: bbox center off-screen (coordinate fallback).
+        IndexError: out-of-range @eN index (propagated from resolve_element).
+    """
+    from agent_windows.uia.controls import ControlFromHandle
+    from agent_windows.uia.core import _AutomationClient, create_runtime_id_condition
+    from agent_windows.uia.enums import TreeScope
+
+    el = resolve_element(selector)
+    rid = el.runtime_id
+    if not rid:
+        # No RuntimeId (provider didn't expose one) → identity lookup impossible.
+        # The element is fine; fall back to the coordinate path. NOT a raise.
+        return _resolve_live_via_point(selector)
+
+    if el.window_handle:
+        root = ControlFromHandle(el.window_handle)
+        if root is None:
+            # Owning window closed since the snapshot — a stale @eN ref. Don't
+            # fall back to coordinates (the whole window is gone); surface as a
+            # re-snapshot hint so the caller refreshes.
+            raise ValueError(
+                f"Element {selector}: owning window (HWND {el.window_handle}) "
+                f"closed since snapshot. Re-snapshot and retry."
+            )
+    else:
+        # No owning window recorded (legacy/0 HWND) → search the whole desktop.
+        root = _AutomationClient.instance().IUIAutomation.GetRootElement()
+
+    # typed SAFEARRAY(I4); see uia.core.create_runtime_id_condition (spike R2).
+    cond = create_runtime_id_condition(rid)
+    try:
+        control = root.FindFirst(TreeScope.TreeScope_Subtree, cond)
+    except COMError as e:
+        raise from_com_error(e) from e
+    if control is None:
+        # Window alive but element gone (rebuilt/destroyed). Don't fall back to
+        # coordinates: that would hit the visual topmost at the stale bbox —
+        # the exact wrong-element bug D3 exists to fix. Surface a re-snapshot.
+        raise ValueError(
+            f"Element {selector} not found by RuntimeId — it may have moved, "
+            f"been rebuilt, or closed. Re-snapshot and retry."
         )
     return control
 
