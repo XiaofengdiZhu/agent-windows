@@ -59,7 +59,7 @@ def _verify_enabled() -> bool:
     return bool(load_config().get("input", {}).get("verify", True))
 
 
-def _resolve_verify_control(selector):
+def _resolve_verify_control(selector: str | None) -> Any:
     """Best-effort live UIA ``Control`` for selector-path verify (D3 Task 4).
 
     Returns None when ``selector`` is falsy (coordinate path — nothing to
@@ -79,7 +79,7 @@ def _resolve_verify_control(selector):
 
 
 def _append_hit_focus(lines: list[str], x: int, y: int,
-                      control=None) -> None:
+                      control: Any = None) -> None:
     """Append best-effort Hit + Focus verify lines (P0.1).
 
     D3 Task 4: when ``control`` is given (selector path — the FindFirst-resolved
@@ -118,7 +118,7 @@ def _append_hit_focus(lines: list[str], x: int, y: int,
 
 
 def _append_drop_slider(lines: list[str], x2: int, y2: int,
-                        control=None) -> None:
+                        control: Any = None) -> None:
     """Append best-effort Drop + Slider verify lines for drag (P0.3).
 
     D3 Task 4: when ``control`` is given (selector path), ``Drop:`` reads it via

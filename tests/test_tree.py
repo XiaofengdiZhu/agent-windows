@@ -2998,6 +2998,30 @@ def test_resolve_live_via_point_comerror_maps_to_typed(monkeypatch):
         _resolve_live_control("@e1")
 
 
+def test_resolve_live_control_rid_path_comerror_maps_to_typed(monkeypatch):
+    """Rid path (non-empty RuntimeId + owning window): ``ControlFromHandle``
+    raising COMError must surface as a typed UIAException (via ``from_com_error``),
+    not leak as DAEMON_INTERNAL_ERROR. Symmetric with the via-point COMError test
+    above — covers the rid-path ``ControlFromHandle`` arm added in the 84067e7
+    fix. RPC_E_DISCONNECTED → UIADeadElementError."""
+    from agent_windows.core.tree import _resolve_live_control
+    from agent_windows.uia.exceptions import UIADeadElementError
+
+    el = ElementInfo(name="OK", control_type="ButtonControl",
+                     bbox=BoundingBox(10, 20, 30, 40),
+                     window_handle=777, runtime_id=(1,))  # non-empty → rid path
+    monkeypatch.setattr(tree, "resolve_element", lambda sel: el)
+    # Owning window's provider tearing down mid-ElementFromHandle → COMError.
+    monkeypatch.setattr(
+        "agent_windows.uia.controls.ControlFromHandle",
+        lambda hwnd: (_ for _ in ()).throw(
+            COMError(UIAError.RPC_E_DISCONNECTED, "gone",
+                     (None, None, None, None, None))))
+
+    with pytest.raises(UIADeadElementError):
+        _resolve_live_control("@e1")
+
+
 def test_resolve_live_control_window_closed_raises(monkeypatch):
     """window_handle set but ControlFromHandle returns None (window closed
     since snapshot) -> stale raise."""
