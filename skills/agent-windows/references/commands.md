@@ -174,7 +174,7 @@ Deterministic, zero-API-cost alternative to `ground`/`detect`.
 - `--grayscale`: match in grayscale (~3× faster, ignores color).
 - `--all`: return every match (NMS-deduped) instead of just the best.
 
-Returns `{count, matches:[{x,y,w,h,center_x,center_y,score}], method:"template", screenshot_path}`. Single-match mode also flattens the best match's center to top-level `x, y`. `method` is always `"template"` (vs `ground`'s `"visual-*"`). Templates are capped at 128×128; for larger, crop with `--bbox` first.
+Returns `{count, matches:[{x,y,w,h,center_x,center_y,score}], method:"template", screenshot_path}`; each match also carries `truncated: true` when `--all` hits the match cap. Single-match mode also flattens the best match's center to top-level `x, y`. `method` is always `"template"` (vs `ground`'s `"visual-*"`). Templates are capped at 128×128; for larger, crop with `--bbox` first.
 
 ### pixel-at
 

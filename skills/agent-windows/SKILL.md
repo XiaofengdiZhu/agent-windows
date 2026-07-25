@@ -196,13 +196,13 @@ agent-windows config doctor                            # verify
 
 ```
 ## Interactive Elements
-| Ref | Type    | Action       | Name     | Position           | State   |
-|-----|---------|--------------|----------|--------------------|---------|
-| @e1 | Button  | click        | OK       | (400,300,500,340)  |         |
-| @e2 | Edit    | fill         | Search   | (100,100,300,130)  | focused |
-| @e3 | Button  | click        | Cancel   | (520,300,620,340)  |         |
-| @e4 | CheckBox| toggle       | Remember | (400,360,500,390)  | toggle_state:on |
-| @e5 | ComboBox| select/expand| Font     | (100,200,300,230)  | expand_collapse_state:collapsed |
+| Ref | Type    | Action       | Name     | Window   | Position           | State   |
+|-----|---------|--------------|----------|----------|--------------------|---------|
+| @e1 | Button  | click        | OK       | Settings | (400,300,500,340)  |         |
+| @e2 | Edit    | fill         | Search   | Settings | (100,100,300,130)  | focused |
+| @e3 | Button  | click        | Cancel   | Settings | (520,300,620,340)  |         |
+| @e4 | CheckBox| toggle       | Remember | Settings | (400,360,500,390)  | toggle_state:on |
+| @e5 | ComboBox| select/expand| Font     | Settings | (100,200,300,230)  | expand_collapse_state:collapsed |
 ```
 
 The **Action** column tells you the verb(s) the element supports, so you know immediately what to do with `@eN` without trial-and-error:
@@ -294,7 +294,7 @@ agent-windows key-down shift                         # Press and HOLD (stays dow
 agent-windows key-up shift                           # Release (pair with key-down)
 ```
 
-Key notation for `shortcut`: `ctrl`, `alt`, `shift`, `win` as modifiers, joined with `+`. Special keys: `enter`, `escape`, `tab`, `space`, `backspace`, `delete`, `up/down/left/right`, `home`, `end`, `pageup`, `pagedown`, `f1`–`f12`. The same notation applies to `key-down`/`key-up` (raw key press/release; `--hold` on `key-down` auto-releases after N seconds, otherwise the key stays pressed until `key-up`).
+Key notation for `shortcut`: `ctrl`, `alt`, `shift`, `win` as modifiers, joined with `+`. Special keys: `enter`, `escape`, `tab`, `space`, `backspace`, `delete`, `insert`, `printscreen`, `apps` (context-menu key), `up/down/left/right`, `home`, `end`, `pageup`, `pagedown`, `f1`–`f12`. Common aliases are also accepted (`control`, `windows`/`super`, `return`, `esc`, `back`, `del`, `pgup`/`pgdn`, `prtsc`, `menu`/`context`). The same notation applies to `key-down`/`key-up` (raw key press/release; `--hold` on `key-down` auto-releases after N seconds, otherwise the key stays pressed until `key-up`).
 
 `type` options: `--at X,Y` or `--at-selector @eN` (click first; `--at-selector` overrides `--at`), `--enter`, `--clear` (select-all + delete first), `--caret start|idle|end` (move caret before typing — `start` presses Home, `end` presses End, `idle` leaves it; applied before `--clear`).
 

@@ -272,7 +272,7 @@ Every option below can be set as an env var instead of (or in addition to) the c
 | `AGENT_WINDOWS_TELEMETRY` | Telemetry | `1` → local-only tool-call logging (`logs/telemetry.log`, no network). |
 | `AGENT_WINDOWS_PYTHON` | Launcher | Explicit Python interpreter for the daemon. |
 | `AGENT_WINDOWS_E2E` | Testing | `1` → enable e2e daemon smoke tests (`@pytest.mark.e2e`). |
-| MCP server vars | MCP | `ALLOW_INSECURE_REMOTE`, `IP_ALLOWLIST`, `CORS_ORIGINS`, `TOOLS`, `EXCLUDE_TOOLS`, `STATELESS_HTTP`, `FILE_TRANSFER`, `MAX_UPLOAD_MB`, `OAUTH_CLIENT_ID`/`SECRET` — see [MCP.md](MCP.md#http-security--scaling-options). |
+| MCP server vars | MCP | Same names as the `mcp serve` flags but `AGENT_WINDOWS_`-prefixed: `AGENT_WINDOWS_ALLOW_INSECURE_REMOTE`, `AGENT_WINDOWS_IP_ALLOWLIST`, `AGENT_WINDOWS_CORS_ORIGINS`, `AGENT_WINDOWS_TOOLS`, `AGENT_WINDOWS_EXCLUDE_TOOLS`, `AGENT_WINDOWS_STATELESS_HTTP`, `AGENT_WINDOWS_FILE_TRANSFER`, `AGENT_WINDOWS_MAX_UPLOAD_MB`, `AGENT_WINDOWS_OAUTH_CLIENT_ID`/`SECRET` — see [MCP.md](MCP.md#http-security--scaling-options). |
 
 ## Requirements
 

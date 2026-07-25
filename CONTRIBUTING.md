@@ -10,7 +10,7 @@ Be respectful and constructive. We welcome newcomers and accept criticism gracef
 
 ### Prerequisites
 
-- **Windows 10/11** (the tool drives the Windows desktop via UIA/COM)
+- **Windows 8.1 / 10 / 11** (the tool drives the Windows desktop via UIA/COM)
 - **Python 3.13+**
 - **[uv](https://docs.astral.sh/uv/)** — the package runner used throughout
 - **Git**

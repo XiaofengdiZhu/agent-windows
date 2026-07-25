@@ -33,6 +33,7 @@ classifiers = [
     "Environment :: Console",
     "Intended Audience :: Developers",
     "Operating System :: Microsoft :: Windows",
+    "Operating System :: Microsoft :: Windows :: Windows 8.1",
     "Operating System :: Microsoft :: Windows :: Windows 10",
     "Operating System :: Microsoft :: Windows :: Windows 11",
     "Programming Language :: Python :: 3",
@@ -63,7 +64,7 @@ Changelog = "https://github.com/XiaofengdiZhu/agent-windows/releases"
 dxcam = ["dxcam>=0.3"]
 anthropic = ["anthropic>=0.40"]
 gemini = ["google-genai>=1.0"]
-# MCP server: exposes every command as MCP tools via FastMCP (see docs/MCP-support.md)
+# MCP server: exposes every command as MCP tools via FastMCP (see MCP.md)
 mcp = ["fastmcp>=3.0"]
 dev = ["pytest>=9.0.3"]
 
@@ -71,7 +72,7 @@ dev = ["pytest>=9.0.3"]
 # The native Rust launcher is built from source (build.cmd locally, or
 # `cargo build --release` in CI) and staged into src/launcher/prebuilt/ before
 # the wheel is packaged (see [tool.uv.build-backend] below). It lands in
-# Scripts/ on install as the fast (~15ms) entry point. This Python entry is the
+# Scripts/ on install as the fast (~12ms) entry point. This Python entry is the
 # fallback for --no-daemon mode and commands not yet ported to the launcher.
 agent-windows-python = "agent_windows.cli.main:main"
 

@@ -39,14 +39,14 @@ Desktop
     └─ ListItem "selectors.md" (361,450,1711,498) [interactive]
 
 ## Interactive Elements
-| Ref | Type | Action | Name | Position | State |
-|-----|------|--------|------|----------|-------|
-| @e1 | Button | click | 最小化 | (2460,114,2550,208) |  |
-| @e2 | Button | click | 最大化 | (2550,114,2642,208) |  |
-| @e3 | Button | click | 关闭 | (2642,114,2734,208) |  |
-| @e4 | Document | scroll | ZCode | (336,112,2736,1712) |  |
-| @e5 | Button | click | 共享 | (2503,848,2647,906) |  |
-| @e6 | Button | click | 属性 | (2503,1228,2647,1286) |  |
+| Ref | Type | Action | Name | Window | Position | State |
+|-----|------|--------|------|--------|----------|-------|
+| @e1 | Button | click | 最小化 | ZCode | (2460,114,2550,208) |  |
+| @e2 | Button | click | 最大化 | ZCode | (2550,114,2642,208) |  |
+| @e3 | Button | click | 关闭 | ZCode | (2642,114,2734,208) |  |
+| @e4 | Document | scroll | ZCode | ZCode | (336,112,2736,1712) |  |
+| @e5 | Button | click | 共享 | 文件资源管理器 | (2503,848,2647,906) |  |
+| @e6 | Button | click | 属性 | 文件资源管理器 | (2503,1228,2647,1286) |  |
 ```
 
 ### Section Breakdown

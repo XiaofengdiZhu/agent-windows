@@ -191,13 +191,15 @@ Wait command polling settings.
 
 ### [audit]
 
-Destructive-op audit log (the inverse of telemetry — default-on, low-frequency / high-harm ops). Records the target of `fs_delete` / `fs_move` / `process_kill` / `window_close` / registry set|delete / `system_shutdown` / `system_restart` / `sleep` to `~/.agent-windows/logs/audit.log`.
+Destructive-op audit log (the inverse of telemetry — default-on, low-frequency / high-harm ops). Records the target of `fs_delete` / `fs_move` / `process_kill` / `window_close` / registry set|delete / `system_shutdown` / `system_restart` / `sleep` to `~/.agent-windows/logs/action_audit.log`.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `enabled` | bool | `true` | Toggle the destructive-op audit log. Operators who want it off set this to `false` |
 
 > The HMAC key for audit entries lives under `[audit] key` but is **not** in the settable schema — it is lazily generated at runtime and stored DPAPI-encrypted (like `mcp.auth_key`). Do not edit it by hand.
+>
+> Verify the log's integrity with `agent-windows audit verify` — it recomputes each line's HMAC and reports `verified`/`mismatched`/`malformed` counts (exit 0 if all lines verify, 1 otherwise). A mismatch means a line was tampered with after the fact. (When installed via the native launcher, `audit` is delegated to the Python CLI like `config`/`mcp`.)
 
 ### [shell]
 
@@ -354,7 +356,7 @@ poll_interval = 0.5
 max_seconds = 300                     # DoS cap on daemon-side wait/wait_for (batch); CLI waits use their own --timeout
 
 [audit]
-enabled = true                        # destructive-op audit log (logs/audit.log)
+enabled = true                        # destructive-op audit log (logs/action_audit.log)
 # key = "..."                         # auto-generated, DPAPI-encrypted — do not set by hand
 
 [shell]

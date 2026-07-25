@@ -10,7 +10,7 @@ The server auto-starts the daemon on the first tool call — no separate `daemon
 agent-windows mcp serve          # stdio (default) — for local clients
 ```
 
-> **Alternate config (`--config`):** `mcp serve` accepts the global `--config <path>` flag to run against an alternate `config.toml` — useful for CI, multiple profiles, or testing without touching your real config. The flag propagates to the daemon the server auto-starts, so tool calls use the same config as the server process. State files (pid/lock/logs) stay in the default location. See the Configuration reference.
+> **Alternate config (`--config`):** `mcp serve` accepts the global `--config <path>` flag to run against an alternate `config.toml` — useful for CI, multiple profiles, or testing without touching your real config. The flag propagates to the daemon the server auto-starts, so tool calls use the same config as the server process. State files (pid/lock/version/logs/screenshots) stay in the default location. See the Configuration reference.
 
 > **Per-call screenshot resolution:** the `screenshot` tool accepts optional `scale` (e.g. `0.5` for half-resolution), `max_width`, and `max_height` params that override the config defaults for that one capture — handy for a quick low-res peek without changing config. Omit them to use the configured `[screenshot]` values. The returned metadata reports a `Coordinate Scale` factor to apply to image-pixel coords before clicking when a downscale occurred.
 
@@ -285,7 +285,7 @@ curl -fsS -X PUT -H "Authorization: Bearer $KEY" \
 # → {"path":"C:\\Users\\me\\dest.bin","bytes":10485760,"sha256":"9f86d081…"}
 ```
 
-Status codes: `200` (GET body / PUT JSON `{path, bytes, sha256}`), `400` (missing/relative path, directory), `403` (path blacklist / IP allowlist), `404` (not found), `409` (PUT target exists without `overwrite=true`), `413` (body exceeds `max_upload_mb`).
+Status codes: `200` (GET body / PUT JSON `{path, bytes, sha256}`), `400` (missing/relative path, directory), `403` (path blacklist / IP allowlist), `404` (not found), `409` (PUT target exists without `overwrite=true`), `413` (body exceeds `max_upload_mb`), `500` (mid-stream upload failure).
 
 > **Concurrency:** concurrent PUTs to the *same* path serialize — the first creates/overwrites, a later one without `overwrite=true` gets `409`. PUTs to *different* paths run in parallel.
 
@@ -305,7 +305,7 @@ The server exposes **64 tools** mapping 1:1 to the CLI commands: `screenshot`, `
 
 Same usage tips apply: call `snapshot` first for pixel-exact coordinates, prefer it over `ground`/`detect` for named controls, and always `app switch` before input. `snapshot` additionally takes `window` (HWND / title substring / process name) and `active` (bool) to scope the tree to a single top-level window — `@eN` refs restart at `@e1` within that subtree and stay aligned with the 2s cache slot. `list_displays` enumerates monitors (index, primary, resolution, rect, work area, device name) so you know which N to pass to the `display` arg instead of guessing.
 
-> **Vision tools need a VLM key.** `ground`, `detect`, and `ask_vision` call a multimodal model and require an API key. Set it with `config set vlm.api_key <key>` (DPAPI-encrypted at rest, masked in `config show`), or via the `AGENT_WINDOWS_VLM_API_KEY` env var — which **takes priority** over the on-disk value and is **never written to disk** (handy for CI/secrets stores). Without a key configured those three tools fail; the other 61 tools work without one.
+> **Vision tools need a VLM key.** `ground`, `detect`, and `ask_vision` call a multimodal model and require an API key. Set it with `config set vlm.api_key <key>` (DPAPI-encrypted at rest, masked in `config show`), or via the `AGENT_WINDOWS_VLM_API_KEY` env var — which **takes priority** over the on-disk value and is **never written to disk** (handy for CI/secrets stores). Without a key configured those three tools fail; the other 61 tools work without one. `observe(ground="…")` also routes through `ground` and needs a key — plain `observe` does not.
 
 ### Per-tool limits (bound worker memory & blocking time)
 
@@ -314,7 +314,7 @@ The single worker thread caps a few inputs so one oversized call can't exhaust m
 | Tool | Limit | Notes |
 |---|---|---|
 | `type` | **10000 chars** of `text` | Typing is char-by-char with a delay; a longer string would block the worker for hours. Write the text to a file (`fs write`) and paste it, or type in chunks, for longer content. |
-| `fs_read` | **~5 MiB** returned; a line range (`offset`/`limit`) is also byte-bounded | `offset`/`limit` are 1-based (0 or omitted = whole file); `limit` is capped at 100000 lines. A multi-GB file is never read whole — large files are streamed. |
+| `fs_read` | **~5 MiB** returned; a line range (`offset`/`limit`) is also byte-bounded | `offset`/`limit` are 1-based (0 or omitted = whole file); `limit` is capped at 100000 lines and `offset` at 100000 (larger → `INVALID_PARAMS`). A multi-GB file is never read whole — large files are streamed. |
 | `fs_list` | **5000 entries** | A huge directory returns the first 5000 (sorted) + a `[Truncated: ...]` notice; memory stays bounded regardless of tree size. |
 | `fs_search` | **1000 matches** | Stops and reports truncation after 1000 matches. |
 

@@ -272,7 +272,7 @@ output_encoding = ""     # "" = UTF-8（自动）；否则如 "gbk" 用于旧代
 | `AGENT_WINDOWS_TELEMETRY` | 遥测 | `1` → 仅本地的工具调用日志（`logs/telemetry.log`，无网络）。 |
 | `AGENT_WINDOWS_PYTHON` | 启动器 | 为守护进程显式指定 Python 解释器。 |
 | `AGENT_WINDOWS_E2E` | 测试 | `1` → 启用端到端守护进程冒烟测试（`@pytest.mark.e2e`）。 |
-| MCP 服务端变量 | MCP | `ALLOW_INSECURE_REMOTE`、`IP_ALLOWLIST`、`CORS_ORIGINS`、`TOOLS`、`EXCLUDE_TOOLS`、`STATELESS_HTTP`、`FILE_TRANSFER`、`MAX_UPLOAD_MB`、`OAUTH_CLIENT_ID`/`SECRET` —— 见 [MCP.md](MCP.md#http-security--scaling-options)。 |
+| MCP 服务端变量 | MCP | 与 `mcp serve` 标志同名但加 `AGENT_WINDOWS_` 前缀：`AGENT_WINDOWS_ALLOW_INSECURE_REMOTE`、`AGENT_WINDOWS_IP_ALLOWLIST`、`AGENT_WINDOWS_CORS_ORIGINS`、`AGENT_WINDOWS_TOOLS`、`AGENT_WINDOWS_EXCLUDE_TOOLS`、`AGENT_WINDOWS_STATELESS_HTTP`、`AGENT_WINDOWS_FILE_TRANSFER`、`AGENT_WINDOWS_MAX_UPLOAD_MB`、`AGENT_WINDOWS_OAUTH_CLIENT_ID`/`SECRET` —— 见 [MCP.md](MCP.md#http-security--scaling-options)。 |
 
 ## 运行环境要求
 
