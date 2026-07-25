@@ -266,7 +266,11 @@ def _pick_uwp_app_pid(
         into the frame — caller degrades).
     """
     for pid in child_pids:
-        if pid != frame_host_pid:
+        # `pid and …` — belt-suspenders against a hypothetical zero pid sneaking
+        # in (GetWindowThreadProcessId failure on a child writes back 0). Skipping
+        # it here keeps the "never a bogus pid 0" invariant without relying on the
+        # caller to filter. The non-equality check still does the real work.
+        if pid and pid != frame_host_pid:
             return pid
     return None
 
@@ -345,7 +349,11 @@ def _normalize_process_name(
     hosted app's real image is reached via ``_resolve_uwp_app_pid``. Only
     ``ApplicationFrameWindow`` triggers resolution — every other class
     passes ``original_name`` through unchanged. On unresolved pid (app not
-    yet rendered into the frame) the frame host name is kept (degrade).
+    yet rendered into the frame) OR on a resolved pid whose
+    ``get_process_name`` read returns ``""`` (process exited
+    mid-enumeration, OpenProcess denied, etc.), the frame host name is
+    kept — per the spec's degrade contract, ``process_name`` is always
+    ``ApplicationFrameHost.exe`` for a frame window, never ``""``.
     (TODO P2#6 6a)
 
     Args:
@@ -363,7 +371,12 @@ def _normalize_process_name(
     app_pid = _resolve_uwp_app_pid(hwnd)
     if app_pid is None:
         return original_name
-    return get_process_name(app_pid)
+    # get_process_name is total (never raises) but returns "" on failure (process
+    # exited mid-enumeration, OpenProcess denied, etc.). Per the spec's degrade
+    # contract, an empty result must NOT surface — keep the frame host name so
+    # every downstream consumer still sees ApplicationFrameHost.exe, never "".
+    name = get_process_name(app_pid)
+    return name or original_name
 
 
 def enumerate_windows() -> list[WindowInfo]:

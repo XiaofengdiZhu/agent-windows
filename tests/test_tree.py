@@ -3069,6 +3069,12 @@ class TestPickUwpAppPid:
         from agent_windows.core.tree import _pick_uwp_app_pid as f
         assert f([200, 300], 100) == 200
 
+    def test_skips_zero_pid(self):
+        # Belt-suspenders invariant: a hypothetical pid-0 child (e.g. a child
+        # whose GetWindowThreadProcessId read failed) is skipped, not returned.
+        from agent_windows.core.tree import _pick_uwp_app_pid as f
+        assert f([0, 100, 200], 100) == 200  # 0 skipped, not returned
+
 
 # ── _resolve_uwp_app_pid: EnumChildWindows walk for UWP frame (TODO P2#6 6a) ─
 
@@ -3178,4 +3184,14 @@ class TestNormalizeProcessName:
         assert tree._normalize_process_name("Chrome_WidgetWin_1", 10, "chrome.exe") \
             == "chrome.exe"
         assert called == []  # resolve never invoked
+
+    def test_degrades_when_get_process_name_returns_empty(self, monkeypatch):
+        """App pid resolved but process gone -> get_process_name returns "";
+        keep original_name per the spec's degrade contract."""
+        from agent_windows.core import tree
+        monkeypatch.setattr(tree, "_resolve_uwp_app_pid", lambda hwnd: 200)
+        monkeypatch.setattr(tree, "get_process_name", lambda pid: "")
+        assert tree._normalize_process_name(
+            "ApplicationFrameWindow", 10, "ApplicationFrameHost.exe",
+        ) == "ApplicationFrameHost.exe"
 
