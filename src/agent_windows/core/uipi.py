@@ -33,6 +33,18 @@ _RID_NAMES = {
     SECURITY_MANDATORY_SYSTEM_RID: "system",
 }
 
+
+def il_name(rid: int | None) -> str:
+    """Human-readable name for a mandatory-integrity RID.
+
+    Returns 'low'/'medium'/'high'/'system' for the four canonical RIDs, or
+    'unknown' for an unrecognized RID or ``None`` (a failed/degraded read).
+    ``None`` is not a dict key, so ``_RID_NAMES.get(None, "unknown")``
+    returns "unknown" with no extra ternary. Keeps ``_RID_NAMES`` private to
+    this module — callers use this helper instead of touching the dict.
+    """
+    return _RID_NAMES.get(rid, "unknown")
+
 # Win32 constants.
 TOKEN_QUERY = 0x0008
 TokenIntegrityLevel = 25  # TOKEN_INFORMATION_CLASS
@@ -129,6 +141,8 @@ def _open_process_token_for_pid(pid: int) -> int | None:
             # convert the c_void_p instance (core/dpi.py lesson, c_void_p caveat).
             return token.value if token.value else None
         finally:
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel32.CloseHandle.restype = wintypes.BOOL
             kernel32.CloseHandle(hproc)
     except (OSError, AttributeError, ValueError):
         return None
@@ -161,17 +175,25 @@ def _read_own_il_uncached() -> int | None:
     try:
         kernel32 = ctypes.windll.kernel32
         advapi32 = ctypes.windll.advapi32
+        kernel32.GetCurrentProcess.argtypes = []
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
         advapi32.OpenProcessToken.argtypes = [
             wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
         advapi32.OpenProcessToken.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
 
         token = wintypes.HANDLE(0)
-        # GetCurrentProcess() returns a pseudo-handle (-1); no CloseHandle needed.
-        # pointer() (not byref()) so test fakes can write [0] (core/dpi.py lesson).
+        # GetCurrentProcess() returns a pseudo-handle (-1) that needs NO close;
+        # but OpenProcessToken opens a real TOKEN handle below, which MUST be
+        # closed. pointer() (not byref()) so test fakes can write [0] (core/dpi.py).
         if not advapi32.OpenProcessToken(
                 kernel32.GetCurrentProcess(), TOKEN_QUERY, ctypes.pointer(token)):
             return None
-        return _read_token_il(token)
+        try:
+            return _read_token_il(token)
+        finally:
+            kernel32.CloseHandle(token)
     except (OSError, AttributeError, ValueError):
         return None
 

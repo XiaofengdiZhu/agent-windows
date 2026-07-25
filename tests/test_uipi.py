@@ -5,6 +5,19 @@ Mocks layer-1 ctypes reads (never touches a real token). Host-independent.
 import pytest
 
 
+# ---- il_name public helper (Group A0) --------------------------------------
+
+def test_il_name():
+    """il_name maps the four canonical RIDs to names; None/unknown -> 'unknown'."""
+    from agent_windows.core.uipi import il_name
+    assert il_name(0x1000) == "low"
+    assert il_name(0x2000) == "medium"
+    assert il_name(0x3000) == "high"
+    assert il_name(0x4000) == "system"
+    assert il_name(None) == "unknown"
+    assert il_name(9999) == "unknown"
+
+
 # ---- check_* logic (Group A: monkeypatch the IL read functions) ------------
 
 @pytest.fixture(autouse=True)

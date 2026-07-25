@@ -78,9 +78,9 @@ def _setup_own_il(logger):
     on a read failure (the preflight will degrade to no-op, daemon still runs).
     """
     try:
-        from agent_windows.core.uipi import own_integrity_level, _RID_NAMES
+        from agent_windows.core.uipi import own_integrity_level, il_name
         own = own_integrity_level()
-        name = _RID_NAMES.get(own, "unknown") if own is not None else "unknown"
+        name = il_name(own)
         if own is not None:
             logger.info("own integrity: %s (0x%04X)", name, own)
         else:

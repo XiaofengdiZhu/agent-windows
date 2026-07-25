@@ -80,13 +80,10 @@ def _resolve_verify_control(selector: str | None) -> Any:
 
 def _uipi_hint(result) -> str:
     """Actionable PermissionError message for a UIPI block."""
-    from agent_windows.core.uipi import _RID_NAMES
-
-    def _name(rid):
-        return _RID_NAMES.get(rid, "unknown") if rid is not None else "unknown"
+    from agent_windows.core.uipi import il_name
     return (
-        f"UIPI: target integrity level ({_name(result.target_il)}) exceeds "
-        f"daemon's ({_name(result.own_il)}); SendInput would be silently "
+        f"UIPI: target integrity level ({il_name(result.target_il)}) exceeds "
+        f"daemon's ({il_name(result.own_il)}); SendInput would be silently "
         f"dropped. Retry with --background (UIA Invoke bypasses UIPI) or run "
         f"an elevated daemon."
     )
