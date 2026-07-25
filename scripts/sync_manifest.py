@@ -20,6 +20,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 _TOOL_NAME_RE = re.compile(r'@mcp\.tool\(name="([^"]+)"')
 _PYPROJECT_VER_RE = re.compile(r'version\s*=\s*"([^"]+)"')
+_INIT_VER_RE = re.compile(r'(__version__\s*=\s*)"([^"]+)"')
+_VER_FIELD_RE = re.compile(r'("version":\s*)"([^"]+)"')
 
 
 def read_pyproject_version(root: Path = REPO_ROOT) -> str:
@@ -84,6 +86,37 @@ def check(root: Path = REPO_ROOT) -> tuple[bool, list[str]]:
             f"name drift: missing in manifest={sorted(s_names - m_names)}; "
             f"extra in manifest={sorted(m_names - s_names)}")
     return (not diffs, diffs)
+
+
+def write(root: Path = REPO_ROOT) -> list[str]:
+    """Inject pyproject version into __init__/manifest/server via regex line
+    replacement (preserves manifest.json compact tools[] — NOT json.dumps
+    roundtrip). Validate ALL regex matches BEFORE writing any file (atomic).
+    """
+    pv = read_pyproject_version(root)
+    init_path = root / "src" / "agent_windows" / "__init__.py"
+    manifest_path = root / "manifest.json"
+    server_path = root / "server.json"
+    # newline="" preserves each file's original line endings (manifest.json=LF,
+    # server.json/__init__.py=CRLF) — default write_text would translate LF→CRLF
+    # on Windows and produce a spurious whole-file diff.
+    init_text = init_path.read_text(encoding="utf-8", newline="")
+    manifest_text = manifest_path.read_text(encoding="utf-8", newline="")
+    server_text = server_path.read_text(encoding="utf-8", newline="")
+    if not _INIT_VER_RE.search(init_text):
+        raise RuntimeError("__init__.py has no __version__ assignment")
+    if not _VER_FIELD_RE.search(manifest_text):
+        raise RuntimeError("manifest.json has no version field")
+    if not _VER_FIELD_RE.search(server_text):
+        raise RuntimeError("server.json has no version field")
+    # all validated — mutate now
+    init_path.write_text(_INIT_VER_RE.sub(rf'\g<1>"{pv}"', init_text),
+                         encoding="utf-8", newline="")
+    manifest_path.write_text(_VER_FIELD_RE.sub(rf'\g<1>"{pv}"', manifest_text),
+                             encoding="utf-8", newline="")
+    server_path.write_text(_VER_FIELD_RE.sub(rf'\g<1>"{pv}"', server_text),
+                           encoding="utf-8", newline="")
+    return ["src/agent_windows/__init__.py", "manifest.json", "server.json"]
 
 
 def main(argv: list[str] | None = None) -> int:
