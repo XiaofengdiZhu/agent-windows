@@ -56,3 +56,43 @@ def test_source_tool_names_extracts_mcp_registrations(tmp_path):
 def test_manifest_tool_names_reads_manifest(tmp_path):
     root = _fake_repo(tmp_path)
     assert sm.manifest_tool_names(root) == {"click", "type", "ping"}
+
+
+def test_check_no_drift(tmp_path):
+    root = _fake_repo(tmp_path)
+    ok, diffs = sm.check(root)
+    assert ok is True and diffs == []
+
+
+def test_check_extra_name_drift(tmp_path):
+    root = _fake_repo(tmp_path, extra_manifest_names=("ghost",))
+    ok, diffs = sm.check(root)
+    assert ok is False
+    assert any("extra in manifest" in d and "ghost" in d for d in diffs)
+
+
+def test_check_missing_name_drift(tmp_path):
+    # _fake_repo populates source AND manifest from the same tool_names tuple,
+    # so to simulate missing-from-manifest drift we add a source-only tool.
+    root = _fake_repo(tmp_path)
+    tools_dir = root / "src" / "agent_windows" / "mcp" / "tools"
+    (tools_dir / "extra.py").write_text(
+        '@mcp.tool(name="screenshot", description="d")\ndef screenshot_fn(): pass\n',
+        encoding="utf-8")
+    ok, diffs = sm.check(root)
+    assert ok is False
+    assert any("missing in manifest" in d and "screenshot" in d for d in diffs)
+
+
+def test_check_version_drift_init(tmp_path):
+    root = _fake_repo(tmp_path, init_version="9.9.9")
+    ok, diffs = sm.check(root)
+    assert ok is False
+    assert any("version drift" in d and "__init__" in d for d in diffs)
+
+
+def test_check_version_drift_manifest(tmp_path):
+    root = _fake_repo(tmp_path, manifest_version="9.9.9")
+    ok, diffs = sm.check(root)
+    assert ok is False
+    assert any("version drift" in d and "manifest.version" in d for d in diffs)
