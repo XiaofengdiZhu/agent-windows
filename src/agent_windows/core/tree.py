@@ -271,6 +271,70 @@ def _pick_uwp_app_pid(
     return None
 
 
+def _resolve_uwp_app_pid(
+    frame_hwnd: int, *, _user32=None,
+) -> int | None:
+    """Resolve the hosted app's pid for a UWP ``ApplicationFrameWindow``.
+
+    Walks the frame's children via ``EnumChildWindows`` and returns the
+    first child pid that differs from the frame host's pid (delegates the
+    selection to ``_pick_uwp_app_pid``). Explicit ``.argtypes``/``.restype``
+    on every ctypes call — ``ctypes.windll`` does not check HRESULT/BOOL
+    without it (the ``core/uipi.py`` / ``core/dpi.py`` lesson). (TODO P2#6 6a)
+
+    ``_user32`` is a DI seam defaulting to ``ctypes.windll.user32`` so the
+    EnumChildWindows walk is testable without live ctypes (mirrors
+    ``uwp_activation.activate_uwp_app``'s ``_create`` seam).
+
+    Args:
+        frame_hwnd: Top-level ``ApplicationFrameWindow`` handle.
+        _user32: user32 binding (tests inject a fake).
+
+    Returns:
+        Hosted app pid, or ``None`` on any ctypes failure or when no
+        non-host child exists (caller degrades to ``ApplicationFrameHost``).
+    """
+    import ctypes
+    import ctypes.wintypes
+
+    user32 = _user32 if _user32 is not None else ctypes.windll.user32
+    try:
+        WNDENUMPROC = ctypes.WINFUNCTYPE(
+            ctypes.c_bool,
+            ctypes.wintypes.HWND,
+            ctypes.wintypes.LPARAM,
+        )
+        # Explicit .argtypes/.restype on the real ctypes binding only. A test-
+        # injected _FakeUser32 uses plain bound methods, which reject .argtypes
+        # setattr (the ``test_uipi.py`` _Func / ``core/dpi.py`` lesson); without
+        # this guard the outer ``except AttributeError`` would swallow the
+        # assignment failure and degrade the walk to ``None``. Production always
+        # takes the typed path so ctypes validates the HWND/HANDLE round-trip.
+        if _user32 is None:
+            user32.GetWindowThreadProcessId.argtypes = [
+                ctypes.wintypes.HWND, ctypes.POINTER(ctypes.wintypes.DWORD)]
+            user32.GetWindowThreadProcessId.restype = ctypes.wintypes.DWORD
+            user32.EnumChildWindows.argtypes = [
+                ctypes.wintypes.HWND, WNDENUMPROC, ctypes.wintypes.LPARAM]
+            user32.EnumChildWindows.restype = ctypes.c_bool
+
+        frame_host_pid = ctypes.wintypes.DWORD()
+        user32.GetWindowThreadProcessId(frame_hwnd, ctypes.byref(frame_host_pid))
+
+        child_pids: list[int] = []
+
+        def _child_cb(child_hwnd, _lparam):
+            cpid = ctypes.wintypes.DWORD()
+            user32.GetWindowThreadProcessId(child_hwnd, ctypes.byref(cpid))
+            child_pids.append(cpid.value)
+            return True  # enumerate all children
+
+        user32.EnumChildWindows(frame_hwnd, WNDENUMPROC(_child_cb), 0)
+        return _pick_uwp_app_pid(child_pids, frame_host_pid.value)
+    except (OSError, AttributeError, ValueError):
+        return None
+
+
 def enumerate_windows() -> list[WindowInfo]:
     """List all visible top-level windows."""
     import ctypes

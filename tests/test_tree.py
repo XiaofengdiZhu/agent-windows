@@ -3069,3 +3069,53 @@ class TestPickUwpAppPid:
         from agent_windows.core.tree import _pick_uwp_app_pid as f
         assert f([200, 300], 100) == 200
 
+
+# ── _resolve_uwp_app_pid: EnumChildWindows walk for UWP frame (TODO P2#6 6a) ─
+
+
+class _FakeUser32:
+    """Minimal user32 double for _resolve_uwp_app_pid.
+
+    Records GetWindowThreadProcessId writes through p._obj.value (the
+    ctypes.byref(DWORD) CArgObject path, same as test_app_manager's
+    _find_window_by_process fakes). EnumChildWindows drives the supplied
+    callback once per recorded child hwnd.
+    """
+
+    def __init__(self, child_hwnds: list[int], pid_map: dict[int, int]):
+        self._children = child_hwnds
+        self._pid_map = pid_map
+
+    def GetWindowThreadProcessId(self, hwnd, p):
+        p._obj.value = self._pid_map.get(hwnd, 0)
+        return 1
+
+    def EnumChildWindows(self, parent, cb, lparam):
+        for c in self._children:
+            cb(c, lparam)
+        return True
+
+
+class TestResolveUwpAppPid:
+    """_resolve_uwp_app_pid walks a frame's children and returns the app pid."""
+
+    def test_returns_hosted_app_pid(self):
+        from agent_windows.core.tree import _resolve_uwp_app_pid as f
+        fake = _FakeUser32(
+            child_hwnds=[11, 12, 13],
+            pid_map={10: 100, 11: 100, 12: 100, 13: 200},
+        )
+        assert f(10, _user32=fake) == 200
+
+    def test_returns_none_when_all_children_share_host_pid(self):
+        from agent_windows.core.tree import _resolve_uwp_app_pid as f
+        fake = _FakeUser32(
+            child_hwnds=[11, 12], pid_map={10: 100, 11: 100, 12: 100},
+        )
+        assert f(10, _user32=fake) is None
+
+    def test_returns_none_when_no_children(self):
+        from agent_windows.core.tree import _resolve_uwp_app_pid as f
+        fake = _FakeUser32(child_hwnds=[], pid_map={10: 100})
+        assert f(10, _user32=fake) is None
+
