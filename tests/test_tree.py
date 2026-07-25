@@ -3140,3 +3140,42 @@ class TestResolveUwpAppPid:
         fake = _FakeUser32(child_hwnds=[], pid_map={10: 100})
         assert f(10, _user32=fake) is None
 
+
+# ── _normalize_process_name: UWP frame→app process_name decision (TODO 6a) ─
+
+
+class TestNormalizeProcessName:
+    """_normalize_process_name rewrites process_name for UWP frame windows.
+
+    Decision layer over _resolve_uwp_app_pid + get_process_name: only
+    ApplicationFrameWindow triggers resolution; non-frames pass through.
+    Both deps are monkeypatched so the decision is tested without ctypes
+    (the underlying walk is covered by TestResolveUwpAppPid).
+    """
+
+    def test_normalizes_frame_to_app_name(self, monkeypatch):
+        from agent_windows.core import tree
+        monkeypatch.setattr(tree, "_resolve_uwp_app_pid", lambda hwnd: 200)
+        monkeypatch.setattr(tree, "get_process_name", lambda pid: "CalculatorApp.exe")
+        assert tree._normalize_process_name(
+            "ApplicationFrameWindow", 10, "ApplicationFrameHost.exe",
+        ) == "CalculatorApp.exe"
+
+    def test_degrades_when_app_pid_unresolved(self, monkeypatch):
+        """Frame host pid found but no app child yet -> keep original."""
+        from agent_windows.core import tree
+        monkeypatch.setattr(tree, "_resolve_uwp_app_pid", lambda hwnd: None)
+        assert tree._normalize_process_name(
+            "ApplicationFrameWindow", 10, "ApplicationFrameHost.exe",
+        ) == "ApplicationFrameHost.exe"
+
+    def test_passes_through_non_frame_window(self, monkeypatch):
+        """Non-ApplicationFrameWindow never triggers resolution."""
+        from agent_windows.core import tree
+        called = []
+        monkeypatch.setattr(
+            tree, "_resolve_uwp_app_pid", lambda hwnd: called.append(hwnd) or 999)
+        assert tree._normalize_process_name("Chrome_WidgetWin_1", 10, "chrome.exe") \
+            == "chrome.exe"
+        assert called == []  # resolve never invoked
+

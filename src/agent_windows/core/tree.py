@@ -336,6 +336,36 @@ def _resolve_uwp_app_pid(
         return None
 
 
+def _normalize_process_name(
+    class_name: str, hwnd: int, original_name: str,
+) -> str:
+    """Normalize process_name for a UWP ``ApplicationFrameWindow``.
+
+    A frame window's owning process is ``ApplicationFrameHost.exe``; the
+    hosted app's real image is reached via ``_resolve_uwp_app_pid``. Only
+    ``ApplicationFrameWindow`` triggers resolution — every other class
+    passes ``original_name`` through unchanged. On unresolved pid (app not
+    yet rendered into the frame) the frame host name is kept (degrade).
+    (TODO P2#6 6a)
+
+    Args:
+        class_name: Window class (already captured in ``_enum_cb``).
+        hwnd: Top-level window handle.
+        original_name: process_name from ``GetWindowThreadProcessId`` +
+            ``get_process_name`` (the frame host image for UWP frames).
+
+    Returns:
+        The hosted app's image name when resolvable, else
+        ``original_name``.
+    """
+    if class_name != "ApplicationFrameWindow":
+        return original_name
+    app_pid = _resolve_uwp_app_pid(hwnd)
+    if app_pid is None:
+        return original_name
+    return get_process_name(app_pid)
+
+
 def enumerate_windows() -> list[WindowInfo]:
     """List all visible top-level windows."""
     import ctypes
@@ -385,6 +415,12 @@ def enumerate_windows() -> list[WindowInfo]:
         cls_buf = ctypes.create_unicode_buffer(257)
         cls_len = user32.GetClassNameW(hwnd, cls_buf, 257)
         class_name = cls_buf.value if cls_len else ""
+
+        # UWP frame windows report ApplicationFrameHost.exe as the owning
+        # process; resolve the hosted app's real image so downstream
+        # consumers (snapshot/list/switch) see the app, not the frame host.
+        # Degrades to original_name when the app is not yet rendered. (6a)
+        process_name = _normalize_process_name(class_name, hwnd, process_name)
 
         # Window placement. IsIconic == minimized (still "visible" to
         # IsWindowVisible, but shown as an icon — its bbox is the icon rect, not a
