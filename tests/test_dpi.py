@@ -135,3 +135,49 @@ def test_ensure_ctypes_exception(monkeypatch):
     r = ensure_process_dpi_awareness(PER_MONITOR)
     assert r.ok is False
     assert "ctypes error" in r.detail
+
+
+def test_setup_dpi_awareness_logs_ok(caplog, monkeypatch):
+    """daemon _setup_dpi_awareness logs INFO with actual awareness on ok.
+
+    Exercises the module-level helper factored out of COMWorkerThread.run() so
+    the wiring is unit-testable without spinning a real COM STA thread.
+    """
+    import logging
+    from agent_windows.core import dpi as dpi_mod
+    from agent_windows.daemon import server as server_mod
+
+    class _R:
+        ok = True
+        actual = 2
+        requested = 2
+        detail = "set S_OK"
+    monkeypatch.setattr(dpi_mod, "ensure_process_dpi_awareness",
+                        lambda target=2: _R())
+
+    with caplog.at_level(logging.DEBUG, logger="agent_windows.daemon"):
+        server_mod._setup_dpi_awareness(logging.getLogger("agent_windows.daemon"))
+    assert any("per-monitor (actual=2)" in r.message for r in caplog.records)
+    assert all(r.levelno < logging.WARNING for r in caplog.records)
+
+
+def test_setup_dpi_awareness_logs_warning_on_mismatch(caplog, monkeypatch):
+    """daemon _setup_dpi_awareness logs WARNING on readback mismatch."""
+    import logging
+    from agent_windows.core import dpi as dpi_mod
+    from agent_windows.daemon import server as server_mod
+
+    class _R:
+        ok = False
+        actual = 1
+        requested = 2
+        detail = "already set E_ACCESSDENIED (was=1)"
+    monkeypatch.setattr(dpi_mod, "ensure_process_dpi_awareness",
+                        lambda target=2: _R())
+
+    with caplog.at_level(logging.DEBUG, logger="agent_windows.daemon"):
+        server_mod._setup_dpi_awareness(logging.getLogger("agent_windows.daemon"))
+    warned = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert warned, "expected a WARNING on mismatch"
+    assert any("mismatch" in r.message and "actual=1" in r.message
+               for r in warned)

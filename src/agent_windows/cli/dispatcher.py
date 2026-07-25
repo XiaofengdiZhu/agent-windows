@@ -130,7 +130,6 @@ def _dispatch_no_daemon(method: str, params: dict[str, Any] | None) -> dict[str,
     (M-11). Factored out of ``dispatch`` so the telemetry try/finally above can
     wrap both paths uniformly.
     """
-    import ctypes
     import pythoncom
 
     # _dispatch_no_daemon is also reachable directly (not only via dispatch),
@@ -139,7 +138,16 @@ def _dispatch_no_daemon(method: str, params: dict[str, Any] | None) -> dict[str,
     params = _stamp_caller_local(params)
 
     try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        from agent_windows.core.dpi import ensure_process_dpi_awareness
+        result = ensure_process_dpi_awareness(2)
+        if result.ok:
+            logger.debug("DPI awareness: per-monitor (actual=%d) %s",
+                         result.actual, result.detail)
+        else:
+            logger.warning(
+                "DPI awareness mismatch: requested=2 actual=%d — "
+                "coordinates may be virtualized (detail=%s)",
+                result.actual, result.detail)
     except Exception:
         logger.debug("DPI awareness setup failed (non-critical)", exc_info=True)
     # QUAL3-11: guard CoInitialize so a COM init failure surfaces as a clear

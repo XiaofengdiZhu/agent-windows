@@ -47,6 +47,28 @@ from agent_windows.utils.config import get_pid_path as cfg_pid_path, get_version
 
 logger = logging.getLogger("agent_windows.daemon")
 
+
+def _setup_dpi_awareness(logger):
+    """Set + verify process DPI awareness; log INFO on ok, WARNING on gap.
+
+    Factored from COMWorkerThread.run() so it is unit-testable without a real
+    COM STA thread. Uses ensure_process_dpi_awareness (HRESULT check + readback)
+    so a silent E_ACCESSDENIED failure is detected, not logged as success.
+    """
+    try:
+        from agent_windows.core.dpi import ensure_process_dpi_awareness
+        result = ensure_process_dpi_awareness(2)  # PerMonitorDpiAware
+        if result.ok:
+            logger.info("DPI awareness: per-monitor (actual=%d) %s",
+                        result.actual, result.detail)
+        else:
+            logger.warning(
+                "DPI awareness mismatch: requested=2 actual=%d — "
+                "UIA/SendInput coordinates may be virtualized on scaled "
+                "displays (detail=%s)", result.actual, result.detail)
+    except Exception as e:
+        logger.warning("DPI awareness setup failed: %s", e)
+
 # Wall-clock budget the main loop waits for the STA worker to finish one
 # command. Sized at 300s to match the longest SINGLE-command self-limit in the
 # codebase — handlers/tree.py MAX_WAIT_SECONDS (300), which wait/wait_for
@@ -120,12 +142,10 @@ class COMWorkerThread(threading.Thread):
         pythoncom.CoInitialize()
         logger.info("COM STA worker thread initialized")
         try:
-            # Set DPI awareness (must be done before any UIA calls)
-            try:
-                ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PerMonitorDpiAware
-                logger.info("DPI awareness set (PerMonitorDpiAware)")
-            except Exception as e:
-                logger.warning("Failed to set DPI awareness: %s (may already be set)", e)
+            # Set DPI awareness (must be done before any UIA calls). Uses the
+            # verified helper (HRESULT check + readback) so a silent
+            # E_ACCESSDENIED failure is detected, not logged as success.
+            _setup_dpi_awareness(logger)
 
             # Initialize UIA on this thread
             try:

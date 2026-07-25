@@ -1590,6 +1590,13 @@ def SetProcessDpiAwareness(dpiAwareness: int):
     use physical pixels consistently. Required for correct behavior on scaled displays.
 
     dpiAwareness: int, a value in class `ProcessDpiAwareness`
+
+    Note:
+        This wrapper returns the raw HRESULT but does not verify the result via
+        readback. For startup DPI setup with verification (HRESULT check +
+        GetProcessDpiAwareness readback), prefer
+        ``agent_windows.core.dpi.ensure_process_dpi_awareness``. Kept for
+        external callers and the Win7 ``SetProcessDPIAware`` fallback path.
     """
     try:
         # https://docs.microsoft.com/en-us/windows/win32/api/shellscalingapi/nf-shellscalingapi-setprocessdpiawareness
