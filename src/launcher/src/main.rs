@@ -43,11 +43,12 @@ fn main() -> ExitCode {
         return ExitCode::from(1);
     }
 
-    // `config` and `mcp` are delegated to the Python CLI (`agent-windows-python`).
+    // `config`, `mcp`, and `audit` are delegated to the Python CLI (`agent-windows-python`).
     // `config` touches only the local config file (no daemon/COM/UIA); `mcp` runs
     // the FastMCP server, a long-lived Python process that must hold the event loop
-    // and FastMCP runtime — neither belongs in the lean Rust launcher. Porting either
-    // would mean duplicating logic already tested on the Python side. We intercept
+    // and FastMCP runtime; `audit` (`audit verify`) reads the on-disk log and
+    // recomputes HMACs. None belong in the lean Rust launcher — porting any would
+    // mean duplicating logic already tested on the Python side. We intercept
     // BEFORE `parse` so the full original argv (including --format/--debug globals)
     // is forwarded verbatim, exactly as if the user had typed
     // `agent-windows-python mcp serve ...` directly. Only the literal top-level
@@ -274,9 +275,10 @@ fn first_command_name(argv: &[String]) -> Option<&str> {
 
 /// Whether the invocation should be delegated to the Python CLI rather than
 /// routed through the daemon. True iff the command name (after the global-flag
-/// prefix, ignoring any `--help`/`-h`) is `config` or `mcp` — both are handled
-/// entirely in Python (config touches only the local file; mcp runs a long-lived
-/// FastMCP server), so porting them would duplicate tested logic.
+/// prefix, ignoring any `--help`/`-h`) is `config`, `mcp`, or `audit` — all
+/// three are handled entirely in Python (config touches only the local file;
+/// mcp runs a long-lived FastMCP server; `audit verify` reads the on-disk log),
+/// so porting them would duplicate tested logic.
 ///
 /// Extracted from the inline `main()` check so the delegation DECISION is
 /// unit-testable: `first_command_name` is tested, but without this seam a
@@ -284,7 +286,14 @@ fn first_command_name(argv: &[String]) -> Option<&str> {
 /// and printed global help for `config --help`) would slip past every test,
 /// since main()'s routing isn't directly reachable from a unit test.
 fn should_delegate_to_python(argv: &[String]) -> bool {
-    matches!(first_command_name(argv), Some("config") | Some("mcp"))
+    // `config`/`mcp`/`audit` are served entirely by the Python CLI: config =
+    // local file only; mcp = long-lived FastMCP server; audit = `audit verify`
+    // reads the on-disk action_audit.log. None need the daemon/COM/UIA, so the
+    // full original argv is forwarded verbatim before parse() (see main()).
+    matches!(
+        first_command_name(argv),
+        Some("config") | Some("mcp") | Some("audit")
+    )
 }
 
 /// Run a daemon call: ensure daemon up → build request → IPC → print.
@@ -564,7 +573,7 @@ fn run_python_cli(argv: &[String], global: &GlobalFlags) -> ExitCode {
         Err(e) => {
             report_error(
                 &format!(
-                    "Could not run '{}' for config delegation ({}). \
+                    "Could not run '{}' for Python-CLI delegation ({}). \
                      Make sure agent-windows-python is installed (uv tool install agent-windows).",
                     exe, e
                 ),
@@ -1084,9 +1093,9 @@ mod tests {
     // break the user-visible routing. These lock the decision directly.
 
     #[test]
-    fn delegates_config_and_mcp_even_behind_help() {
-        // The original bug: `config --help` was misrouted to global help. Both
-        // config and mcp must delegate regardless of where --help sits, and with
+    fn delegates_config_mcp_audit_even_behind_help() {
+        // The original bug: `config --help` was misrouted to global help. config,
+        // mcp, and audit must delegate regardless of where --help sits, and with
         // or without subcommands / global flags.
         for yes in [
             &["config"][..],
@@ -1099,6 +1108,10 @@ mod tests {
             &["mcp", "--help"][..],
             &["mcp", "serve", "--help"][..],
             &["--config", "p.toml", "mcp", "serve"][..],
+            &["audit"][..],
+            &["audit", "verify"][..],
+            &["audit", "verify", "--help"][..],
+            &["--help", "audit"][..],
         ] {
             assert!(should_delegate_to_python(&argv(yes)), "should delegate: {:?}", yes);
         }
