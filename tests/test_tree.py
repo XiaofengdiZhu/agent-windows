@@ -3073,6 +3073,20 @@ class TestPickUwpAppPid:
 # ── _resolve_uwp_app_pid: EnumChildWindows walk for UWP frame (TODO P2#6 6a) ─
 
 
+class _Func:
+    """Callable stand-in for a ctypes function (carries .argtypes/.restype).
+
+    A plain bound method cannot take .argtypes setattr (core/dpi.py lesson).
+    """
+    def __init__(self, ret_fn):
+        self._ret_fn = ret_fn
+        self.argtypes = None
+        self.restype = None
+
+    def __call__(self, *args):
+        return self._ret_fn(args)
+
+
 class _FakeUser32:
     """Minimal user32 double for _resolve_uwp_app_pid.
 
@@ -3086,14 +3100,21 @@ class _FakeUser32:
         self._children = child_hwnds
         self._pid_map = pid_map
 
-    def GetWindowThreadProcessId(self, hwnd, p):
-        p._obj.value = self._pid_map.get(hwnd, 0)
-        return 1
+        def _gwtpi(args):
+            # GetWindowThreadProcessId(hwnd, &pid) -> thread id; args[1] is
+            # the byref(DWORD) CArgObject whose ._obj.value we write back.
+            args[1]._obj.value = self._pid_map.get(args[0], 0)
+            return 1  # thread id (nonzero = success)
 
-    def EnumChildWindows(self, parent, cb, lparam):
-        for c in self._children:
-            cb(c, lparam)
-        return True
+        def _ecw(args):
+            # EnumChildWindows(parent, cb, lparam) -> BOOL; drive the callback
+            # once per recorded child hwnd.
+            for c in self._children:
+                args[1](c, args[2])
+            return True
+
+        self.GetWindowThreadProcessId = _Func(_gwtpi)
+        self.EnumChildWindows = _Func(_ecw)
 
 
 class TestResolveUwpAppPid:

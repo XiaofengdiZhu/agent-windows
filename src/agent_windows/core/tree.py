@@ -304,28 +304,29 @@ def _resolve_uwp_app_pid(
             ctypes.wintypes.HWND,
             ctypes.wintypes.LPARAM,
         )
-        # Explicit .argtypes/.restype on the real ctypes binding only. A test-
-        # injected _FakeUser32 uses plain bound methods, which reject .argtypes
-        # setattr (the ``test_uipi.py`` _Func / ``core/dpi.py`` lesson); without
-        # this guard the outer ``except AttributeError`` would swallow the
-        # assignment failure and degrade the walk to ``None``. Production always
-        # takes the typed path so ctypes validates the HWND/HANDLE round-trip.
-        if _user32 is None:
-            user32.GetWindowThreadProcessId.argtypes = [
-                ctypes.wintypes.HWND, ctypes.POINTER(ctypes.wintypes.DWORD)]
-            user32.GetWindowThreadProcessId.restype = ctypes.wintypes.DWORD
-            user32.EnumChildWindows.argtypes = [
-                ctypes.wintypes.HWND, WNDENUMPROC, ctypes.wintypes.LPARAM]
-            user32.EnumChildWindows.restype = ctypes.c_bool
+        user32.GetWindowThreadProcessId.argtypes = [
+            ctypes.wintypes.HWND, ctypes.POINTER(ctypes.wintypes.DWORD)]
+        user32.GetWindowThreadProcessId.restype = ctypes.wintypes.DWORD
+        user32.EnumChildWindows.argtypes = [
+            ctypes.wintypes.HWND, WNDENUMPROC, ctypes.wintypes.LPARAM]
+        user32.EnumChildWindows.restype = ctypes.c_bool
 
         frame_host_pid = ctypes.wintypes.DWORD()
-        user32.GetWindowThreadProcessId(frame_hwnd, ctypes.byref(frame_host_pid))
+        # GetWindowThreadProcessId returns the thread id (0 on failure); mirror
+        # ``core/uipi.py``'s ``_pid_of_hwnd`` and bail before reading .value.
+        if not user32.GetWindowThreadProcessId(
+            frame_hwnd, ctypes.byref(frame_host_pid)
+        ):
+            return None
 
         child_pids: list[int] = []
 
         def _child_cb(child_hwnd, _lparam):
             cpid = ctypes.wintypes.DWORD()
-            user32.GetWindowThreadProcessId(child_hwnd, ctypes.byref(cpid))
+            if not user32.GetWindowThreadProcessId(
+                child_hwnd, ctypes.byref(cpid)
+            ):
+                return True  # pid read failed; skip, keep enumerating
             child_pids.append(cpid.value)
             return True  # enumerate all children
 
