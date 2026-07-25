@@ -69,6 +69,28 @@ def _setup_dpi_awareness(logger):
     except Exception as e:
         logger.warning("DPI awareness setup failed: %s", e)
 
+
+def _setup_own_il(logger):
+    """Read + cache the daemon's own process integrity level once at startup.
+
+    Preheats ``own_integrity_level()`` (cached) so foreground click/type UIPI
+    preflight has a baseline. Logs INFO with the level name on success; WARNING
+    on a read failure (the preflight will degrade to no-op, daemon still runs).
+    """
+    try:
+        from agent_windows.core.uipi import own_integrity_level, _RID_NAMES
+        own = own_integrity_level()
+        name = _RID_NAMES.get(own, "unknown") if own is not None else "unknown"
+        if own is not None:
+            logger.info("own integrity: %s (0x%04X)", name, own)
+        else:
+            logger.warning(
+                "own integrity: read failed — UIPI preflight will degrade to "
+                "no-op (foreground clicks to elevated targets may false-succeed)")
+    except Exception as e:
+        logger.warning("own integrity setup failed: %s", e)
+
+
 # Wall-clock budget the main loop waits for the STA worker to finish one
 # command. Sized at 300s to match the longest SINGLE-command self-limit in the
 # codebase — handlers/tree.py MAX_WAIT_SECONDS (300), which wait/wait_for
@@ -146,6 +168,8 @@ class COMWorkerThread(threading.Thread):
             # verified helper (HRESULT check + readback) so a silent
             # E_ACCESSDENIED failure is detected, not logged as success.
             _setup_dpi_awareness(logger)
+
+            _setup_own_il(logger)
 
             # Initialize UIA on this thread
             try:

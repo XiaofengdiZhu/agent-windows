@@ -218,3 +218,39 @@ def test_own_degrades_on_api_missing(monkeypatch):
     monkeypatch.setattr(ctypes, "windll", _Proxy())
     from agent_windows.core import uipi as uipi_mod
     assert uipi_mod.own_integrity_level() is None
+
+
+# ---- daemon _setup_own_il wiring (Group C) --------------------------------
+
+def test_setup_own_il_logs_info_on_read(caplog, monkeypatch):
+    """_setup_own_il logs INFO with the own IL name when the read succeeds."""
+    import logging
+    from agent_windows.core import uipi as uipi_mod
+    from agent_windows.daemon import server as server_mod
+
+    uipi_mod._reset_own_il_cache_for_tests()
+    monkeypatch.setattr(uipi_mod, "_read_own_il_uncached", lambda: 0x2000)
+    monkeypatch.setattr(uipi_mod, "_OWN_IL", uipi_mod._UNSET, raising=False)
+
+    with caplog.at_level(logging.DEBUG, logger="agent_windows.daemon"):
+        server_mod._setup_own_il(logging.getLogger("agent_windows.daemon"))
+    assert any("own integrity" in r.message and "medium" in r.message
+               for r in caplog.records)
+    assert all(r.levelno < logging.WARNING for r in caplog.records)
+
+
+def test_setup_own_il_logs_warning_on_none(caplog, monkeypatch):
+    """_setup_own_il logs WARNING when the own-IL read fails (None)."""
+    import logging
+    from agent_windows.core import uipi as uipi_mod
+    from agent_windows.daemon import server as server_mod
+
+    uipi_mod._reset_own_il_cache_for_tests()
+    monkeypatch.setattr(uipi_mod, "_read_own_il_uncached", lambda: None)
+    monkeypatch.setattr(uipi_mod, "_OWN_IL", uipi_mod._UNSET, raising=False)
+
+    with caplog.at_level(logging.DEBUG, logger="agent_windows.daemon"):
+        server_mod._setup_own_il(logging.getLogger("agent_windows.daemon"))
+    warned = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert warned
+    assert any("own integrity" in r.message for r in warned)
