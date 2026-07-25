@@ -54,7 +54,14 @@ def run_with_uia_bypass(host_hwnd: int, action: Callable[[], T]) -> T:
     try:
         return action()
     finally:
-        _enable_window(host_hwnd, bool(prev))
+        # EnableWindow's BOOL return is inverted vs. intuition: nonzero means
+        # the window was *previously disabled*, zero means previously enabled
+        # (MSDN). bool(prev) restores the wrong state for a normal pre-enabled
+        # host — prev==0 (was enabled) -> bool(0)=False -> stays disabled,
+        # stranding the user's window (body buttons dead, clicks beep) until
+        # they close & reopen it. Map "was enabled" (prev==0) back to enabled;
+        # a previously-disabled host (prev!=0) stays disabled.
+        _enable_window(host_hwnd, prev == 0)
 
 
 def _host_hwnd_of(control) -> int:

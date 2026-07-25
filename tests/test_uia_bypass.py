@@ -10,7 +10,7 @@ def test_run_with_uia_bypass_disables_then_restores(monkeypatch):
 
     def fake_enable_window(hwnd, enable):
         calls.append((hwnd, enable))
-        return 1  # previous state: was enabled
+        return 0  # MSDN: zero return = window was previously enabled
 
     monkeypatch.setattr(bypass, "_enable_window", fake_enable_window)
 
@@ -25,7 +25,7 @@ def test_run_with_uia_bypass_restores_even_when_action_raises(monkeypatch):
 
     def fake_enable_window(hwnd, enable):
         calls.append(enable)
-        return 1
+        return 0  # MSDN: zero return = previously enabled -> restore enabled
 
     monkeypatch.setattr(bypass, "_enable_window", fake_enable_window)
 
@@ -35,16 +35,17 @@ def test_run_with_uia_bypass_restores_even_when_action_raises(monkeypatch):
     with pytest.raises(RuntimeError):
         bypass.run_with_uia_bypass(99, boom)
 
-    assert calls == [False, True]  # finally still restored
+    assert calls == [False, True]  # finally still restored to enabled
 
 
 def test_run_with_uia_bypass_restores_prior_disabled_state(monkeypatch):
-    # Host was already disabled (prev=0): restore to disabled, not forced True.
+    # Host was already disabled: EnableWindow returns nonzero (MSDN), and the
+    # bypass restores it to disabled (not force-enabled).
     calls = []
 
     def fake_enable_window(hwnd, enable):
         calls.append(enable)
-        return 0  # previous state: was disabled
+        return 1  # MSDN: nonzero return = window was previously disabled
 
     monkeypatch.setattr(bypass, "_enable_window", fake_enable_window)
 
@@ -139,7 +140,7 @@ def no_real_enable_window(monkeypatch):
     disable/restore ordering (``test_invoke_background_disables_host_around_pattern``)
     patch ``_enable_window`` themselves and opt out of this fixture.
     """
-    monkeypatch.setattr(bypass, "_enable_window", lambda hwnd, en: 1)
+    monkeypatch.setattr(bypass, "_enable_window", lambda hwnd, en: 0)  # MSDN: 0 = was enabled
 
 
 def test_invoke_via_pattern_prefers_invoke(monkeypatch, no_real_enable_window):
@@ -262,7 +263,7 @@ def test_invoke_background_disables_host_around_pattern(monkeypatch):
 
     enables = []
     monkeypatch.setattr(bypass, "_enable_window",
-                        lambda hwnd, en: enables.append((hwnd, en)) or 1)
+                        lambda hwnd, en: enables.append((hwnd, en)) or 0)
     invoke = _FakePattern("invoke")
     ctrl = _FakeControl({PatternId.InvokePattern: invoke},
                         ancestor_window=_FakeWindowControl(888))
@@ -413,7 +414,7 @@ def test_run_pattern_background_wraps_action(monkeypatch, no_real_enable_window)
     test_run_with_uia_bypass_disables_then_restores."""
     events = []
     monkeypatch.setattr(bypass, "_enable_window",
-                        lambda hwnd, en: events.append(("enable", hwnd, en)) or 1)
+                        lambda hwnd, en: events.append(("enable", hwnd, en)) or 0)
     ctrl = _FakeControl({}, ancestor_window=_FakeWindowControl(777))
 
     def _action():

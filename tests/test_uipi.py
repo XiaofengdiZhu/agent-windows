@@ -316,14 +316,15 @@ def test_click_background_skips_check(monkeypatch):
                         lambda x, y: called.__setitem__("at", called["at"] + 1) or type(
                             "R", (), {"blocked": True, "own_il": 0x2000,
                                       "target_il": 0x3000, "detail": ""})())
-    # invoke_background will fail (no UIA in unit test) — we only assert the
-    # preflight was NOT consulted on the background branch. Wrap in try.
+    # Stub invoke_background so the background branch never reaches the real
+    # UIA/EnableWindow and touches the live desktop. The assertion is only
+    # that the UIPI preflight was NOT consulted on this branch.
+    monkeypatch.setattr("agent_windows.core.uia_bypass.invoke_background",
+                        lambda x, y, selector=None: {"action": "invoke", "host_hwnd": 1})
     from agent_windows.daemon.handlers import input as input_mod
-    try:
-        input_mod._click({"x": 5, "y": 5, "background": True})
-    except Exception:
-        pass  # invoke_background/ControlFromPoint will raise under unit test
+    result = input_mod._click({"x": 5, "y": 5, "background": True})
     assert called["at"] == 0
+    assert "background" in result["output"]
 
 
 def test_click_degrade_does_not_raise(monkeypatch):
