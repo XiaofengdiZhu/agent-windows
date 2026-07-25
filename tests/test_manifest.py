@@ -1,90 +1,35 @@
-"""Manifest drift guards: version single-source-of-truth + tool-list parity.
+"""Manifest drift guards: version + tool-list parity via sync_manifest --check.
 
-Mirrors TODO #10's TestDataclassDefaults philosophy — catch drift between
-static metadata files and the live code at test time, so a release can never
-ship a manifest whose version or tool list is stale. Pure stdlib (json/re/
-pathlib); does NOT import the agent_windows package (which pulls in
-comtypes/pywin32), keeping it fast and host-independent.
+Delegates the version 4-way + tool-name set comparison to
+scripts/sync_manifest.py check() — single source of truth for that logic.
+This module keeps only the structural required-fields assertions that
+sync_manifest.py does NOT cover. Pure stdlib (json/subprocess/sys/pathlib);
+does NOT import the agent_windows package (which pulls in comtypes/pywin32),
+keeping it fast and host-independent.
 """
 import json
-import re
+import subprocess
+import sys
 from pathlib import Path
 
-import pytest
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
-
-
-def _read_pyproject_version() -> str:
-    """version from [project] in pyproject.toml (single source of truth)."""
-    text = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    m = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
-    assert m, "pyproject.toml has no top-level version"
-    return m.group(1)
-
-
-def _read_init_version() -> str:
-    """__version__ from src/agent_windows/__init__.py.
-
-    Read the file + regex rather than `import agent_windows`: the package
-    init pulls in comtypes/pywin32 at import time, which we don't want a
-    metadata-drift test to pay for (and it'd need a Windows host).
-    """
-    text = (REPO_ROOT / "src" / "agent_windows" / "__init__.py").read_text(
-        encoding="utf-8")
-    m = re.search(r'__version__\s*=\s*"([^"]+)"', text)
-    assert m, "__init__.py has no __version__"
-    return m.group(1)
 
 
 def _load(name):
     return json.loads((REPO_ROOT / name).read_text(encoding="utf-8"))
 
 
-@pytest.fixture(scope="module")
-def expected_version():
-    return _read_pyproject_version()
+def test_no_manifest_drift():
+    """sync_manifest --check passes (version 4-way + tool names aligned).
 
-
-def test_versions_all_match(expected_version):
-    """pyproject == __init__ == manifest.json.version == server.json.version
-    == server.json.packages[0].version.
-
-    pyproject.toml is the single source of truth; the other four must track
-    it. A release bump that misses one source fails here.
+    Replaces the old inline version + name assertions — the check logic now
+    lives in one place (scripts/sync_manifest.py check()).
     """
-    assert _read_init_version() == expected_version
-    manifest = _load("manifest.json")
-    server = _load("server.json")
-    assert manifest["version"] == expected_version
-    assert server["version"] == expected_version
-    assert server["packages"][0]["version"] == expected_version
-
-
-def _source_tool_names() -> set[str]:
-    """All @mcp.tool(name=...) values across src/agent_windows/mcp/tools/*.py."""
-    tools_dir = REPO_ROOT / "src" / "agent_windows" / "mcp" / "tools"
-    names: set[str] = set()
-    pattern = re.compile(r'@mcp\.tool\(name="([^"]+)"')
-    for py in tools_dir.glob("*.py"):
-        names.update(pattern.findall(py.read_text(encoding="utf-8")))
-    assert names, "no tools found — regex drifted from registration style?"
-    return names
-
-
-def test_manifest_tools_match_source():
-    """manifest.json tools[] names must equal the source @mcp.tool names.
-
-    Adding/renaming/removing a tool without updating manifest.json fails here.
-    """
-    manifest = _load("manifest.json")
-    manifest_names = {t["name"] for t in manifest["tools"]}
-    source_names = _source_tool_names()
-    assert manifest_names == source_names, (
-        f"manifest/tools drift — missing in manifest: "
-        f"{source_names - manifest_names}; extra in manifest: "
-        f"{manifest_names - source_names}"
+    r = subprocess.run(
+        [sys.executable, str(REPO_ROOT / "scripts" / "sync_manifest.py"), "--check"],
+        capture_output=True, text=True,
     )
+    assert r.returncode == 0, r.stdout + r.stderr
 
 
 def test_manifest_required_fields():
