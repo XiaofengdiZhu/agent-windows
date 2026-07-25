@@ -95,6 +95,8 @@ Returns a structured text view of the UIA accessibility tree. Contains the **Int
 
 `--window` / `--active` scope the traversal to a single top-level window — use when one large window (browser, IDE, complex dialog) would otherwise flood the output. `--window V` resolves as HWND (`12345` / `0x1a2b`), title substring (case-insensitive), then process name, mirroring `app switch`; first match wins and a warning is printed when multiple match. In single-window mode `@eN` restarts at `@e1` and maps to that window's subtree, written to the same 2s cache slot — so an immediate `click @e1` / `get-text @e1` lines up with the subtree, no cross-window mapping. `--window` and `--active` are mutually exclusive.
 
+**Related**: `snapshot-diff` diffs a stored baseline UIA tree against the current desktop, reporting added / removed / changed elements — useful for detecting state drift between runs (distinct from the pixel-level `diff`). See `references/commands.md` for the flag list.
+
 ### list-displays — Enumerate Displays
 
 ```bash
@@ -261,6 +263,7 @@ agent-windows click 500 300                # Left click
 agent-windows click 500 300 --right        # Right click
 agent-windows click 500 300 --double       # Double click
 agent-windows dblclick 500 300             # Double click (explicit)
+agent-windows click -s @e3 --background    # No-focus-steal click (UIA Invoke; left single only)
 agent-windows hover 500 300                # Hover (trigger tooltips)
 agent-windows move 500 300                 # Move mouse only
 agent-windows scroll 500 300 --direction down --amount 5   # Scroll
@@ -270,6 +273,8 @@ agent-windows mouse-up 500 300             # Release
 ```
 
 `click`/`dblclick`/`hover`/`move` self-verify by default: each appends `Hit:` (the element under the cursor) and `Focus:` (the foreground window) to its output, and `drag` appends `Drop:` + `Slider:`. So you usually **don't need a follow-up `snapshot`** to confirm a click landed on the right thing — read the verify lines. Turn it off for raw speed with `config set input.verify false`.
+
+`--background` delivers the click via the UIA `Invoke` / `Toggle` / `Select` pattern instead of `SendInput`, so the target window never comes to the foreground — handy for poking a non-foreground or UWP window without stealing focus. Left single-click only; if the element has no invokable pattern (or no host HWND) the call raises `-1007 BACKGROUND_UNAVAILABLE` — retry foreground.
 
 ### Keyboard
 
@@ -514,8 +519,9 @@ A command failed? Don't guess — diagnose in order:
    - `-1001 ELEMENT_NOT_FOUND` → `@eN` ref is stale; re-`observe` and use a fresh ref.
    - `-1002 COORDINATE_OUT_OF_RANGE` → click/scroll coordinates outside the screen; re-`observe` for fresh bounds.
    - `-1003 WAIT_TIMEOUT` → element/text never appeared (check the name's exact case — matching is case-sensitive), or a `shell` command exceeded `shell.timeout`; raise the timeout.
+   - `-1004 PERMISSION_DENIED` → UAC blocked the action, a higher-integrity (elevated) target blocked by UIPI, or a `shell` command matched `shell.blacklist`.
    - `-1005 VISION_API_ERROR` → vision model not configured/rate-limited; run `config doctor`.
-   - `-1004 PERMISSION_DENIED` → UAC blocked the action, or a `shell` command matched `shell.blacklist`.
+   - `-1007 BACKGROUND_UNAVAILABLE` → a `--background` click found no invokable pattern or no host window, or `expand`/`collapse` had no host window; retry foreground (click) or re-`snapshot`. (A non-expandable element raises `-32602`, not `-1007`.)
    - Standard JSON-RPC codes (`-32600`…`-32603`) and the full table are in `references/troubleshooting.md`.
 
 2. **Re-observe** (`agent-windows observe`) to see the current screen state — it usually reveals what changed.

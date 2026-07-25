@@ -60,7 +60,7 @@ def ground_element(
         screenshot: Optional PIL Image. If None, captures fresh screenshot.
         single_pass: Skip the fine-pass API call — one network round-trip instead
             of two (~2x faster, ~half the cost) at the cost of click precision.
-            When ``None`` (default), reads ``grounding.single_pass`` from config;
+            When ``None`` (default), reads ``vlm.single_pass`` from config;
             an explicit ``True``/``False`` overrides the config for this call. (H-07)
 
     Returns:

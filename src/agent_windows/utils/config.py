@@ -205,15 +205,18 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "wait": {
         "poll_interval": 0.5,  # seconds between polls when waiting for element/text
-        # DoS cap: max seconds for wait / wait_for / wait_for_check. An unbounded
-        # value would sleep on the single STA worker (the submit timeout only
-        # reports WAIT_TIMEOUT, it can't interrupt the sleep). (SEC3-01)
+        # DoS cap: max seconds for the daemon-side wait / wait_for handlers
+        # (used by batch). wait_check / wait_for_check are non-blocking probes
+        # and aren't capped; the CLI wait/wait-for poll those client-side with
+        # their own --timeout. An unbounded value would sleep on the single STA
+        # worker (the submit timeout only reports WAIT_TIMEOUT, it can't
+        # interrupt the sleep). (SEC3-01)
         "max_seconds": 300,
     },
     "audit": {
         # Default-on audit log for destructive ops (fs_delete / fs_move /
-        # process_kill / registry set|delete / system_shutdown / system_restart
-        # / sleep): low-frequency / high-harm → record the target. Inverse of
+        # process_kill / window_close / registry set|delete / system_shutdown
+        # / system_restart / sleep): low-frequency / high-harm → record the target. Inverse of
         # telemetry's opt-in. The kill-switch for operators who want it off.
         # The HMAC key lives under `key` but is NOT a schema leaf here (it is
         # lazily generated + DPAPI-encrypted, like oauth_client_secret) so it is

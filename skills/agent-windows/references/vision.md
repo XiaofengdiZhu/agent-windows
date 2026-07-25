@@ -14,6 +14,8 @@ agent-windows has three vision-powered commands for cases where the UIA accessib
 | **Best for** | Clicking a specific button | Finding all icons of a type | Understanding screen state |
 | **Passes** | Coarse → fine | Single pass | Single pass |
 
+**MCP tool names use underscores**: `ask_vision` (CLI `ask-vision`); `ground` and `detect` match in both.
+
 **Rule**: Use `snapshot` first. Only reach for vision tools when the UIA tree doesn't contain the target.
 
 ## ground — Single Element Location
@@ -32,7 +34,7 @@ agent-windows ground "the search box in the top-right corner"
 3. **Fine pass**: Crops a region around the coarse result, sends the crop for refinement.
 4. Returns the refined `(x, y)` coordinate with a confidence score.
 
-**`--single-pass`**: skips the fine pass (step 3) — one API call, ~2× faster, lower precision (±~100 px instead of the refined result). Use it when speed matters more than precision, or to override a config `grounding.single_pass=true` for one call. With `--single-pass`, `method` is `"visual-coarse-only"`.
+**`--single-pass`**: skips the fine pass (step 3) — one API call, ~2× faster, lower precision (±~100 px instead of the refined result). Use it when speed matters more than precision, or to override a config `vlm.single_pass=true` for one call. With `--single-pass`, `method` is `"visual-single-pass"` and `confidence` is `"medium"`.
 
 ```bash
 agent-windows ground "the print icon" --single-pass   # fast, coarse-only
@@ -45,7 +47,7 @@ agent-windows ground "the print icon" --single-pass   # fast, coarse-only
 | `x` | int | X coordinate (physical pixels) |
 | `y` | int | Y coordinate (physical pixels) |
 | `confidence` | str | `"high"`, `"medium"`, or `"low"` |
-| `method` | str | `"visual-two-pass"`, `"visual-two-pass-drift"`, or `"visual-coarse-only"` |
+| `method` | str | `"visual-two-pass"`, `"visual-two-pass-drift"`, `"visual-single-pass"`, or `"visual-coarse-only"` |
 | `screenshot_path` | str | Path to the annotated screenshot |
 
 **Usage with click**:
@@ -141,20 +143,22 @@ jpeg_quality = 85           # JPEG quality (1-95), ignored when PNG
 | `anthropic` | `https://api.anthropic.com` | Claude models |
 | `gemini` | Google AI API | Gemini models (e.g. gemini-2.0-flash; uses the `google-genai` SDK) |
 
+`vlm.api_base` is consumed only by the OpenAI-compatible engine family (`openai`, `doubao`, `gemini_compatible`); it is silently ignored under `anthropic` and `gemini`.
+
 ### Setting the API Key
 
-Three ways (priority order: env var > config > interactive):
+Two sources (priority order: env var > config):
 
 ```bash
-# Environment variable (recommended for security)
+# Environment variable (recommended for security; never written to disk)
 #   cmd.exe:       set AGENT_WINDOWS_VLM_API_KEY=sk-...
 #   PowerShell:    $env:AGENT_WINDOWS_VLM_API_KEY="sk-..."
 
 # Config file (cross-shell, stored encrypted via Windows DPAPI)
 agent-windows config set vlm.api_key "sk-..."
-
-# Or leave empty and set at runtime
 ```
+
+If neither is set, the next vision call fails with `VISION_API_ERROR` (-1005).
 
 ### Overriding the Model
 
@@ -162,6 +166,10 @@ agent-windows config set vlm.api_key "sk-..."
 agent-windows ask-vision "Describe this" -m gpt-4o
 agent-windows detect "buttons" -m claude-sonnet-4-20250514
 ```
+
+### Custom Prompts (advanced)
+
+`ground` and `detect` send built-in prompts to the vision model. To override them, hand-edit `config.toml` and add any of `vlm.prompts.coarse`, `vlm.prompts.fine`, or `vlm.prompts.detect`. These keys are not in the default config or the `config set` schema, so `config set vlm.prompts.*` is rejected — edit the file directly. Omitted keys fall back to the built-in prompt.
 
 ## Mixed UIA + Vision Strategy
 

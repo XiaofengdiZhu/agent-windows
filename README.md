@@ -3,10 +3,8 @@
 Windows Computer-Use CLI for AI Agents. Provides desktop screenshot, UIA accessibility tree traversal, visual coordinate grounding, and mouse/keyboard automation through a fast Client-Daemon architecture.
 
 ## Highlights
-- **Vision for non-vision agents.** Built for agents whose driving model (DeepSeek, GLM, …) has no multimodal capability, or whose host can't configure a per-tool vision model — all screen reading is offloaded to a separate model you configure.
-- **Accessibility tree + visual grounding.** Two ways to locate element coordinates/ranges, pixel-precise; the former needs no vision model.
-- **Bring your own vision model.** Configure any cheap/free/local multimodal model and the tool uses it to visually ground elements that aren't in the accessibility tree — icon-only buttons, custom-drawn UI, canvas.
-- **Save tokens + cut cost.** Just locating an element needs no expensive multimodal LLM, and the whole screenshot shouldn't be stuffed into context either — all it needs is a coordinate.
+- **Accessibility tree + visual grounding.** Two pixel-precise ways to locate element coordinates; the accessibility tree needs no vision model at all.
+- **Vision for non-vision agents.** For agents whose model (DeepSeek, GLM, …) lacks multimodal input — screen reading is offloaded to any cheap/free/local vision model you configure. Only coordinates move through context, not whole screenshots — saving tokens and cost.
 - **Fast Rust CLI.** ~10x faster than a traditional Python CLI.
 
 ## Install
@@ -29,7 +27,7 @@ Or a one-off trial (runs without installing):
 uvx agent-windows observe
 ```
 
-> **`uv tool install` is recommended over `uvx` for regular use.** The daemon is long-lived and auto-restarts when its version no longer matches the CLI's; `uv tool install` pins both versions together, while `uvx` runs from a cache that can be silently refreshed (new release, cache expiry, `uvx -U`), triggering unwanted daemon restarts. See the [troubleshooting guide](skills/agent-windows/references/troubleshooting.md#daemon-keeps-restarting-uvx-version-drift) for details.
+> **Prefer `uv tool install` over `uvx` for regular use.** `uvx` runs from a cache that can be silently refreshed, triggering unwanted daemon restarts when its version drifts from the CLI's. See [troubleshooting](skills/agent-windows/references/troubleshooting.md#daemon-keeps-restarting-uvx-version-drift).
 
 From source (a checkout of this repo):
 
@@ -38,12 +36,10 @@ uv sync
 uv run agent-windows ...
 ```
 
-To rebuild the native launcher from source (requires Rust + MSVC + Windows SDK):
+To rebuild the native launcher from source (needs Rust + MSVC + Windows SDK):
 
 ```bash
-cd src/launcher && build.cmd build --release
-# the exe is staged to prebuilt/ (gitignored) and picked up by `uv build`
-# releases build it from source in CI — no binary is committed to the repo
+cd src/launcher && build.cmd build --release   # stages prebuilt/agent-windows.exe (gitignored)
 ```
 
 
@@ -90,7 +86,7 @@ Python daemon (persistent, COM STA worker)
 - **Daemon**: Persistent Python process holding heavy imports (comtypes, uia, Pillow). Handlers are organized by domain in `daemon/handlers/`.
 - **IPC**: Named Pipe with per-user DACL security. JSON-RPC 2.0 protocol.
 - **Auto-start**: First CLI call starts daemon automatically. Idle timeout (30min) stops it.
-- **Serial execution**: The daemon runs one command at a time. This is required because UIA/COM is apartment-bound and `SendInput` mutates global GUI state — concurrent commands would race. A single client is naturally serial; the only case it matters is multiple agents sharing one daemon (they serialize against each other). For isolation, run separate daemons (one user account per agent — the pipe path is per-user).
+- **Serial execution**: one command at a time — UIA/COM is apartment-bound and `SendInput` mutates global GUI state, so concurrent commands would race. Only matters when multiple agents share one daemon (they serialize against each other); for isolation, run separate daemons (one user account each — the pipe path is per-user).
 
 ## Commands
 
@@ -101,8 +97,8 @@ Full flags and examples live in the [Command Reference](skills/agent-windows/ref
 |---------|-------------|
 | `observe` | Combined observation (snapshot + screenshot + optional grounding) |
 | `snapshot` | UIA accessibility tree; `--window`/`--active` scope to one window |
-| `list-displays` | List displays (index, primary, resolution, rect, work area, device) for the `-d N` index |
-| `screenshot` | Screen capture; crop to a region/element, annotate with `@eN` boxes, overlay a grid |
+| `list-displays` | List displays (index, primary, resolution, rect, work area, device) for `-d N` |
+| `screenshot` | Screen capture; crop, annotate `@eN` boxes, overlay grid |
 | `ground` | Visual coordinate grounding (`--single-pass`: 1 API call, faster, lower precision) |
 | `detect` | Multi-target bounding box detection |
 | `find-image` | Locate a saved template image on screen — deterministic, no vision model |
@@ -110,26 +106,19 @@ Full flags and examples live in the [Command Reference](skills/agent-windows/ref
 | `ask-vision` | Free-form visual Q&A |
 | `highlight` | Highlight a region on a screenshot |
 | `diff` | Pixel-level screenshot diff |
+| `snapshot-diff` | Diff a stored UIA-tree baseline vs now (added/removed/changed elements) |
 | `get-text` | Get text content of a UIA element |
 | `is visible/enabled` | Check element state |
 
 ### Input
 | Command | Description |
 |---------|-------------|
-| `click` | Mouse click (coordinates or `@eN`) |
-| `dblclick` | Double-click |
-| `hover` | Hover (trigger tooltips/highlights) |
-| `mouse-down` | Press and hold a mouse button |
-| `mouse-up` | Release a mouse button |
+| `click` | Mouse click (coordinates or `@eN`); `--background` clicks without stealing focus (UIA pattern; `-1007` if unsupported) |
 | `type` | Type text (Unicode direct input) |
-| `scroll` | Scroll |
-| `move` | Move mouse |
-| `drag` | Drag |
 | `shortcut` | Keyboard shortcut (e.g. `ctrl+c`) |
-| `key-down` | Press key(s) (raw key-down); `--hold N` auto-releases, else stays pressed (pair with `key-up`) |
-| `key-up` | Release key(s) (raw key-up) |
-| `expand` | Expand an element (`@eN`) — ComboBox/TreeItem/Menu |
-| `collapse` | Collapse an element (`@eN`) |
+| `key-down` / `key-up` | Raw key press/release; `--hold N` auto-releases, else pair them |
+| `expand` / `collapse` | Expand/collapse an element (`@eN`) — ComboBox/TreeItem/Menu |
+| _also_ | `dblclick`, `hover`, `scroll`, `move`, `drag`, `mouse-down`, `mouse-up` |
 
 ### System
 | Command | Description |
@@ -138,6 +127,8 @@ Full flags and examples live in the [Command Reference](skills/agent-windows/ref
 | `app switch` | Switch to a window |
 | `app resize` | Resize/reposition a window |
 | `app list` | List visible windows |
+| `window minimize/maximize/restore/close/focus` | Window control |
+| `window enable` | Re-enable a window frozen by an interrupted `--background` click |
 | `shell` | Run a PowerShell command (UTF-8 output) |
 | `fs read/write/list/copy/move/delete/search/info` | Filesystem operations |
 | `clipboard get/set` | Clipboard access (`--keyboard` simulates Ctrl+C/V) |
@@ -162,6 +153,7 @@ Full flags and examples live in the [Command Reference](skills/agent-windows/ref
 | `daemon start/stop/status` | Daemon management |
 | `ping` | Daemon health check (single IPC round-trip) |
 | `config init/show/set/doctor` | Configuration (delegated to the Python CLI) |
+| `audit verify` | Verify the destructive-op audit log integrity (CLI-only) |
 | `mcp serve/auth/install/uninstall` | MCP server (delegated to the Python CLI) |
 
 ### Global Options
@@ -174,7 +166,7 @@ Full flags and examples live in the [Command Reference](skills/agent-windows/ref
 
 ## MCP Server
 
-agent-windows also ships a complete [MCP](https://modelcontextprotocol.io/) server (built with [FastMCP](https://github.com/jlowin/fastmcp)), exposing every CLI command as MCP tools. Any MCP-capable client — Claude Desktop, Cursor, Gemini CLI, etc. — can drive Windows through it. **This project is CLI-first; MCP is an alternative interface.** The full guide — client install configs (Claude Desktop incl. MSIX/Store, Cursor, Perplexity, Gemini CLI, Qwen Code, Codex CLI, Claude Code incl. WSL), remote HTTP access, auth, transports, and the tool catalog — lives in **[MCP.md](MCP.md)**.
+agent-windows also ships a complete [MCP](https://modelcontextprotocol.io/) server (built with [FastMCP](https://github.com/jlowin/fastmcp)), exposing the automation commands as MCP tools. Any MCP-capable client — Claude Desktop, Cursor, Gemini CLI, etc. — can drive Windows through it. **This project is CLI-first; MCP is an alternative interface.** The full guide — client install configs, remote HTTP access, auth, transports, and the tool catalog — lives in **[MCP.md](MCP.md)**.
 
 The 30-second version (local stdio, e.g. for Claude Desktop):
 
@@ -190,7 +182,7 @@ agent-windows mcp serve          # auto-starts the daemon on the first tool call
 }
 ```
 
-> Requires the `mcp` extra: `uv tool install agent-windows` installs it by default; from source run `uv sync --extra mcp`.
+> Requires the `mcp` extra: `uv tool install "agent-windows[mcp]"` (the bare `uv tool install agent-windows` pulls core deps only); from source run `uv sync --extra mcp`.
 
 ## Agent Skill
 
@@ -227,24 +219,20 @@ agent-windows config doctor
 
 > For non-OpenAI endpoints, also set `vlm.api_base` (e.g. `agent-windows config set vlm.api_base https://your-endpoint/v1`).
 
-> The `config` command is handled by the launcher: it forwards transparently
-> to the bundled Python CLI (`agent-windows-python`), which owns the config
-> schema and DPAPI encryption. No separate command name needed.
-
 ## Configuration
 
 Config file: `~/.agent-windows/config.toml` (auto-created with owner-only permissions)
 
-> **Path resolution**: relative paths in `[mcp] ssl_certfile` / `ssl_keyfile` are resolved against the **config file's directory**, not the process working directory — so a config under `--config <path>` resolves its TLS paths next to itself. Absolute paths and `~`-prefixed paths are used as-is. If a configured TLS file is missing, `mcp serve` fails fast with the resolved path and config location before starting the server.
+> **Path resolution**: relative `[mcp] ssl_certfile` / `ssl_keyfile` paths resolve against the **config file's directory**, not the working directory. Absolute and `~`-prefixed paths are used as-is.
 
-> **Security**: The `vlm.api_key` is **encrypted at rest** with Windows DPAPI (current-user scope); the config file is also restricted to your Windows account via an owner-only ACL. Always set the key through `config set vlm.api_key sk-...` (or the `AGENT_WINDOWS_VLM_API_KEY` env var) — it is encrypted transparently on save and decrypted transparently on load, so you never handle the encrypted form. API keys in `config show` output are automatically masked. For CI/CD or shared environments, prefer the `AGENT_WINDOWS_VLM_API_KEY` environment variable — it takes priority over the config file and is never written to disk.
+> **Security**: `vlm.api_key` is **DPAPI-encrypted at rest** (current-user scope); the config file is owner-only ACL'd. Set it via `config set vlm.api_key sk-...` or the `AGENT_WINDOWS_VLM_API_KEY` env var (which takes priority and is never written to disk). Keys are masked in `config show`.
 
-> **When changes take effect**: The daemon re-reads the config file on every command (checking the file's modification time), so `config set` applies to the **next command** — no daemon restart needed. The one exception is `daemon.idle_timeout_minutes`: it's read once at daemon startup, so changing it requires a restart (`daemon stop` then `daemon start`, or just let the old one idle out).
+> **When changes take effect**: the daemon re-reads config on every command (mtime-checked), so `config set` applies to the **next command** — no restart. Exception: `daemon.idle_timeout_minutes` is read once at startup.
 
 ```toml
 [vlm]
 enabled = true
-engine = "openai"       # openai / anthropic / gemini
+engine = "openai"       # openai / anthropic / gemini (+ doubao / gemini_compatible → OpenAI-compatible)
 model = "gpt-4o-mini"
 api_base = "https://api.openai.com/v1"
 api_key = ""             # or AGENT_WINDOWS_VLM_API_KEY env var
@@ -268,46 +256,32 @@ method = "system"      # "system" (PowerShell API) or "keyboard" (simulate Ctrl+
 
 [shell]
 timeout = 30             # execution timeout, seconds (overridable per-call via --timeout)
-max_output_bytes = 1048576  # cap stdout+stderr (1 MiB default); 0 = no cap. Output is read
-                          # incrementally and the command is TERMINATED once it exceeds the cap
-                          # (bounds daemon memory and frees the worker instead of running a
-                          # runaway command for the full timeout)
+max_output_bytes = 1048576  # stdout+stderr cap (1 MiB); 0 = no cap; command killed on overflow
 output_encoding = ""     # "" = UTF-8 (auto); else e.g. "gbk" for legacy-codepage exes
 ```
 
 ### Environment variables
 
-Every option below can be set as an env var instead of (or in addition to) the config file. Precedence is **flag > env var > config** everywhere. Grouped by area:
+Every option below can be set as an env var instead of (or in addition to) the config file. Precedence is **flag > env var > config** everywhere.
 
 | Variable | Area | Purpose |
 |---|---|---|
-| `AGENT_WINDOWS_VLM_API_KEY` | VLM / Config | Vision-model API key. Takes priority over `[vlm] api_key` in config; never written to disk. Set this in CI/shared envs. |
-| `AGENT_WINDOWS_SCREENSHOT_DIR` | Screenshot | Override where screenshots are saved (default `~/.agent-windows/screenshots/`). |
-| `AGENT_WINDOWS_ALLOW_INSECURE_REMOTE` | MCP / Security | Opt into an unauthenticated non-loopback HTTP bind (`mcp serve`). Not recommended. |
-| `AGENT_WINDOWS_IP_ALLOWLIST` | MCP / Security | Comma-separated IPs/CIDRs the HTTP server accepts; others get 403. |
-| `AGENT_WINDOWS_CORS_ORIGINS` | MCP / Security | Comma-separated allowed cross-origin URLs. Default empty (no CORS headers). |
-| `AGENT_WINDOWS_TOOLS` | MCP / Security | Comma-separated tool **whitelist** (overrides exclude). Filtered-out tools are genuinely blocked, not just hidden — `batch` sub-calls are filtered too. Valid names: see [MCP.md](MCP.md#tools). (This filters the MCP server process; the daemon separately enforces the `[tools]` config section — see [MCP.md](MCP.md#http-security--scaling-options).) |
-| `AGENT_WINDOWS_EXCLUDE_TOOLS` | MCP / Security | Comma-separated tools to remove from the active set (e.g. `shell,registry`) — enforced at the MCP layer including `batch`. To also bind a direct named-pipe client, set `[tools] exclude` in config (the daemon honors it at startup). See [MCP.md](MCP.md#http-security--scaling-options) for the enforcement boundary. |
-| `AGENT_WINDOWS_STATELESS_HTTP` | MCP / Security | `1`/`true` → stateless streamable-http (no `Mcp-Session-Id`; survives restarts). |
-| `AGENT_WINDOWS_OAUTH_CLIENT_ID` | MCP / Security | OAuth client id (requires `--oauth-client-secret`). |
-| `AGENT_WINDOWS_OAUTH_CLIENT_SECRET` | MCP / Security | OAuth client secret. |
-| `AGENT_WINDOWS_TELEMETRY` | Telemetry | `1`/`true`/`enabled` → enable local-only tool-call logging (off by default; writes `logs/telemetry.log`, no network). |
-| `AGENT_WINDOWS_PYTHON` | Launcher | Explicit Python interpreter for the daemon (highest priority; otherwise `python` on PATH). |
-| `AGENT_WINDOWS_E2E` | Testing | `1` → enable end-to-end daemon smoke tests (opt-in `@pytest.mark.e2e`). |
-
-> `--debug` (verbose logging) sets the `AGENT_WINDOWS_DEBUG` env var via
-> `enable_debug()`. Any module reads it with `is_debug()` instead of receiving a
-> debug flag as a parameter; the spawned daemon inherits it automatically. You
-> can also export `AGENT_WINDOWS_DEBUG=1` directly.
+| `AGENT_WINDOWS_VLM_API_KEY` | VLM | Vision-model API key; priority over `[vlm] api_key`, never written to disk. |
+| `AGENT_WINDOWS_SCREENSHOT_DIR` | Screenshot | Override screenshot dir (default `~/.agent-windows/screenshots/`). |
+| `AGENT_WINDOWS_DEBUG` | Debug | Set by `--debug`; modules read via `is_debug()`, daemon inherits it. |
+| `AGENT_WINDOWS_TELEMETRY` | Telemetry | `1` → local-only tool-call logging (`logs/telemetry.log`, no network). |
+| `AGENT_WINDOWS_PYTHON` | Launcher | Explicit Python interpreter for the daemon. |
+| `AGENT_WINDOWS_E2E` | Testing | `1` → enable e2e daemon smoke tests (`@pytest.mark.e2e`). |
+| MCP server vars | MCP | `ALLOW_INSECURE_REMOTE`, `IP_ALLOWLIST`, `CORS_ORIGINS`, `TOOLS`, `EXCLUDE_TOOLS`, `STATELESS_HTTP`, `FILE_TRANSFER`, `MAX_UPLOAD_MB`, `OAUTH_CLIENT_ID`/`SECRET` — see [MCP.md](MCP.md#http-security--scaling-options). |
 
 ## Requirements
 
 - Windows 8.1 / 10 / 11
 - Python 3.13+
 - Dependencies: typer, comtypes, pywin32 (≥306; ≥308 recommended), Pillow, mss, openai, toml, numpy
-- Optional: fastmcp (≥3.0, for the MCP server — `uv tool install agent-windows` / `uv sync --extra mcp`), dxcam, anthropic, google-genai
+- Optional: fastmcp (≥3.0, for the MCP server — `uv tool install "agent-windows[mcp]"` / `uv sync --extra mcp`), dxcam, anthropic, google-genai
 
-> **pywin32 note**: modern pywin32 wheels (≥308) self-configure their DLLs via a `.pth` bootstrap at install time, so `uv tool install` / `uvx` works out of the box. If you ever hit `pythoncom3xx.dll` / `pywintypes3xx.dll` not found on an older pywin32 or a manually-managed environment, run `python Scripts\pywin32_postinstall.py -install` from your install prefix.
+> **pywin32**: wheels ≥308 self-configure their DLLs via a `.pth` bootstrap, so `uv tool install` / `uvx` works out of the box. On older pywin32 or manual envs missing `pythoncom3xx.dll` / `pywintypes3xx.dll`, run `python Scripts\pywin32_postinstall.py -install`.
 
 ## License
 

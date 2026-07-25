@@ -116,7 +116,7 @@ Vision model settings for `ground`, `detect`, and `ask-vision`.
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `enabled` | bool | `true` | Enable/disable vision features |
-| `engine` | str | `"openai"` | Vision engine: `openai`, `anthropic`, or `gemini` |
+| `engine` | str | `"openai"` | Vision engine: `openai`, `anthropic`, or `gemini`. The aliases `doubao` and `gemini_compatible` route to the OpenAI-compatible path, and any unrecognized string also falls through to OpenAI-compatible |
 | `model` | str | `"gpt-4o-mini"` | Default model for vision calls |
 | `api_base` | str | `"https://api.openai.com/v1"` | API endpoint URL |
 | `api_key` | str | `""` | API key. **Encrypted at rest** with Windows DPAPI (current-user scope). Set it via `config set vlm.api_key sk-...` — it is encrypted transparently on save and decrypted transparently on load. (Or use the `AGENT_WINDOWS_VLM_API_KEY` env var, which is never written to disk.) |
@@ -129,6 +129,8 @@ Vision model settings for `ground`, `detect`, and `ask-vision`.
 | `image_format` | str | `"JPEG"` | Encoding format for images sent to the vision API: `JPEG` or `PNG` |
 | `jpeg_quality` | int | `85` | JPEG quality (1-95) for vision API images. Ignored when `image_format = PNG` |
 | `single_pass` | bool | `false` | Skip the fine-pass API call in `ground`: one network round-trip instead of two (faster, lower cost) at the cost of click precision — coarse coordinate only, no sub-element refinement. Override per call with `ground ... --single-pass`. |
+
+> **Advanced — prompt overrides.** The built-in coarse/fine/detect VLM prompts can be overridden by a `[vlm.prompts]` table with `coarse`, `fine`, and `detect` string keys (each formatted with `{description}`; `detect` also gets `{max_targets}`). NOT in the settable schema — hand-edit `config.toml` only.
 
 ### [screenshot]
 
@@ -168,6 +170,16 @@ Clipboard operation settings.
 |-----|------|---------|-------------|
 | `method` | str | `"system"` | Default method: `system` (PowerShell API) or `keyboard` (Ctrl+C/V) |
 
+### [input]
+
+DoS bounds and post-op verification for mouse/keyboard automation. All three keys are settable via `config set input.<key> <value>`.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `type_text_len` | int | `10000` | Max text length accepted by `type` / `multi_edit` (over-limit is rejected with `INVALID_PARAMS`). `type` sleeps per character, so an oversized string would block the single serial worker for hours |
+| `key_hold_seconds` | int | `60` | Max `--hold` duration in seconds for `key_down`. Over-limit is rejected at the handler edge |
+| `verify` | bool | `true` | Toggle the post-op UIA hit-test run after `click`/`dblclick`/`hover`/`move`/`drag` (and `type`'s field-value read; returns the hit element + focused window, or slider % on drag). Millisecond-level check, far cheaper than a follow-up `snapshot`. Turn off for raw speed; see the troubleshooting "Click Landed in the Wrong Spot" note for the recovery flow when verify disagrees with intent |
+
 ### [wait]
 
 Wait command polling settings.
@@ -175,6 +187,17 @@ Wait command polling settings.
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `poll_interval` | float | `0.5` | Default polling interval in seconds for `wait` element/text modes |
+| `max_seconds` | int | `300` | DoS cap on the daemon-side `wait` / `wait_for` handlers (the ones `batch` calls) — an unbounded value would sleep on the single serial STA worker (the submit timeout only reports `WAIT_TIMEOUT`, it can't interrupt the sleep). The CLI `wait`/`wait-for` poll `wait_check`/`wait_for_check` client-side with their own `--timeout` and aren't bound by this |
+
+### [audit]
+
+Destructive-op audit log (the inverse of telemetry — default-on, low-frequency / high-harm ops). Records the target of `fs_delete` / `fs_move` / `process_kill` / `window_close` / registry set|delete / `system_shutdown` / `system_restart` / `sleep` to `~/.agent-windows/logs/audit.log`.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `enabled` | bool | `true` | Toggle the destructive-op audit log. Operators who want it off set this to `false` |
+
+> The HMAC key for audit entries lives under `[audit] key` but is **not** in the settable schema — it is lazily generated at runtime and stored DPAPI-encrypted (like `mcp.auth_key`). Do not edit it by hand.
 
 ### [shell]
 
@@ -240,10 +263,15 @@ These sections configure the **MCP server's** HTTP transport, access controls, a
 
 | Variable | Overrides | Description |
 |----------|-----------|-------------|
-| `AGENT_WINDOWS_VLM_API_KEY` | `vlm.api_key` | Vision model API key |
+| `AGENT_WINDOWS_VLM_API_KEY` | `vlm.api_key` | Vision model API key (never written to disk) |
 | `AGENT_WINDOWS_SCREENSHOT_DIR` | Screenshot directory | Override screenshot storage location |
+| `AGENT_WINDOWS_DEBUG` | — | Enable debug logging. The `--debug` flag just sets this env var; the spawned daemon inherits it. Truthy: `1`/`true`/`yes`/`on` |
+| `AGENT_WINDOWS_TELEMETRY` | `telemetry.enabled` | Enable per-tool timing telemetry (writes to `~/.agent-windows/logs/telemetry.log`). The `--telemetry` flag and `[telemetry] enabled` config key are equivalent |
+| `AGENT_WINDOWS_PYTHON` | — | **Launcher-only.** Overrides the Python interpreter the Rust launcher uses to spawn the daemon (default: `python` on `PATH`). Ignored by the Python CLI/daemon process itself |
 
 Priority order: **CLI args > env vars > config file > defaults**
+
+> MCP-server-scoped vars (`AGENT_WINDOWS_TOOLS`, `AGENT_WINDOWS_EXCLUDE_TOOLS`, `AGENT_WINDOWS_MCP_*`, etc.) are documented in **[MCP.md](MCP.md)** alongside the `[mcp]`/`[security]`/`[tools]` keys.
 
 ## Daemon Management
 
@@ -316,8 +344,18 @@ timeout = 10
 [clipboard]
 method = "system"
 
+[input]
+type_text_len = 10000                 # max chars for type/multi_edit (DoS bound)
+key_hold_seconds = 60                 # max --hold for key_down
+verify = true                         # post-op UIA hit-test on click/hover/move/drag
+
 [wait]
 poll_interval = 0.5
+max_seconds = 300                     # DoS cap on daemon-side wait/wait_for (batch); CLI waits use their own --timeout
+
+[audit]
+enabled = true                        # destructive-op audit log (logs/audit.log)
+# key = "..."                         # auto-generated, DPAPI-encrypted — do not set by hand
 
 [shell]
 blacklist = []                        # regex patterns to block before execution

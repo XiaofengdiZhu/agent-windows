@@ -86,6 +86,16 @@ agent-windows observe
 2. Re-observe after any action that might shift the UI
 3. Verify with `observe` after clicking
 
+## Click / Type Silently Does Nothing on an Elevated Target (UIPI)
+
+**Symptom**: `click`, `dblclick`, or `type` against an elevated/UAC-admin target (a Run-as-administrator window, Task Manager launched as admin, an admin consent dialog) silently does nothing, or returns `PERMISSION_DENIED (-1004)` with a message that begins `UIPI:`.
+
+**Cause**: the daemon's integrity level (typically *medium*) is below the target's (typically *high*). Windows UIPI would silently drop `SendInput`-injected mouse/keyboard events at that window — the handler still reports success, leaving the agent in a retry loop. To prevent that, `daemon/handlers/input.py` runs a preflight on every foreground input path: `_require_uipi_clear_at(x, y)` for `click` / `dblclick` / `type --at` / `type --at-selector`, and `_require_uipi_clear_foreground()` for focused-field `type` (both wrappers live in `daemon/handlers/input.py`; they call the integrity-level checks in `core/uipi.py`). On an IL mismatch it raises a `PermissionError` whose message names both ILs and the recommended recovery; `route_request` maps that to `-1004` (`PERMISSION_DENIED`, router.py:225-228).
+
+**Recovery**:
+1. Retry with `--background` — the UIA `Invoke` / `Toggle` / `Select` patterns reach the target through the accessibility channel and bypass UIPI, so the action lands without stealing focus: `agent-windows click -s @e3 --background`
+2. Or relaunch the daemon elevated so its own IL meets or exceeds the target's. Start `agent-windows` from an elevated shell; the spawned daemon inherits that IL — run `agent-windows daemon stop` first, then `agent-windows observe` from the elevated shell.
+
 ## Window Frozen After a Background Click
 
 **Symptom**: After a `click --background`, the target window appears frozen —
@@ -174,6 +184,17 @@ recover the stranded window with `window enable` afterward.
 1. Increase depth: `agent-windows config set tree.max_depth 50`
 2. Include offscreen elements: `agent-windows config set tree.include_offscreen true`
 3. Use vision tools (`ground`, `detect`, `ask-vision`) for elements not visible to UIA
+
+## UWP / Store App Snapshots as ApplicationFrameWindow
+
+**Symptom**: snapshotting a UWP / Store app (Calculator, Photos, Settings) lists the host as `ApplicationFrameWindow` carrying an unexpected process name (`ApplicationFrameHost.exe`), or shows an empty frame body.
+
+**Cause / reality**: UWP apps host their UI inside an `ApplicationFrameWindow` frame owned by `ApplicationFrameHost.exe`. The daemon resolves the *hosted* app's PID via `_resolve_uwp_app_pid` — an `EnumChildWindows` walk over the frame's children in `core/tree.py`, picking the first child whose pid differs from the frame host's — and normalizes the reported `process_name` to the app's real image (e.g. `Calculator.exe`). When the frame exists but the hosted app hasn't yet rendered into it (freshly launched, still initializing, or suspending/resuming), the resolver returns `None` and the frame host name is kept as the degrade value; the body may also appear empty until the app finishes loading.
+
+**Recovery**:
+1. Wait a moment and re-snapshot: `agent-windows snapshot --active`
+2. Scope to a single window to skip unrelated frames: `agent-windows snapshot --window "Calculator"` (title substring, HWND, or process name — same resolution as `app switch`)
+3. If the frame persists with an empty body, re-launch the app: `agent-windows app launch Calculator`
 
 ## Screenshot Looks Wrong
 

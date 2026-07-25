@@ -284,6 +284,30 @@ agent-windows diff baseline.png [-c current.png] [-t 30]
 
 **Output**: `{output, diff_pixels, total_pixels, diff_percent, match, changed_bbox, diff_path}` — `changed_bbox` is the exclusive `[left, top, right, bottom]` of all changed pixels (`None` when `match`); output adds a `Changed region: (x1,y1)-(x2,y2)` line (or `none`). Sibling is daemon-direct-client only: MCP surfaces only `output`; the CLI's default text rendering uses `output`; `--format json` (a daemon-direct client) surfaces the structured siblings.
 
+### snapshot-diff
+
+Diff a stored baseline UIA tree against the current desktop and report added/removed/changed elements. Distinct from `diff` (a pixel-level image diff): this compares the structured accessibility tree, so it catches a control being renamed, re-enabled, or re-parented even when the pixels look identical — and conversely ignores purely visual changes (hover highlights, focus rings) that don't alter the tree.
+
+```bash
+agent-windows snapshot-diff --save                       # capture current tree as baseline
+agent-windows snapshot-diff                              # diff baseline vs current (default action)
+agent-windows snapshot-diff --window "记事本" --save     # scope the baseline to one window
+agent-windows snapshot-diff -d 0                         # clip to display 0 — any scope flag disables baseline-scope reuse (see below)
+agent-windows snapshot-diff --clear                      # drop the baseline
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `--save` | bool | `false` | Capture the current UIA tree as the baseline (mutually exclusive with `--clear`; both given → Typer usage error, exit 2) |
+| `--clear` | bool | `false` | Drop the stored baseline (mutually exclusive with `--save`) |
+| `--window` | str | `""` | Scope to one top-level window — HWND (`12345`/`0xHEX`), title substring, or process name. Same selector semantics as `snapshot`. Mutually exclusive with `--active`. |
+| `--active` | bool | `false` | Scope to the foreground window. Mutually exclusive with `--window`. |
+| `--display` / `-d` | list[int] | `[]` | Limit to display index(es), repeatable; same clip semantics as `snapshot`. |
+
+The baseline lives in an in-memory daemon slot (the daemon is serial, so no lock is needed); a daemon restart clears it, so capture and diff within one daemon session. Scope reuse is **all-or-nothing**: with no scope flags, `snapshot-diff` reuses the baseline's full scope (`--window`/`--active`/`--display`) on the current side; pass **any** explicit scope flag and the baseline scope is *not* reused — the current side captures the full desktop (then clipped to `--display` if given), which usually isn't what you want against a windowed baseline. Match scopes on both sides. The `diff` action primes the tree cache with the current capture, so the `@eN` refs in the report align with the next `click @eN` / `get-text @eN` (same cache slot as `snapshot`/`observe`).
+
+**Output**: `## Snapshot Diff` markdown digest — `Added` / `Removed` / `Changed` element sections plus a stats line with `scope: "Notepad"` (the baseline's scope) and per-kind counts. Running `diff` with no stored baseline raises `INVALID_PARAMS` ("run 'snapshot-diff --save' first"). Daemon method `snapshot_diff`; MCP tool `snapshot_diff` (alongside `snapshot`).
+
 ### cleanup
 
 Clean up old/oversized screenshots.
@@ -310,7 +334,11 @@ Most mouse commands accept either explicit `X Y` coordinates or a `--selector`/`
 >
 > These are decoration: any UIA read failure degrades to a missing line, never an error. Turn off for raw speed with `config set input.verify false` (live; the daemon re-reads config per command).
 >
-> The `Hit:`/`Drop:`/`Slider:` reads use UIA `ElementFromPoint`, which returns the **topmost element on screen at that point (visual z-order)** — the same target the physical click actually struck. If another window covers that coordinate, the read reports the *covering* window, not the intended one (foreground *focus* ≠ visual *topmost*). That mismatch surfaces the obscuring instead of silently misreporting, but there is no coordinate-free guarantee — when a `Hit:`/`Drop:` names an unexpected window, re-`snapshot` and retry with the covering window moved aside.
+> The `Hit:`/`Drop:`/`Slider:` read takes one of two paths depending on how you targeted the op (`Drop:`/`Slider:` run only on `drag`, which takes no `--selector`, so they are always on the coordinate path):
+> - **Selector path** (`--selector @eN`, including `type --at-selector`): the read is **identity-based** — it re-resolves the live control via `FindFirst` on the snapshot's cached `RuntimeId` (`core/tree.py`), so when the element is still live it names the **intended element even if a covering window is in front of it** (z-order-independent).
+> - **Coordinate path** (bare `X Y`, or `type --at x,y`): the read uses UIA `ElementFromPoint`, which returns the **topmost element on screen at that point (visual z-order)** — the same target the physical click actually struck. If another window covers that coordinate, the read reports the *covering* window, not the intended one (foreground *focus* ≠ visual *topmost*).
+>
+> Practical upshot: prefer `--selector @eN` when you have a fresh snapshot — its verify line can't be fooled by an occluding window *as long as the element is still live*. On the coordinate path (or if the selector element was rebuilt/destroyed), a `Hit:`/`Drop:` that names an unexpected window is the tell that something is covering the target — re-`snapshot` and retry with the covering window moved aside. (The selector path degrades to the coordinate read in two cases: the element exposes no `RuntimeId` — resolved by point instead — or a `FindFirst` *miss* when the element was rebuilt/destroyed post-op; then `Hit:` falls back to `ElementFromPoint` and **can** name a covering window.)
 
 ### click
 
@@ -339,9 +367,15 @@ agent-windows click -s @e3                          # short form
 > wrapped in an `EnableWindow` bypass, so the target fires **without stealing
 > foreground or flashing** — drive a background app while the user keeps typing
 > in another window. Left single-click only (no `--right`/`--double`); errors
-> with `BACKGROUND_UNAVAILABLE (-1007)` if the element exposes no invokable
-> pattern, so retry without `--background`. The `Focus:` verify line is
-> unchanged on success — that's the proof no focus moved.
+> with `BACKGROUND_UNAVAILABLE (-1007)` in any of these cases — retry without
+> `--background`:
+> - the element exposes no invokable pattern (no Invoke/Toggle/Select);
+> - `--right` or `--double` is set (left single-click only — no Invoke semantics for right/double);
+> - there is no UIA element at the resolved point (coordinate path with no selector, dead space);
+> - the element has no top-level `WindowControl` ancestor, or that ancestor exposes no `NativeWindowHandle` (HWND);
+> - the pattern COM call itself failed (provider error mid-Invoke).
+>
+> The `Focus:` verify line is unchanged on success — that's the proof no focus moved.
 
 ### dblclick
 
@@ -480,6 +514,11 @@ agent-windows collapse @e4
 | `SELECTOR` | str | **required** | Element ref (`@eN`) |
 
 **Output**: `{output}` with the element, resulting State, and whether the action was skipped.
+
+> **Always background-mode (no `--background` flag).** `expand`/`collapse` unconditionally wrap the pattern call in `run_pattern_background` → `run_with_uia_bypass` (`EnableWindow(host, FALSE)…()…(host, <prior>)`) — the same no-focus-steal property `click --background` gains, but with **no flag to drop**: there is no foreground fallback because expand/collapse has no `--background` form. Consequences:
+> - They **never steal foreground** — drive a background app's tree while the user keeps typing elsewhere.
+> - They can fail with `BACKGROUND_UNAVAILABLE (-1007)` when (a) the element has no top-level `WindowControl` ancestor, or (b) that ancestor exposes no `NativeWindowHandle` (HWND). On `-1007` there is no automatic retry — the error is terminal, since a silent foreground fallback could steal focus without the caller knowing.
+> - If the daemon process is **killed mid-op** (or the pattern call hangs), the host window is left disabled — title-bar buttons still respond but every body control goes dead. Recover with `window enable <target>` (see [Troubleshooting: window frozen after a background click](troubleshooting.md#window-frozen-after-a-background-click)). The `try/finally` only restores on a Python-side exception, not a process kill.
 
 ---
 
@@ -889,7 +928,7 @@ Three modes:
 - **Element**: `wait @e3 --timeout 10` — polls `resolve_element()` until found or timeout.
 - **Text**: `wait --text "Done" --timeout 10` — polls `traverse_tree()` for matching element name.
 
-Raises error code `-1003` (WAIT_TIMEOUT) on timeout.
+On timeout the **CLI** prints a textual error to stderr and exits with code **1** — it does **not** bubble up a `-1003` JSON-RPC error, because the polling (`wait_check`) is non-blocking. The `-1003` (WAIT_TIMEOUT) contract applies to the **daemon-side `wait`/`wait_for` method** (and to `batch` sub-calls, which invoke that method directly) — those raise `TimeoutError` → `-1003` over the wire. Same split for an invalid argument: the CLI validates client-side and exits 1; the daemon method surfaces it as `INVALID_PARAMS` (`-32602`).
 
 ### wait-for
 
@@ -924,7 +963,7 @@ Conditions:
 
 **Matching is case-sensitive substring** (e.g. `--text OK` matches `"OK Button"` but not `"ok button"`). This differs from some other tools' case-insensitive matching — match the exact case shown in `snapshot` output, or use a substring that is case-stable (e.g. a control type like `Button`).
 
-Like `wait`, the CLI polls the daemon with short non-blocking probes so the daemon's worker is never blocked for the wait duration. Raises error code `-1003` (WAIT_TIMEOUT) on timeout, `-32602` (INVALID_PARAMS) for an unknown/invalid condition.
+Like `wait`, the CLI polls the daemon with short non-blocking probes (`wait_for_check`) so the daemon's worker is never blocked for the wait duration. On timeout the **CLI** prints a textual error to stderr and exits with code **1** — it does **not** emit a `-1003` JSON-RPC error. Likewise an unknown condition is caught client-side (`normalize_condition`) and exits 1, rather than surfacing `-32602`. The `-1003` (WAIT_TIMEOUT) and `-32602` (INVALID_PARAMS) codes apply to the **daemon-side `wait_for` method** and to `batch` sub-calls (which hit that method directly), not to the CLI wrapper.
 
 ### batch
 
@@ -1016,7 +1055,7 @@ agent-windows mcp uninstall        # stop + remove the login auto-start task
 
 `--tools`/`--exclude-tools` are enforced: removed tools cannot be invoked, including via `batch`. Each flag also has an `AGENT_WINDOWS_*` env-var equivalent (see the Global Options table below).
 
-The server exposes ~57 tools mapping 1:1 to the daemon methods (screenshot, snapshot, observe, ground, detect, ask_vision, highlight, diff, find_image, pixel_at, get_text, element_state, cleanup_screenshots, list_displays, click, dblclick, hover, move, mouse_down, mouse_up, drag, scroll, type, shortcut, key_down, key_up, expand, collapse, app_launch/switch/resize/list, shell, fs_read/write/list/copy/move/delete/search/info, clipboard_get/set, process_list/kill, notify, registry, lock, sleep, shutdown, restart, batch, multi_select, multi_edit, ping, wait, wait_for). Same usage tips apply: call `snapshot` first for pixel-exact coordinates, prefer it over `ground`/`detect` for named controls, and always `app switch` before input.
+The server exposes 64 tools mapping 1:1 to the daemon methods (screenshot, snapshot, snapshot_diff, observe, ground, detect, ask_vision, highlight, diff, find_image, pixel_at, get_text, element_state, cleanup_screenshots, list_displays, click, dblclick, hover, move, mouse_down, mouse_up, drag, scroll, type, shortcut, key_down, key_up, expand, collapse, app_launch/switch/resize/list, shell, fs_read/write/list/copy/move/delete/search/info, clipboard_get/set, process_list/kill, notify, registry, lock, sleep, shutdown, restart, batch, multi_select, multi_edit, ping, wait, wait_for, window_minimize/maximize/restore/close/focus/enable). Same usage tips apply: call `snapshot` first for pixel-exact coordinates, prefer it over `ground`/`detect` for named controls, and always `app switch` before input.
 
 ---
 
