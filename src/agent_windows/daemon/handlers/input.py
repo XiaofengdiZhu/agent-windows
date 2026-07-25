@@ -78,6 +78,36 @@ def _resolve_verify_control(selector: str | None) -> Any:
         return None
 
 
+def _uipi_hint(result) -> str:
+    """Actionable PermissionError message for a UIPI block."""
+    from agent_windows.core.uipi import _RID_NAMES
+
+    def _name(rid):
+        return _RID_NAMES.get(rid, "unknown") if rid is not None else "unknown"
+    return (
+        f"UIPI: target integrity level ({_name(result.target_il)}) exceeds "
+        f"daemon's ({_name(result.own_il)}); SendInput would be silently "
+        f"dropped. Retry with --background (UIA Invoke bypasses UIPI) or run "
+        f"an elevated daemon."
+    )
+
+
+def _require_uipi_clear_at(x, y) -> None:
+    """Raise PermissionError if a foreground click/type-at (x,y) would be dropped."""
+    from agent_windows.core.uipi import check_uipi_at
+    r = check_uipi_at(x, y)
+    if r.blocked:
+        raise PermissionError(_uipi_hint(r))
+
+
+def _require_uipi_clear_foreground() -> None:
+    """Raise PermissionError if a focused-field type/key would be dropped."""
+    from agent_windows.core.uipi import check_uipi_foreground
+    r = check_uipi_foreground()
+    if r.blocked:
+        raise PermissionError(_uipi_hint(r))
+
+
 def _append_hit_focus(lines: list[str], x: int, y: int,
                       control: Any = None) -> None:
     """Append best-effort Hit + Focus verify lines (P0.1).
@@ -238,6 +268,7 @@ def _click(params: dict) -> dict[str, Any]:
                  f"Delivery: background ({res['action']})"]
     else:
         x, y = _coords(params)
+        _require_uipi_clear_at(x, y)
         click(x, y, right=right, double=double)
         # P2.2: echo only non-default flags — a plain left single click is the
         # common case, so Button/Double lines appear only when they deviate.
@@ -265,6 +296,7 @@ def _dblclick(params: dict) -> dict[str, Any]:
     x, y = _coords(params)
     right = params.get("right", False)
     selector = params.get("selector")
+    _require_uipi_clear_at(x, y)
     click(x, y, right=right, double=True)
     lines = ["## Double Click", f"Position: ({x}, {y})"]
     if right:
@@ -356,6 +388,7 @@ def _type(params: dict) -> dict[str, Any]:
         ax, ay = resolve_element_center(at_selector)
         if verify:
             pre = _safe_field_read(lambda: field_value_at(ax, ay))  # P0.2: old value
+        _require_uipi_clear_at(ax, ay)
         type_text_at(text, ax, ay, clear=clear, enter=enter,
                      caret_position=caret_position)
         if verify:
@@ -365,6 +398,7 @@ def _type(params: dict) -> dict[str, Any]:
         if verify:
             from agent_windows.core.tree import field_value_at
             pre = _safe_field_read(lambda: field_value_at(ax, ay))
+        _require_uipi_clear_at(ax, ay)
         type_text_at(text, ax, ay, clear=clear, enter=enter,
                      caret_position=caret_position)
         if verify:
@@ -376,6 +410,7 @@ def _type(params: dict) -> dict[str, Any]:
         from agent_windows.core.tree import focused_field_value
         if verify:
             pre = _safe_field_read(focused_field_value)  # P0.2: before keystroke
+        _require_uipi_clear_foreground()
         move_caret(caret_position)
         if clear:
             clear_field()

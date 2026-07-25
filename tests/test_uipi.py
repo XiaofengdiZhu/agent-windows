@@ -254,3 +254,76 @@ def test_setup_own_il_logs_warning_on_none(caplog, monkeypatch):
     warned = [r for r in caplog.records if r.levelno >= logging.WARNING]
     assert warned
     assert any("own integrity" in r.message for r in warned)
+
+
+# ---- handler wiring (Group D) ----------------------------------------------
+
+def _patch_uipi_blocked(monkeypatch, at_blocked=True, fg_blocked=True):
+    """Monkeypatch check_uipi_at/foreground to scripted UipiResult values."""
+    from agent_windows.core import uipi as uipi_mod
+
+    class _R:
+        def __init__(self, blocked):
+            self.blocked = blocked
+            self.own_il = 0x2000
+            self.target_il = 0x3000 if blocked else 0x2000
+            self.detail = "test"
+    monkeypatch.setattr(uipi_mod, "check_uipi_at",
+                        lambda x, y: _R(at_blocked))
+    monkeypatch.setattr(uipi_mod, "check_uipi_foreground", lambda: _R(fg_blocked))
+
+
+def test_click_foreground_raises_on_uipi_block(monkeypatch):
+    """click foreground raises PermissionError whose hint mentions background/elevated."""
+    import pytest
+    _patch_uipi_blocked(monkeypatch, at_blocked=True)
+    from agent_windows.daemon.handlers import input as input_mod
+    with pytest.raises(PermissionError) as ei:
+        input_mod._click({"x": 10, "y": 20})  # no background, no selector
+    msg = str(ei.value)
+    assert "UIPI" in msg
+    assert "background" in msg
+    assert "elevated" in msg
+
+
+def test_type_focused_raises_on_uipi_block(monkeypatch):
+    """type plain (focused-field) branch raises on UIPI block."""
+    import pytest
+    _patch_uipi_blocked(monkeypatch, fg_blocked=True)
+    from agent_windows.daemon.handlers import input as input_mod
+    with pytest.raises(PermissionError):
+        input_mod._type({"text": "hi"})  # no at_x/at_y/at_selector -> focused
+
+
+def test_click_background_skips_check(monkeypatch):
+    """click --background does NOT call check_uipi_at (Invoke bypasses UIPI)."""
+    from agent_windows.core import uipi as uipi_mod
+    called = {"at": 0}
+    monkeypatch.setattr(uipi_mod, "check_uipi_at",
+                        lambda x, y: called.__setitem__("at", called["at"] + 1) or type(
+                            "R", (), {"blocked": True, "own_il": 0x2000,
+                                      "target_il": 0x3000, "detail": ""})())
+    # invoke_background will fail (no UIA in unit test) — we only assert the
+    # preflight was NOT consulted on the background branch. Wrap in try.
+    from agent_windows.daemon.handlers import input as input_mod
+    try:
+        input_mod._click({"x": 5, "y": 5, "background": True})
+    except Exception:
+        pass  # invoke_background/ControlFromPoint will raise under unit test
+    assert called["at"] == 0
+
+
+def test_click_degrade_does_not_raise(monkeypatch):
+    """blocked=False -> click proceeds to SendInput (no PermissionError)."""
+    _patch_uipi_blocked(monkeypatch, at_blocked=False)
+    sent = {"n": 0}
+
+    def _fake_click(x, y, right=False, double=False):
+        sent["n"] += 1
+    import agent_windows.core.input_controller as ic
+    monkeypatch.setattr(ic, "click", _fake_click)
+    from agent_windows.daemon.handlers import input as input_mod
+    # Should not raise.
+    result = input_mod._click({"x": 1, "y": 2})
+    assert sent["n"] == 1
+    assert "Click" in result["output"]
