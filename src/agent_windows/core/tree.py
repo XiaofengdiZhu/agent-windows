@@ -245,6 +245,32 @@ def _is_browser_process(process_name: str) -> bool:
     return process_name.lower() in _BROWSER_PROCESS_NAMES
 
 
+def _pick_uwp_app_pid(
+    child_pids: list[int], frame_host_pid: int,
+) -> int | None:
+    """First child pid that differs from a UWP frame host's pid.
+
+    A ``ApplicationFrameWindow`` is owned by ``ApplicationFrameHost.exe``;
+    the hosted app renders into a child window owned by the app's real
+    process. The first child whose pid is not the frame host's belongs to
+    the app. Pure (no ctypes) so the selection rule is unit-testable —
+    mirrors ``_window_status_from_placement``'s testability. (TODO P2#6 6a)
+
+    Args:
+        child_pids: Owning pids of the frame's child windows (any order).
+        frame_host_pid: The frame window's own owning pid.
+
+    Returns:
+        The first child pid != ``frame_host_pid``, else ``None`` when every
+        child shares the host pid or the list is empty (app not yet rendered
+        into the frame — caller degrades).
+    """
+    for pid in child_pids:
+        if pid != frame_host_pid:
+            return pid
+    return None
+
+
 def enumerate_windows() -> list[WindowInfo]:
     """List all visible top-level windows."""
     import ctypes

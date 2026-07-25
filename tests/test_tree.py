@@ -3035,3 +3035,37 @@ def test_resolve_live_control_window_closed_raises(monkeypatch):
     with pytest.raises(ValueError, match="window"):
         _resolve_live_control("@e1")
 
+
+# ── _pick_uwp_app_pid: UWP frame→hosted-app pid selection (TODO P2#6 6a) ──
+
+
+class TestPickUwpAppPid:
+    """_pick_uwp_app_pid picks the hosted app's pid from a frame's child pids.
+
+    A ApplicationFrameWindow's children include the frame host's own chrome
+    windows (same pid as the host) plus the hosted app's render window (a
+    different pid). The first child pid != frame host pid is the app's.
+    Pure (no ctypes) so the selection rule is unit-testable — mirrors
+    _window_status_from_placement's testability.
+    """
+
+    def test_returns_first_non_host_child(self):
+        from agent_windows.core.tree import _pick_uwp_app_pid as f
+        assert f([100, 100, 200], 100) == 200
+
+    def test_returns_none_when_all_children_are_host(self):
+        from agent_windows.core.tree import _pick_uwp_app_pid as f
+        assert f([100, 100], 100) is None
+
+    def test_returns_none_when_no_children(self):
+        from agent_windows.core.tree import _pick_uwp_app_pid as f
+        assert f([], 100) is None
+
+    def test_returns_app_when_app_pid_is_first(self):
+        from agent_windows.core.tree import _pick_uwp_app_pid as f
+        assert f([200, 100], 100) == 200
+
+    def test_returns_first_when_multiple_app_pids(self):
+        from agent_windows.core.tree import _pick_uwp_app_pid as f
+        assert f([200, 300], 100) == 200
+
