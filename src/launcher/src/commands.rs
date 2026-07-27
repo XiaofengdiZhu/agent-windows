@@ -601,6 +601,24 @@ fn parse_observe(rest: &[String]) -> Result<Action, ParseError> {
     // only alongside --annotate), plus repeatable --display/-d (collect_display
     // walks raw argv since ParsedArgs is last-writer-wins). Mirrors
     // cli/commands/observe.py:observe.
+    //
+    // Reject the removed legacy flags (--ground/--snapshot/--screenshot) up-front
+    // via a raw-token scan (catches both bare `--ground` and `--ground=x`). The
+    // Python CLI rejects these via Typer (exit 2); mirror that here so the
+    // launcher doesn't silently drop them and run a bare observe — the daemon
+    // would ignore them anyway, but silent success hides the mistake.
+    for a in rest {
+        if a == "--ground" || a == "--snapshot" || a == "--screenshot"
+            || a.starts_with("--ground=")
+            || a.starts_with("--snapshot=")
+            || a.starts_with("--screenshot=")
+        {
+            return Err(invalid(
+                "observe: --ground/--snapshot/--screenshot were removed; \
+                 observe now always runs snapshot+screenshot",
+            ));
+        }
+    }
     let p = ParsedArgs::parse(rest, &["grid-w", "grid-h"]);
     let mut params = Map::new();
     if let Some(disp) = collect_display(rest)? {
@@ -2724,10 +2742,10 @@ mod tests {
     // ── parse_observe rewrite: --annotate + --grid-w/--grid-h, display repeatable ──
     //
     // observe is now a pure snapshot+screenshot bundle (the daemon always runs
-    // both and ignores legacy snapshot/screenshot/ground params). The launcher
-    // must NOT forward those legacy keys — they're dropped here, and the daemon
-    // would ignore them anyway, but forwarding them would clutter the request
-    // and risk a future contract drift. Mirrors cli/commands/observe.py:observe.
+    // both). The removed legacy flags (--snapshot/--screenshot/--ground) are
+    // REJECTED up-front in parse_observe — the Python CLI rejects them via Typer
+    // (exit 2), and the launcher mirrors that so it doesn't silently run a bare
+    // observe. Mirrors cli/commands/observe.py:observe.
 
     #[test]
     fn parse_observe_annotate_and_grid_forward() {
@@ -2752,17 +2770,14 @@ mod tests {
     }
 
     #[test]
-    fn parse_observe_drops_legacy_flags() {
-        // --snapshot/--screenshot/--ground are no longer observe flags; the
-        // launcher must not forward them (daemon ignores them anyway, but they
-        // also must not be mis-read as positionals/values).
+    fn parse_observe_rejects_legacy_flags() {
+        // --snapshot/--screenshot/--ground were removed; the launcher rejects
+        // them (mirrors the Python CLI's Typer exit-2), never silently drops.
         let g = GlobalFlags::default();
-        match parse(&argv(&["observe", "--ground", "x"]), &g) {
-            Ok(Action::Call { params, .. }) => {
-                assert!(params.get("ground").is_none());
-            }
-            other => panic!("got {:?}", other),
-        }
+        assert!(parse(&argv(&["observe", "--ground", "x"]), &g).is_err());
+        assert!(parse(&argv(&["observe", "--snapshot"]), &g).is_err());
+        assert!(parse(&argv(&["observe", "--screenshot"]), &g).is_err());
+        assert!(parse(&argv(&["observe", "--screenshot=foo"]), &g).is_err());
     }
 
     // ── parse_ground rewrite: --screenshot [PATH] optional-value via raw walk ──
