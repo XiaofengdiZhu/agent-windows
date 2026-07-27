@@ -326,7 +326,7 @@ No parameters. Uses config `screenshot.max_screenshot_age_days` (default 7) and 
 
 ## Input (Mouse)
 
-Most mouse commands accept either explicit `X Y` coordinates or a `--selector`/`-s` `@eN` element ref from a `snapshot`. `--selector` overrides `X Y` when both are given; the element's bbox center is the click point.
+Most mouse commands take a single `target` positional: an `@eN` element ref (resolved to its bbox center) OR explicit `X Y` coordinates — one form, not both. `drag` is coordinates-only (two endpoints); `type` uses `--at-selector`.
 
 > **Negative coordinates** are supported on both the native launcher and the Python CLI (`agent-windows-python` / `--no-daemon`). A multi-monitor desktop extends left or above the primary monitor into negative space (e.g. a window at `x=-1920`), so `agent-windows click -1920 0` and `agent-windows drag -1920 0 -100 100` work without quoting or `--` separators.
 
@@ -336,11 +336,11 @@ Most mouse commands accept either explicit `X Y` coordinates or a `--selector`/`
 >
 > These are decoration: any UIA read failure degrades to a missing line, never an error. Turn off for raw speed with `config set input.verify false` (live; the daemon re-reads config per command).
 >
-> The `Hit:`/`Drop:`/`Slider:` read takes one of two paths depending on how you targeted the op (`Drop:`/`Slider:` run only on `drag`, which takes no `--selector`, so they are always on the coordinate path):
-> - **Selector path** (`--selector @eN`, including `type --at-selector`): the read is **identity-based** — it re-resolves the live control via `FindFirst` on the snapshot's cached `RuntimeId` (`core/tree.py`), so when the element is still live it names the **intended element even if a covering window is in front of it** (z-order-independent).
+> The `Hit:`/`Drop:`/`Slider:` read takes one of two paths depending on how you targeted the op (`Drop:`/`Slider:` run only on `drag`, which takes no `@eN` target, so they are always on the coordinate path):
+> - **Selector path** (bare `@eN`, including `type --at-selector`): the read is **identity-based** — it re-resolves the live control via `FindFirst` on the snapshot's cached `RuntimeId` (`core/tree.py`), so when the element is still live it names the **intended element even if a covering window is in front of it** (z-order-independent).
 > - **Coordinate path** (bare `X Y`, or `type --at x,y`): the read uses UIA `ElementFromPoint`, which returns the **topmost element on screen at that point (visual z-order)** — the same target the physical click actually struck. If another window covers that coordinate, the read reports the *covering* window, not the intended one (foreground *focus* ≠ visual *topmost*).
 >
-> Practical upshot: prefer `--selector @eN` when you have a fresh snapshot — its verify line can't be fooled by an occluding window *as long as the element is still live*. On the coordinate path (or if the selector element was rebuilt/destroyed), a `Hit:`/`Drop:` that names an unexpected window is the tell that something is covering the target — re-`snapshot` and retry with the covering window moved aside. (The selector path degrades to the coordinate read in two cases: the element exposes no `RuntimeId` — resolved by point instead — or a `FindFirst` *miss* when the element was rebuilt/destroyed post-op; then `Hit:` falls back to `ElementFromPoint` and **can** name a covering window.)
+> Practical upshot: prefer `@eN` when you have a fresh snapshot — its verify line can't be fooled by an occluding window *as long as the element is still live*. On the coordinate path (or if the target element was rebuilt/destroyed), a `Hit:`/`Drop:` that names an unexpected window is the tell that something is covering the target — re-`snapshot` and retry with the covering window moved aside. (The selector path degrades to the coordinate read in two cases: the element exposes no `RuntimeId` — resolved by point instead — or a `FindFirst` *miss* when the element was rebuilt/destroyed post-op; then `Hit:` falls back to `ElementFromPoint` and **can** name a covering window.)
 
 ### click
 
@@ -348,23 +348,21 @@ Mouse click at coordinates or an element.
 
 ```bash
 agent-windows click 500 300 [--right] [--double]
-agent-windows click --selector @e3 [--right]      # click element center
-agent-windows click -s @e3                          # short form
+agent-windows click @e3 [--right]                   # click element center
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `X Y` | int | **required*** | X and Y coordinates |
-| `--selector` / `-s` | str | `""` | Element ref (`@eN`); overrides `X Y` |
+| `target` | positional | **required*** | `@eN` element ref OR `X Y` coordinates (one form, not both) |
 | `--right` | bool | `false` | Right-click |
 | `--double` | bool | `false` | Double-click |
 | `--background` | bool | `false` | No-focus-steal click via the element's UIA pattern (left single-click only; see note below) |
 
-\* `X Y` is required unless `--selector` is given.
+\* Either an `@eN` ref or `X Y` coordinates is required (not both).
 
 **Output**: `{output}`
 
-> **`click --background` (no-focus-steal).** `click -s @eN --background`
+> **`click --background` (no-focus-steal).** `click @eN --background`
 > delivers the click through the element's UIA pattern (Invoke/Toggle/Select)
 > wrapped in an `EnableWindow` bypass, so the target fires **without stealing
 > foreground or flashing** — drive a background app while the user keeps typing
@@ -385,16 +383,15 @@ Double-click at coordinates or an element.
 
 ```bash
 agent-windows dblclick 500 300 [--right]
-agent-windows dblclick -s @e3
+agent-windows dblclick @e3
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `X Y` | int | **required*** | X and Y coordinates |
-| `--selector` / `-s` | str | `""` | Element ref (`@eN`); overrides `X Y` |
+| `target` | positional | **required*** | `@eN` element ref OR `X Y` coordinates (one form, not both) |
 | `--right` | bool | `false` | Right-button double-click |
 
-\* `X Y` is required unless `--selector` is given.
+\* Either an `@eN` ref or `X Y` coordinates is required (not both).
 
 **Output**: `{output}`
 
@@ -404,15 +401,14 @@ Move mouse and trigger hover event (tooltips, highlights).
 
 ```bash
 agent-windows hover 500 300
-agent-windows hover -s @e3
+agent-windows hover @e3
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `X Y` | int | **required*** | X and Y coordinates |
-| `--selector` / `-s` | str | `""` | Element ref (`@eN`); overrides `X Y` |
+| `target` | positional | **required*** | `@eN` element ref OR `X Y` coordinates (one form, not both) |
 
-\* `X Y` is required unless `--selector` is given.
+\* Either an `@eN` ref or `X Y` coordinates is required (not both).
 
 **Output**: `{output}`
 
@@ -422,15 +418,14 @@ Move mouse to coordinates or an element (no click).
 
 ```bash
 agent-windows move 500 300
-agent-windows move -s @e3
+agent-windows move @e3
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `X Y` | int | **required*** | X and Y coordinates |
-| `--selector` / `-s` | str | `""` | Element ref (`@eN`); overrides `X Y` |
+| `target` | positional | **required*** | `@eN` element ref OR `X Y` coordinates (one form, not both) |
 
-\* `X Y` is required unless `--selector` is given.
+\* Either an `@eN` ref or `X Y` coordinates is required (not both).
 
 **Output**: `{output}`
 
@@ -440,17 +435,16 @@ Press and hold / release mouse button. Use together for custom drag sequences.
 
 ```bash
 agent-windows mouse-down 500 300 [--button left|right|middle]
-agent-windows mouse-down -s @e3 [--button left|right|middle]
-agent-windows mouse-up -s @e3 [--button left|right|middle]
+agent-windows mouse-down @e3 [--button left|right|middle]
+agent-windows mouse-up @e3 [--button left|right|middle]
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `X Y` | int | **required*** | X and Y coordinates |
-| `--selector` / `-s` | str | `""` | Element ref (`@eN`); overrides `X Y` |
+| `target` | positional | **required*** | `@eN` element ref OR `X Y` coordinates (one form, not both) |
 | `--button` | str | `"left"` | `left`, `right`, or `middle` |
 
-\* `X Y` is required unless `--selector` is given.
+\* Either an `@eN` ref or `X Y` coordinates is required (not both).
 
 **Output**: `{output}`
 
@@ -486,17 +480,16 @@ Scroll at coordinates or an element.
 
 ```bash
 agent-windows scroll 500 300 [--direction down] [--amount 3]
-agent-windows scroll -s @e3 [--direction up]
+agent-windows scroll @e3 [--direction up]
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `X Y` | int | **required*** | X and Y coordinates |
-| `--selector` / `-s` | str | `""` | Element ref (`@eN`); overrides `X Y` |
+| `target` | positional | **required*** | `@eN` element ref OR `X Y` coordinates (one form, not both) |
 | `--direction` | str | `"down"` | `up` or `down` |
 | `--amount` | int | `3` | Scroll amount |
 
-\* `X Y` is required unless `--selector` is given.
+\* Either an `@eN` ref or `X Y` coordinates is required (not both).
 
 **Output**: `{output}`
 

@@ -73,15 +73,15 @@ Empty structural containers (unnamed `Pane`/`Group`/`ToolBar`/`Tab`/`MenuBar`/`C
 
 ## From @eN to Coordinates
 
-**Preferred:** pass the `@eN` ref directly to input commands via `--selector`/`-s`. The command resolves the element's bbox center internally — no manual math:
+**Preferred:** pass the `@eN` ref directly as a bare positional (e.g. `click @e5`). The command resolves the element's bbox center internally — no manual math:
 
 ```bash
-agent-windows click -s @e5
+agent-windows click @e5
 agent-windows type "text" --at-selector @e3
-agent-windows scroll -s @e3 --direction up
+agent-windows scroll @e3 --direction up
 ```
 
-`--selector` works on `click`, `dblclick`, `hover`, `move`, `mouse-down`, `mouse-up`, `scroll`, and `type` (`--at-selector`). It overrides any explicit coordinates when both are given.
+An `@eN` ref works as a bare positional on `click`, `dblclick`, `hover`, `move`, `mouse-down`, `mouse-up`, and `scroll` (e.g. `click @e3`); `type` uses `--at-selector @e3`. Giving both `@eN` and coordinates is an error — use one or the other.
 
 **Fallback** (manual, when you need a non-center point): extract coordinates yourself.
 
@@ -102,7 +102,7 @@ Center: `cx = (2503+2647)//2 = 2575`, `cy = (848+906)//2 = 877`.
 
 ```bash
 agent-windows click 2575 877      # explicit coords
-agent-windows click -s @e5        # equivalent, via selector
+agent-windows click @e5            # equivalent, via selector
 ```
 
 ## Commands That Accept @eN Directly
@@ -116,12 +116,12 @@ Commands that resolve a selector to coordinates or use it as a target:
 | `is enabled @e3` | Checks if the element is enabled |
 | `wait @e3` | Polls until the element is found in the tree |
 | `screenshot -s @e3` | Crops screenshot to element's bounding box |
-| `click -s @e3` | Clicks the element's bbox center |
-| `dblclick -s @e3` | Double-click the element center |
-| `hover -s @e3` | Hover the element center |
-| `move -s @e3` | Move to the element center |
-| `mouse-down -s @e3` / `mouse-up -s @e3` | Press/release at element center |
-| `scroll -s @e3` | Scroll at the element center |
+| `click @e3` | Clicks the element's bbox center |
+| `dblclick @e3` | Double-click the element center |
+| `hover @e3` | Hover the element center |
+| `move @e3` | Move to the element center |
+| `mouse-down @e3` / `mouse-up @e3` | Press/release at element center |
+| `scroll @e3` | Scroll at the element center |
 | `type --at-selector @e3` | Click the element center before typing |
 
 For `drag` and `shortcut`, extract coordinates/keys manually as before.

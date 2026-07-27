@@ -35,7 +35,7 @@ Every desktop interaction follows this cycle:
 ```
 1. agent-windows observe              # See the screen (snapshot + screenshot)
 2. Find target in Interactive Elements table
-3. agent-windows click -s @eN         # Act via selector (preferred)
+3. agent-windows click @eN            # Act via selector (preferred)
    # or: extract coords from Position, compute center, click cx cy
 4. agent-windows observe              # Verify the result
 ```
@@ -56,7 +56,7 @@ agent-windows config init
 agent-windows observe
 
 # Click a button (find @e3 in snapshot)
-agent-windows click -s @e3            # via selector (preferred)
+agent-windows click @e3               # via selector (preferred)
 agent-windows click 450 320           # or explicit coordinates
 
 # Type text
@@ -227,12 +227,12 @@ agent-windows is visible @e3             # Check if element is on-screen
 agent-windows is enabled @e3             # Check if element is enabled
 agent-windows wait @e3 --timeout 10      # Wait for element to appear
 agent-windows screenshot -s @e3          # Screenshot cropped to element
-agent-windows click -s @e3               # Click element's bbox center
+agent-windows click @e3                  # Click element's bbox center
 agent-windows type "text" --at-selector @e3   # Click element center, then type
-agent-windows scroll -s @e3 --direction up
+agent-windows scroll @e3 --direction up
 ```
 
-`click`, `dblclick`, `hover`, `move`, `mouse-down`, `mouse-up`, `scroll`, and `type` (`--at-selector`) all accept `--selector`/`-s` and resolve the element's bbox center for you — no manual coordinate math.
+`click`, `dblclick`, `hover`, `move`, `mouse-down`, `mouse-up`, and `scroll` accept an `@eN` ref as a bare positional (e.g. `click @e3`) and resolve the element's bbox center for you — no manual coordinate math. `type` takes `--at-selector @e3` (clicks the center, then types).
 
 ### When You Need Explicit Coordinates
 
@@ -262,7 +262,7 @@ agent-windows click 500 300                # Left click
 agent-windows click 500 300 --right        # Right click
 agent-windows click 500 300 --double       # Double click
 agent-windows dblclick 500 300             # Double click (explicit)
-agent-windows click -s @e3 --background    # No-focus-steal click (UIA Invoke; left single only)
+agent-windows click @e3 --background    # No-focus-steal click (UIA Invoke; left single only)
 agent-windows hover 500 300                # Hover (trigger tooltips)
 agent-windows move 500 300                 # Move mouse only
 agent-windows scroll 500 300 --direction down --amount 5   # Scroll

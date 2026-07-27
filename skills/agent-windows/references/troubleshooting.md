@@ -93,7 +93,7 @@ agent-windows observe
 **Cause**: the daemon's integrity level (typically *medium*) is below the target's (typically *high*). Windows UIPI would silently drop `SendInput`-injected mouse/keyboard events at that window — the handler still reports success, leaving the agent in a retry loop. To prevent that, `daemon/handlers/input.py` runs a preflight on every foreground input path: `_require_uipi_clear_at(x, y)` for `click` / `dblclick` / `type --at` / `type --at-selector`, and `_require_uipi_clear_foreground()` for focused-field `type` (both wrappers live in `daemon/handlers/input.py`; they call the integrity-level checks in `core/uipi.py`). On an IL mismatch it raises a `PermissionError` whose message names both ILs and the recommended recovery; `route_request` maps that to `-1004` (`PERMISSION_DENIED`, router.py:225-228).
 
 **Recovery**:
-1. Retry with `--background` — the UIA `Invoke` / `Toggle` / `Select` patterns reach the target through the accessibility channel and bypass UIPI, so the action lands without stealing focus: `agent-windows click -s @e3 --background`
+1. Retry with `--background` — the UIA `Invoke` / `Toggle` / `Select` patterns reach the target through the accessibility channel and bypass UIPI, so the action lands without stealing focus: `agent-windows click @e3 --background`
 2. Or relaunch the daemon elevated so its own IL meets or exceeds the target's. Start `agent-windows` from an elevated shell; the spawned daemon inherits that IL — run `agent-windows daemon stop` first, then `agent-windows observe` from the elevated shell.
 
 ## Window Frozen After a Background Click
