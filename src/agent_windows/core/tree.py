@@ -2031,8 +2031,15 @@ def render_windows_table(windows: list[WindowInfo], include_hwnd: bool = False) 
     return "\n".join(rows)
 
 
-def render_snapshot(data: dict[str, Any]) -> str:
-    """Render the snapshot data as structured text for AI consumption."""
+def render_snapshot(data: dict[str, Any], interactive_only: bool = False) -> str:
+    """Render the snapshot data as structured text for AI consumption.
+
+    ``interactive_only`` drops the Windows table and Accessibility Tree (the
+    bulk of the output), leaving the Desktop State header (cursor + active
+    window — small but essential targeting context) and the Interactive
+    Elements (@eN) table. For agents that only need actionable refs; roughly
+    4x shorter on a busy desktop.
+    """
     parts = []
 
     # Desktop State
@@ -2068,32 +2075,37 @@ def render_snapshot(data: dict[str, Any]) -> str:
         parts.append(f'Active Window: "{active.title}" ({active.process_name})')
     parts.append("")
 
-    # Windows table (shared renderer; observe shows it HWND-free — `app list`
-    # turns the HWND column on for precise targeting. See render_windows_table.)
-    windows = data.get("windows", [])
-    if windows:
-        parts.append("## Windows")
-        parts.append(render_windows_table(windows))
-        parts.append("")
+    # --interactive-only: skip the Windows table + Accessibility Tree (the bulk
+    # of the output); keep Desktop State + the @eN table. Agents that only need
+    # actionable refs save ~4x tokens on a busy desktop.
+    if not interactive_only:
+        # Windows table (shared renderer; observe shows it HWND-free — `app list`
+        # turns the HWND column on for precise targeting. See render_windows_table.)
+        windows = data.get("windows", [])
+        if windows:
+            parts.append("## Windows")
+            parts.append(render_windows_table(windows))
+            parts.append("")
 
-    # Semantic tree. NOTE: the tree text is NOT display-filtered (TODO #9-B) —
-    # it is a pre-rendered free-text string with no per-line bbox, so clipping
-    # it to a display region is not reliable. When a display filter is active,
-    # surface that here so the agent knows the tree still shows the full desktop
-    # while windows/elements/cursor above are scoped to the selected display(s).
-    display_filter = data.get("display_filter")
-    tree = data.get("semantic_tree", "")
-    if display_filter and tree:
-        parts.append(
-            f"[Accessibility Tree not filtered — shows full desktop. "
-            f"Windows/elements/cursor filtered to display(s) "
-            f"{','.join(str(i) for i in display_filter)}]"
-        )
-        parts.append("")
-    if tree:
-        parts.append("## Accessibility Tree")
-        parts.append(tree)
-        parts.append("")
+    if not interactive_only:
+        # Semantic tree. NOTE: the tree text is NOT display-filtered (TODO #9-B) —
+        # it is a pre-rendered free-text string with no per-line bbox, so clipping
+        # it to a display region is not reliable. When a display filter is active,
+        # surface that here so the agent knows the tree still shows the full desktop
+        # while windows/elements/cursor above are scoped to the selected display(s).
+        display_filter = data.get("display_filter")
+        tree = data.get("semantic_tree", "")
+        if display_filter and tree:
+            parts.append(
+                f"[Accessibility Tree not filtered — shows full desktop. "
+                f"Windows/elements/cursor filtered to display(s) "
+                f"{','.join(str(i) for i in display_filter)}]"
+            )
+            parts.append("")
+        if tree:
+            parts.append("## Accessibility Tree")
+            parts.append(tree)
+            parts.append("")
 
     # Interactive elements table. The list itself is already ordered with modal
     # elements first (see traverse_tree), so @eN refs here match the indices

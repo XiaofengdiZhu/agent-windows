@@ -87,6 +87,14 @@ def _observe(params: dict) -> dict[str, Any]:
         if hgrid > 0:
             screenshot_params["height_reference_line"] = hgrid
 
+    # --interactive-only forwarded to the snapshot sub-call (drops the Windows
+    # table + Tree from the bundle's text; the screenshot is unaffected).
+    raw_io = params.get("interactive_only")
+    if raw_io is True or (
+        isinstance(raw_io, str) and raw_io.lower() == "true"
+    ):
+        snapshot_params["interactive_only"] = True
+
     def _append(method: str, sub_params: dict) -> None:
         text, error = _run_sub(method, sub_params)
         if parts:

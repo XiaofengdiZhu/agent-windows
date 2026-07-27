@@ -128,6 +128,7 @@ def snapshot_fn(
     display: list[int] | None = None,
     window: str | None = None,
     active: bool = False,
+    interactive_only: bool = False,
 ) -> str:
     """Traverse the UIA tree and return a semantic snapshot.
 
@@ -140,7 +141,9 @@ def snapshot_fn(
     ``active=True`` targets the foreground window. The two are mutually
     exclusive (the daemon raises INVALID_PARAMS); omit both for the full
     desktop snapshot. ``display`` further crops by display geometry and
-    composes with either scoping mode.
+    composes with either scoping mode. ``interactive_only=True`` drops the
+    Windows table and Accessibility Tree, returning just the Desktop State
+    header + the @eN Interactive Elements table (token savings).
     """
     params: dict[str, Any] = {}
     if display is not None:
@@ -149,6 +152,8 @@ def snapshot_fn(
         params["window"] = window
     if active:
         params["active"] = True
+    if interactive_only:
+        params["interactive_only"] = True
     try:
         return str(_call("snapshot", **params).get("output", ""))
     except (RuntimeError, OSError) as e:
@@ -194,6 +199,7 @@ def observe_fn(
     use_annotation: bool | str | None = None,
     width_reference_line: int | None = None,
     height_reference_line: int | None = None,
+    interactive_only: bool = False,
 ) -> str:
     """Combined snapshot + screenshot, returned as text. Add use_annotation=True
     for a numbered @eN-box image alongside the snapshot's table.
@@ -201,6 +207,10 @@ def observe_fn(
     For a client-rendered image, call ``screenshot`` directly (this tool's
     screenshot path is embedded in text). On failure returns a retryable error
     string instead of raising. (TODO #12)
+
+    ``interactive_only=True`` drops the Windows table + Accessibility Tree from
+    the snapshot text (keeps Desktop State + the @eN table); the screenshot is
+    unaffected.
     """
     params: dict[str, Any] = {}
     if display is not None:
@@ -211,6 +221,8 @@ def observe_fn(
             params["width_reference_line"] = width_reference_line
         if height_reference_line:
             params["height_reference_line"] = height_reference_line
+    if interactive_only:
+        params["interactive_only"] = True
     try:
         result = _call("observe", **params)
         return str(result.get("output", ""))
@@ -370,8 +382,10 @@ def register(mcp) -> None:
     ), annotations=ToolAnnotations(title="Snapshot", readOnlyHint=True,
                                    idempotentHint=True, openWorldHint=False))
     def _snapshot(display: list[int] | None = None,
-                  window: str | None = None, active: bool = False) -> str:
-        return snapshot_fn(display=display, window=window, active=active)
+                  window: str | None = None, active: bool = False,
+                  interactive_only: bool = False) -> str:
+        return snapshot_fn(display=display, window=window, active=active,
+                           interactive_only=interactive_only)
 
     @mcp.tool(name="snapshot_diff", description=(
         "Diff a stored baseline UIA snapshot against the current desktop: "
@@ -394,7 +408,9 @@ def register(mcp) -> None:
         "understand UI. Set use_annotation=True to overlay a numbered @eN box on "
         "each interactive element (mirrors screenshot's annotation). "
         "display=[0] (or [0,1] multi-display union) scopes both. For a client-"
-        "rendered image, call `screenshot` directly."
+        "rendered image, call `screenshot` directly. Set interactive_only=True "
+        "to drop the Windows table + Accessibility Tree from the snapshot text "
+        "(keeps the @eN table; screenshot unchanged)."
     ), annotations=ToolAnnotations(title="Observe", readOnlyHint=True,
                                    idempotentHint=True, openWorldHint=False))
     def _observe(display: list[int] | None = None,
@@ -408,10 +424,12 @@ def register(mcp) -> None:
                  height_reference_line: Annotated[int | None, Field(
                      description="With use_annotation: draw this many horizontal reference lines. 0 = none.",
                      ge=0,
-                 )] = None) -> str:
+                 )] = None,
+                 interactive_only: bool = False) -> str:
         return observe_fn(display=display, use_annotation=use_annotation,
                           width_reference_line=width_reference_line,
-                          height_reference_line=height_reference_line)
+                          height_reference_line=height_reference_line,
+                          interactive_only=interactive_only)
 
     @mcp.tool(name="get_text", description=(
         "Return the text/name of a UIA element identified by its @eN selector "

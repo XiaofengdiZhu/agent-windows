@@ -193,6 +193,27 @@ def test_snapshot_fn_forwards_all_combined():
     m.assert_called_once_with("snapshot", display=[0], window="note")
 
 
+def test_snapshot_fn_forwards_interactive_only():
+    with patch("agent_windows.mcp.tools.observation._call") as m:
+        obs.snapshot_fn(interactive_only=True)
+    m.assert_called_once_with("snapshot", interactive_only=True)
+
+
+def test_snapshot_fn_interactive_only_default_not_sent():
+    # interactive_only=False is the default — it must NOT inject the key.
+    with patch("agent_windows.mcp.tools.observation._call") as m:
+        obs.snapshot_fn()
+    m.assert_called_once_with("snapshot")
+
+
+def test_observe_fn_forwards_interactive_only():
+    with patch("agent_windows.mcp.tools.observation._call",
+               return_value={"output": "obs"}) as m:
+        out = obs.observe_fn(interactive_only=True)
+    m.assert_called_once_with("observe", interactive_only=True)
+    assert out == "obs"
+
+
 def test_snapshot_diff_fn_forwards_action_save():
     with patch.object(obs, "_call", return_value={"output": "saved"}) as m:
         out = obs.snapshot_diff_fn(action="save")

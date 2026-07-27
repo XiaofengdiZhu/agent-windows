@@ -468,6 +468,24 @@ class TestObserveCommands:
         assert "window" not in params
         assert "active" not in params
 
+    # ── snapshot / observe --interactive-only ──────────────────────────
+
+    @patch("agent_windows.cli.commands.observe._cmd")
+    def test_snapshot_interactive_only_flag(self, mock_cmd):
+        """--interactive-only forwards interactive_only=True."""
+        runner.invoke(app, ["snapshot", "--interactive-only"])
+        method, params = _cmd_calls(mock_cmd)[0]
+        assert method == "snapshot"
+        assert params["interactive_only"] is True
+
+    @patch("agent_windows.cli.commands.observe._cmd")
+    def test_observe_interactive_only_flag(self, mock_cmd):
+        """observe --interactive-only forwards interactive_only=True."""
+        runner.invoke(app, ["observe", "--interactive-only"])
+        method, params = _cmd_calls(mock_cmd)[0]
+        assert method == "observe"
+        assert params["interactive_only"] is True
+
     @patch("agent_windows.cli.commands.observe._cmd")
     def test_screenshot_bbox_parsed_to_ints(self, mock_cmd):
         runner.invoke(app, ["screenshot", "--bbox", "10,20,30,40"])

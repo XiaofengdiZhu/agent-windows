@@ -617,8 +617,9 @@ fn parse_scroll(rest: &[String]) -> Result<Action, ParseError> {
 fn parse_observe(rest: &[String]) -> Result<Action, ParseError> {
     // observe is now a pure snapshot+screenshot bundle (always both, decided by
     // the daemon). Flags: --annotate (bool) + --grid-w/--grid-h (value, forwarded
-    // only alongside --annotate), plus repeatable --display/-d (collect_display
-    // walks raw argv since ParsedArgs is last-writer-wins). Mirrors
+    // only alongside --annotate), repeatable --display/-d (collect_display walks
+    // raw argv since ParsedArgs is last-writer-wins), and --interactive-only
+    // (bool, forwarded to the snapshot sub-call). Mirrors
     // cli/commands/observe.py:observe.
     //
     // Reject the removed legacy flags (--ground/--snapshot/--screenshot) up-front
@@ -658,6 +659,9 @@ fn parse_observe(rest: &[String]) -> Result<Action, ParseError> {
             }
         }
     }
+    if p.flag(&["interactive-only"]) {
+        params.insert("interactive_only".into(), true.into());
+    }
     Ok(Action::Call { method: "observe".into(), params: Value::Object(params) })
 }
 
@@ -683,6 +687,11 @@ fn parse_snapshot(rest: &[String]) -> Result<Action, ParseError> {
     }
     if p.flag(&["active"]) {
         params.insert("active".into(), true.into());
+    }
+    // --interactive-only: bare bool flag (NOT in value_opts — same as --active).
+    // Drops the Windows table + Accessibility Tree from the rendered snapshot.
+    if p.flag(&["interactive-only"]) {
+        params.insert("interactive_only".into(), true.into());
     }
     Ok(Action::Call { method: "snapshot".into(), params: Value::Object(params) })
 }
@@ -2656,6 +2665,7 @@ mod tests {
                 assert!(params.get("window").is_none());
                 assert!(params.get("active").is_none());
                 assert!(params.get("display").is_none());
+                assert!(params.get("interactive_only").is_none());
             }
             other => panic!("expected Call, got {:?}", other),
         }
@@ -2674,6 +2684,15 @@ mod tests {
             Ok(Action::Call { params, .. }) => {
                 assert_eq!(params["active"], true);
                 assert!(params.get("window").is_none());
+            }
+            other => panic!("got {:?}", other),
+        }
+        // --interactive-only (bool flag) → params["interactive_only"] = true.
+        // Must be registered in parse_snapshot or the launcher silently drops
+        // it (unknown -flags are treated as bool-present-and-ignored).
+        match parse(&argv(&["snapshot", "--interactive-only"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert_eq!(params["interactive_only"], true);
             }
             other => panic!("got {:?}", other),
         }
@@ -2787,6 +2806,14 @@ mod tests {
             Ok(Action::Call { params, .. }) => {
                 assert!(params.get("use_annotation").is_none());
                 assert_eq!(params["display"], serde_json::json!([0]));
+            }
+            other => panic!("got {:?}", other),
+        }
+        // --interactive-only → forwarded to the snapshot sub-call as
+        // interactive_only=true (drops the Windows table + Tree from the text).
+        match parse(&argv(&["observe", "--interactive-only"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert_eq!(params["interactive_only"], true);
             }
             other => panic!("got {:?}", other),
         }

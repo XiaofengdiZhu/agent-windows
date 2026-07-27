@@ -1191,6 +1191,63 @@ class TestSnapshotMetadataRender:
         assert "DPI Scale:" not in rendered
 
 
+# ── snapshot --interactive-only: drop Windows table + Tree ───────────
+
+
+def _render_interactive_only_base():
+    """Snapshot with all four sections populated, for interactive_only tests."""
+    win = WindowInfo(title="App", process_name="app.exe", handle=1,
+                     bbox=BoundingBox(0, 0, 800, 600))
+    el = ElementInfo(name="OK", control_type="ButtonControl",
+                     bbox=BoundingBox(10, 10, 50, 40), window_name="App")
+    return {
+        "cursor": (100, 200),
+        "resolution": (1920, 1080),
+        "displays": 1,
+        "active_window": None,
+        "windows": [win],
+        "semantic_tree": 'Desktop\n  └─ Window "App"',
+        "interactive_elements": [el],
+    }
+
+
+class TestInteractiveOnlyRender:
+    def test_drops_windows_table_and_tree_keeps_desktop_and_elements(self):
+        data = _render_interactive_only_base()
+        full = render_snapshot(data)
+        slim = render_snapshot(data, interactive_only=True)
+        # Full output has all four sections.
+        assert "## Desktop State" in full
+        assert "## Windows" in full
+        assert "## Accessibility Tree" in full
+        assert "## Interactive Elements" in full
+        # interactive_only drops Windows + Tree...
+        assert "## Windows" not in slim
+        assert "## Accessibility Tree" not in slim
+        # ...but keeps Desktop State + the @eN table (element ref survives).
+        assert "## Desktop State" in slim
+        assert "## Interactive Elements" in slim
+        assert "@e1" in slim
+
+    def test_keeps_cursor_and_active_window_context(self):
+        data = _render_interactive_only_base()
+        data["active_window"] = WindowInfo(
+            title="Focused", process_name="f.exe", handle=2,
+            bbox=BoundingBox(0, 0, 10, 10), is_active=True)
+        slim = render_snapshot(data, interactive_only=True)
+        assert "Cursor: (100, 200)" in slim
+        assert 'Active Window: "Focused"' in slim
+
+    def test_no_elements_still_renders_desktop_state(self):
+        """interactive_only with zero elements → Desktop State only, no crash,
+        no empty Interactive Elements header."""
+        data = _render_interactive_only_base()
+        data["interactive_elements"] = []
+        slim = render_snapshot(data, interactive_only=True)
+        assert "## Desktop State" in slim
+        assert "## Interactive Elements" not in slim
+
+
 class TestTraverseTreeMetadata:
     """traverse_tree must plumb virtual_screen/dpi_scale into its return dict.
     Drives the real function with its Win32 / UIA entry points patched so no

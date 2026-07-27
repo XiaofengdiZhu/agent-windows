@@ -65,7 +65,14 @@ def _snapshot(params: dict) -> dict[str, Any]:
     if display is not None:
         data = filter_snapshot_to_displays(data, display)
 
-    output = render_snapshot(data)
+    # --interactive-only: drop the Windows table + Accessibility Tree, keep
+    # Desktop State + the @eN table (token savings for agent-driven calls).
+    # Accept bool or the string "true" (IPC/JSON may stringify).
+    raw_io = params.get("interactive_only")
+    interactive_only = raw_io is True or (
+        isinstance(raw_io, str) and raw_io.lower() == "true"
+    )
+    output = render_snapshot(data, interactive_only=interactive_only)
     if header:
         prefix = header + (f"\n{warning}" if warning else "")
         output = prefix + "\n\n" + output

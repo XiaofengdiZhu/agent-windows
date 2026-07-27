@@ -26,10 +26,15 @@ def observe(
     display: list[int] = typer.Option(
         None, "--display", "-d",
         help="Limit to display index(es), e.g. -d 0 -d 1 (repeatable)"),
+    interactive_only: bool = typer.Option(
+        False, "--interactive-only",
+        help="Drop the Windows table + Accessibility Tree from the snapshot text "
+             "(keeps Desktop State + the @eN table); screenshot is unaffected"),
 ) -> None:
     """Snapshot + screenshot in one call (the bundle). Use `snapshot`/`screenshot`
     for individual control. Add --annotate for a numbered-box image alongside the
-    snapshot's @eN table."""
+    snapshot's @eN table. --interactive-only trims the snapshot text to the @eN
+    table for token savings."""
     params: dict = {}
     if display:
         params["display"] = display
@@ -39,6 +44,8 @@ def observe(
             params["width_reference_line"] = grid_w
         if grid_h > 0:
             params["height_reference_line"] = grid_h
+    if interactive_only:
+        params["interactive_only"] = True
     _cmd(ctx, "observe", **params)
 
 
@@ -64,11 +71,17 @@ def snapshot(
     active: bool = typer.Option(
         False, "--active",
         help="Scope to the foreground window"),
+    interactive_only: bool = typer.Option(
+        False, "--interactive-only",
+        help="Drop the Windows table + Accessibility Tree; return only Desktop "
+             "State + the @eN Interactive Elements table (token savings)"),
 ) -> None:
     """UIA accessibility tree traversal, returns semantic text.
 
     By default the full screen tree is returned. Use --window (or --active) to
     scope to a single top-level window -- cuts noise from large windows.
+    --interactive-only drops the Windows table + tree, keeping just the @eN
+    table for agent-driven calls that only need actionable refs.
     """
     params: dict = {}
     if display:
@@ -77,6 +90,8 @@ def snapshot(
         params["window"] = window
     if active:
         params["active"] = True
+    if interactive_only:
+        params["interactive_only"] = True
     _cmd(ctx, "snapshot", **params)
 
 

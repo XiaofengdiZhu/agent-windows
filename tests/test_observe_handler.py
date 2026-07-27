@@ -71,3 +71,21 @@ def test_observe_partial_failure_returns_output_and_errors(monkeypatch):
     assert result["errors"] == [
         {"method": "screenshot", "code": -1005, "message": "boom"},
     ]
+
+
+def test_observe_forwards_interactive_only_to_snapshot(monkeypatch):
+    """interactive_only trims the snapshot sub-call's text only; the screenshot
+    sub-call is unaffected."""
+    from agent_windows.daemon.handlers import observe as obs
+
+    calls = []
+    def fake_run_sub(method, params):
+        calls.append((method, dict(params)))
+        return (f"[{method} text]", None)
+    monkeypatch.setattr(obs, "_run_sub", fake_run_sub)
+
+    obs._observe({"interactive_only": True})
+    assert [c[0] for c in calls] == ["snapshot", "screenshot"]
+    # Forwarded to snapshot only — screenshot params stay clean.
+    assert calls[0][1]["interactive_only"] is True
+    assert "interactive_only" not in calls[1][1]

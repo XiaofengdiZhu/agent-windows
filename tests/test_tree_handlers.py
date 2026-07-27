@@ -84,6 +84,48 @@ class TestSnapshotWindowScope:
         _, kwargs = mock_gts.call_args
         assert kwargs.get("only_window") is None
 
+    @patch("agent_windows.utils.config.load_config")
+    @patch("agent_windows.core.tree.render_snapshot")
+    @patch("agent_windows.core.tree.get_tree_snapshot")
+    def test_interactive_only_forwarded_to_render(self, mock_gts, mock_render, mock_cfg):
+        """interactive_only=True is passed through to render_snapshot."""
+        mock_gts.return_value = {"semantic_tree": "", "interactive_elements": []}
+        mock_render.return_value = "SLIM"
+        mock_cfg.return_value = {}
+
+        HANDLERS["snapshot"]({"interactive_only": True})
+
+        _, kwargs = mock_render.call_args
+        assert kwargs.get("interactive_only") is True
+
+    @patch("agent_windows.utils.config.load_config")
+    @patch("agent_windows.core.tree.render_snapshot")
+    @patch("agent_windows.core.tree.get_tree_snapshot")
+    def test_interactive_only_string_true_coerced(self, mock_gts, mock_render, mock_cfg):
+        """IPC may stringify the bool; 'true' (any case) coerces to True."""
+        mock_gts.return_value = {"semantic_tree": "", "interactive_elements": []}
+        mock_render.return_value = "SLIM"
+        mock_cfg.return_value = {}
+
+        HANDLERS["snapshot"]({"interactive_only": "true"})
+
+        _, kwargs = mock_render.call_args
+        assert kwargs.get("interactive_only") is True
+
+    @patch("agent_windows.utils.config.load_config")
+    @patch("agent_windows.core.tree.render_snapshot")
+    @patch("agent_windows.core.tree.get_tree_snapshot")
+    def test_interactive_only_absent_defaults_false(self, mock_gts, mock_render, mock_cfg):
+        """No interactive_only param → render_snapshot gets interactive_only=False."""
+        mock_gts.return_value = {"semantic_tree": "", "interactive_elements": []}
+        mock_render.return_value = "FULL"
+        mock_cfg.return_value = {}
+
+        HANDLERS["snapshot"]({})
+
+        _, kwargs = mock_render.call_args
+        assert kwargs.get("interactive_only") is False
+
     def test_window_and_active_mutually_exclusive(self):
         with pytest.raises(ValueError, match="mutually exclusive"):
             HANDLERS["snapshot"]({"window": "x", "active": True})
