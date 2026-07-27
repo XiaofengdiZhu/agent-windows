@@ -596,22 +596,30 @@ fn parse_scroll(rest: &[String]) -> Result<Action, ParseError> {
 }
 
 fn parse_observe(rest: &[String]) -> Result<Action, ParseError> {
-    let p = ParsedArgs::parse(rest, &["ground", "display", "d"]);
-    let snapshot = p.flag(&["snapshot"]);
-    let screenshot = p.flag(&["screenshot"]);
-    let ground = p.value(&["ground"]).unwrap_or("").to_string();
-    // Default: snapshot + screenshot when no flags.
-    let (snap, shot) = if !snapshot && !screenshot && ground.is_empty() {
-        (true, true)
-    } else {
-        (snapshot, screenshot)
-    };
+    // observe is now a pure snapshot+screenshot bundle (always both, decided by
+    // the daemon). Flags: --annotate (bool) + --grid-w/--grid-h (value, forwarded
+    // only alongside --annotate), plus repeatable --display/-d (collect_display
+    // walks raw argv since ParsedArgs is last-writer-wins). Mirrors
+    // cli/commands/observe.py:observe.
+    let p = ParsedArgs::parse(rest, &["grid-w", "grid-h"]);
     let mut params = Map::new();
-    params.insert("snapshot".into(), snap.into());
-    params.insert("screenshot".into(), shot.into());
-    params.insert("ground".into(), ground.into());
     if let Some(disp) = collect_display(rest)? {
         params.insert("display".into(), disp);
+    }
+    if p.flag(&["annotate"]) {
+        params.insert("use_annotation".into(), true.into());
+        if let Some(gw) = p.value(&["grid-w"]) {
+            let gw: i64 = gw.parse().map_err(|_| invalid("--grid-w must be an integer"))?;
+            if gw > 0 {
+                params.insert("width_reference_line".into(), gw.into());
+            }
+        }
+        if let Some(gh) = p.value(&["grid-h"]) {
+            let gh: i64 = gh.parse().map_err(|_| invalid("--grid-h must be an integer"))?;
+            if gh > 0 {
+                params.insert("height_reference_line".into(), gh.into());
+            }
+        }
     }
     Ok(Action::Call { method: "observe".into(), params: Value::Object(params) })
 }
@@ -740,11 +748,55 @@ fn parse_screenshot(rest: &[String]) -> Result<Action, ParseError> {
 }
 
 fn parse_ground(rest: &[String]) -> Result<Action, ParseError> {
-    let p = ParsedArgs::parse(rest, &[]);
-    let description = p.pos(0, "description")?;
+    // ground "DESC" [--screenshot [PATH]] [--single-pass].
+    // --screenshot is an OPTIONAL-VALUE flag: bare → default save path
+    // (screenshot=true); `--screenshot X` → X is the path. ParsedArgs can't
+    // express optional-value, and would mis-tokenize `--screenshot X` (X as a
+    // positional), so we walk raw argv ourselves.
     let mut params = Map::new();
+    let mut description: Option<String> = None;
+    let mut single_pass = false;
+    let mut i = 0;
+    while i < rest.len() {
+        let a = &rest[i];
+        // `--screenshot=PATH` form
+        if let Some(rhs) = a.strip_prefix("--screenshot=") {
+            params.insert("screenshot".into(), rhs.into());
+            i += 1;
+            continue;
+        }
+        if a == "--screenshot" {
+            // Peek the next token; consume it as PATH only when present and not
+            // flag-prefixed, else treat --screenshot as bare (→ default path).
+            match rest.get(i + 1) {
+                Some(next) if !next.starts_with('-') => {
+                    params.insert("screenshot".into(), next.clone().into());
+                    i += 2;
+                    continue;
+                }
+                _ => {
+                    params.insert("screenshot".into(), true.into());
+                    i += 1;
+                    continue;
+                }
+            }
+        }
+        if a == "--single-pass" {
+            single_pass = true;
+            i += 1;
+            continue;
+        }
+        // First non-flag token is the description positional.
+        if description.is_none() && !a.starts_with('-') {
+            description = Some(a.clone());
+        }
+        i += 1;
+    }
+    let description = description.ok_or_else(|| {
+        missing("Missing required positional argument: description")
+    })?;
     params.insert("description".into(), description.into());
-    if p.flag(&["single-pass"]) {
+    if single_pass {
         params.insert("single_pass".into(), true.into());
     }
     Ok(Action::Call { method: "ground".into(), params: Value::Object(params) })
@@ -2667,5 +2719,106 @@ mod tests {
             }
             other => panic!("expected Call, got {:?}", other),
         }
+    }
+
+    // ── parse_observe rewrite: --annotate + --grid-w/--grid-h, display repeatable ──
+    //
+    // observe is now a pure snapshot+screenshot bundle (the daemon always runs
+    // both and ignores legacy snapshot/screenshot/ground params). The launcher
+    // must NOT forward those legacy keys — they're dropped here, and the daemon
+    // would ignore them anyway, but forwarding them would clutter the request
+    // and risk a future contract drift. Mirrors cli/commands/observe.py:observe.
+
+    #[test]
+    fn parse_observe_annotate_and_grid_forward() {
+        let g = GlobalFlags::default();
+        match parse(&argv(&["observe", "--annotate", "--grid-w", "10", "--grid-h", "8"]), &g) {
+            Ok(Action::Call { method, params }) => {
+                assert_eq!(method, "observe");
+                assert_eq!(params["use_annotation"], true);
+                assert_eq!(params["width_reference_line"], 10);
+                assert_eq!(params["height_reference_line"], 8);
+            }
+            other => panic!("got {:?}", other),
+        }
+        // No flags → no use_annotation; display forwarded.
+        match parse(&argv(&["observe", "-d", "0"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert!(params.get("use_annotation").is_none());
+                assert_eq!(params["display"], serde_json::json!([0]));
+            }
+            other => panic!("got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_observe_drops_legacy_flags() {
+        // --snapshot/--screenshot/--ground are no longer observe flags; the
+        // launcher must not forward them (daemon ignores them anyway, but they
+        // also must not be mis-read as positionals/values).
+        let g = GlobalFlags::default();
+        match parse(&argv(&["observe", "--ground", "x"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert!(params.get("ground").is_none());
+            }
+            other => panic!("got {:?}", other),
+        }
+    }
+
+    // ── parse_ground rewrite: --screenshot [PATH] optional-value via raw walk ──
+    //
+    // ParsedArgs can't express "flag with optional value", so parse_ground walks
+    // raw argv itself. `--screenshot` bare → screenshot=true (default save
+    // path); `--screenshot X` (X not flag-prefixed) → screenshot="X";
+    // `--screenshot=X` form → that path; absent → no key. Mirrors
+    // cli/commands/ground.py and the Task 4/5 daemon contract.
+
+    #[test]
+    fn parse_ground_screenshot_optional_value() {
+        let g = GlobalFlags::default();
+        // bare → screenshot=true
+        match parse(&argv(&["ground", "X", "--screenshot"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert_eq!(params["description"], "X");
+                assert_eq!(params["screenshot"], true);
+            }
+            other => panic!("got {:?}", other),
+        }
+        // with path → screenshot=<path>
+        match parse(&argv(&["ground", "X", "--screenshot", "C:\\p.png"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert_eq!(params["screenshot"], "C:\\p.png");
+            }
+            other => panic!("got {:?}", other),
+        }
+        // --screenshot=PATH form
+        match parse(&argv(&["ground", "X", "--screenshot=D:\\q.png"]), &g) {
+            Ok(Action::Call { params, .. }) => assert_eq!(params["screenshot"], "D:\\q.png"),
+            other => panic!("got {:?}", other),
+        }
+        // absent → no screenshot key
+        match parse(&argv(&["ground", "X"]), &g) {
+            Ok(Action::Call { params, .. }) => assert!(params.get("screenshot").is_none()),
+            other => panic!("got {:?}", other),
+        }
+        // flag after --screenshot is NOT eaten as path; both flags honored
+        match parse(&argv(&["ground", "X", "--screenshot", "--single-pass"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert_eq!(params["screenshot"], true);
+                assert_eq!(params["single_pass"], true);
+            }
+            other => panic!("got {:?}", other),
+        }
+        // path before description: description still resolved correctly
+        match parse(&argv(&["ground", "--screenshot", "p.png", "DESC"]), &g) {
+            Ok(Action::Call { params, .. }) => {
+                assert_eq!(params["description"], "DESC");
+                assert_eq!(params["screenshot"], "p.png");
+            }
+            other => panic!("got {:?}", other),
+        }
+        // missing description → missing_argument
+        let e = parse(&argv(&["ground", "--screenshot"]), &g).unwrap_err();
+        assert_eq!(e.type_name(), "missing_argument");
     }
 }
