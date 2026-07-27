@@ -171,3 +171,13 @@ def test_ground_handler_screenshot_three_states(monkeypatch):
     r3 = v._ground({"description": "x", "screenshot": ""})
     assert calls == {"mark": True, "out": None}
 
+
+def test_ground_invalid_screenshot_type_raises_value_error():
+    """An invalid ``screenshot`` value (e.g. int 123) raises ValueError → maps to
+    INVALID_PARAMS via route_request. Covers the three-state decode's else-branch,
+    which the three-states test above doesn't reach."""
+    from agent_windows.daemon.handlers import vision as v
+
+    with pytest.raises(ValueError, match="must be true or a path string"):
+        v._ground({"description": "x", "screenshot": 123})
+

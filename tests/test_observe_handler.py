@@ -47,3 +47,27 @@ def test_observe_all_failed_raises(monkeypatch):
                                                  {"method": method, "code": -1, "message": "boom"}))
     with pytest.raises(RuntimeError, match="every sub-command failed"):
         obs._observe({})
+
+
+def test_observe_partial_failure_returns_output_and_errors(monkeypatch):
+    """When exactly one sub-command fails, observe returns 200-OK (no raise) with
+    the successful sub-command's output and a structured ``errors`` list of
+    ``{"method", "code", "message"}`` dicts — covering the partial-failure branch
+    that ``test_observe_all_failed_raises`` doesn't reach."""
+    from agent_windows.daemon.handlers import observe as obs
+
+    def fake_run_sub(method, params):
+        if method == "snapshot":
+            return ("## Snapshot\n...elements...", None)
+        # screenshot fails with a structured error (any code/message works).
+        return ("[screenshot failed: boom]",
+                {"method": "screenshot", "code": -1005, "message": "boom"})
+
+    monkeypatch.setattr(obs, "_run_sub", fake_run_sub)
+    result = obs._observe({})
+    # No raise; 200-OK with the snapshot text in output.
+    assert "## Snapshot" in result["output"]
+    # Structured partial-failure field; matches _observe's error-dict shape.
+    assert result["errors"] == [
+        {"method": "screenshot", "code": -1005, "message": "boom"},
+    ]
