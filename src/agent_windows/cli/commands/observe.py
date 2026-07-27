@@ -14,21 +14,31 @@ app = typer.Typer(help="Observation commands")
 @app.command()
 def observe(
     ctx: typer.Context,
-    snapshot: bool = typer.Option(False, "--snapshot", help="Include UIA tree snapshot"),
-    screenshot: bool = typer.Option(False, "--screenshot", help="Include screenshot"),
-    ground: str = typer.Option("", "--ground", help="Visual grounding with element description"),
+    annotate: bool = typer.Option(
+        False, "--annotate",
+        help="Overlay numbered @eN boxes on the screenshot (mirrors `screenshot --annotate`)"),
+    grid_w: int = typer.Option(
+        0, "--grid-w",
+        help="With --annotate: draw N vertical reference lines (X%% labels)"),
+    grid_h: int = typer.Option(
+        0, "--grid-h",
+        help="With --annotate: draw N horizontal reference lines (Y%% labels)"),
     display: list[int] = typer.Option(
         None, "--display", "-d",
         help="Limit to display index(es), e.g. -d 0 -d 1 (repeatable)"),
 ) -> None:
-    """Comprehensive observation: combines snapshot, screenshot, and/or grounding."""
-    # Default: snapshot + screenshot when no flags specified
-    if not snapshot and not screenshot and not ground:
-        snapshot = True
-        screenshot = True
-    params: dict = {"snapshot": snapshot, "screenshot": screenshot, "ground": ground}
+    """Snapshot + screenshot in one call (the bundle). Use `snapshot`/`screenshot`
+    for individual control. Add --annotate for a numbered-box image alongside the
+    snapshot's @eN table."""
+    params: dict = {}
     if display:
         params["display"] = display
+    if annotate:
+        params["use_annotation"] = True
+        if grid_w > 0:
+            params["width_reference_line"] = grid_w
+        if grid_h > 0:
+            params["height_reference_line"] = grid_h
     _cmd(ctx, "observe", **params)
 
 
@@ -79,8 +89,8 @@ def screenshot(
     bbox: str = typer.Option("", "--bbox", help="Crop region: x1,y1,x2,y2"),
     annotate: bool = typer.Option(
         False, "--annotate",
-        help="Overlay numbered detection boxes (@eN) for each interactive element "
-             "(requires full screen; ignores --bbox/--selector/--monitor)"),
+        help="Overlay numbered detection boxes (@eN) for each interactive element; "
+             "honors --bbox/--selector/--monitor/--display (boxes translate to the scope)"),
     grid_w: int = typer.Option(
         0, "--grid-w",
         help="With --annotate: draw N vertical reference lines (X%% labels)"),
@@ -107,6 +117,14 @@ def screenshot(
 def ground(
     ctx: typer.Context,
     description: str = typer.Argument(help="Element description to locate"),
+    screenshot: str = typer.Option(
+        None, "--screenshot",
+        help="Save a marked screenshot: bare = default path, with value = custom "
+             "path, omitted = no save. The bare form is filled in by argv "
+             "preprocessing (cli/main.py) using the __DEFAULT__ sentinel, because "
+             "Typer's bundled Click fork drops flag_value and cannot express "
+             "optional-value flags natively.",
+    ),
     single_pass: bool = typer.Option(
         False,
         "--single-pass",
@@ -114,8 +132,13 @@ def ground(
              "Overrides config vlm.single_pass for this call.",
     ),
 ) -> None:
-    """Visual model grounding: locate element coordinates."""
+    """Visual model grounding: locate element coordinates. Coords returned always;
+    pass --screenshot for a marked screenshot."""
     params = {"description": description}
+    if screenshot is not None:
+        # __DEFAULT__ (inserted by argv preprocessing for a bare --screenshot) →
+        # True (default save path); any other string is a custom path.
+        params["screenshot"] = True if screenshot == "__DEFAULT__" else screenshot
     if single_pass:
         params["single_pass"] = True
     _cmd(ctx, "ground", **params)

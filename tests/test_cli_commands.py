@@ -387,19 +387,46 @@ class TestNegativeCoordinates:
 
 class TestObserveCommands:
     @patch("agent_windows.cli.commands.observe._cmd")
-    def test_observe_defaults_to_snapshot_and_screenshot(self, mock_cmd):
-        """No flags → snapshot=True, screenshot=True (the default branch)."""
+    def test_observe_no_args_sends_no_params(self, mock_cmd):
+        """Bare `observe` → empty params (the daemon always runs snapshot +
+        screenshot as the bundle; the CLI no longer sends toggles)."""
         runner.invoke(app, ["observe"])
-        _, params = _cmd_calls(mock_cmd)[0]
-        assert params == {"snapshot": True, "screenshot": True, "ground": ""}
+        method, params = _cmd_calls(mock_cmd)[0]
+        assert method == "observe"
+        assert params == {}
 
     @patch("agent_windows.cli.commands.observe._cmd")
-    def test_observe_explicit_flags(self, mock_cmd):
-        runner.invoke(app, ["observe", "--snapshot", "--ground", "the button"])
+    def test_observe_annotate_forwards_annotation_params(self, mock_cmd):
+        """--annotate --grid-w/--grid-h forwards use_annotation + grid lines."""
+        runner.invoke(app, ["observe", "--annotate", "--grid-w", "5", "--grid-h", "3"])
         _, params = _cmd_calls(mock_cmd)[0]
-        assert params["snapshot"] is True
-        assert params["screenshot"] is False
-        assert params["ground"] == "the button"
+        assert params == {
+            "use_annotation": True,
+            "width_reference_line": 5,
+            "height_reference_line": 3,
+        }
+
+    @patch("agent_windows.cli.commands.observe._cmd")
+    def test_observe_annotate_alone_no_grid_keys(self, mock_cmd):
+        """--annotate alone forwards use_annotation only (no grid keys)."""
+        runner.invoke(app, ["observe", "--annotate"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params == {"use_annotation": True}
+
+    @patch("agent_windows.cli.commands.observe._cmd")
+    def test_observe_display_forwards_list(self, mock_cmd):
+        """-d is repeatable; the resulting list is forwarded."""
+        runner.invoke(app, ["observe", "-d", "0", "-d", "1"])
+        _, params = _cmd_calls(mock_cmd)[0]
+        assert params == {"display": [0, 1]}
+
+    @patch("agent_windows.cli.commands.observe._cmd")
+    def test_observe_rejects_legacy_snapshot_flag(self, mock_cmd):
+        """--snapshot was dropped (Task 5/6); the CLI now exits 2 with a
+        Click usage error and never reaches _cmd."""
+        result = runner.invoke(app, ["observe", "--snapshot"])
+        assert result.exit_code != 0
+        mock_cmd.assert_not_called()
 
     # ── snapshot --window / --active scoping ───────────────────────────
 
@@ -685,6 +712,92 @@ class TestPixelAtCommand:
         assert method == "pixel_at"
         assert params["x"] == -1920
         assert params["y"] == 0
+
+
+# ── ground --screenshot [PATH] three-state parse (T6) ────────────────
+
+
+class TestGroundCommandScreenshotFlag:
+    """`ground X --screenshot [PATH]` is an optional-value flag: bare = default
+    save path, with value = custom path, omitted = no save. Typer's bundled
+    Click fork (typer._click) drops ``flag_value``, so we cannot express this
+    in a Typer Option declaration — Click would either error "option requires
+    an argument" (bare) or swallow the next option-like token as the value
+    (``--screenshot --single-pass`` → screenshot="--single-pass").
+
+    The fix is argv preprocessing in main() (mirrors the negative-coords C1
+    pattern): when a bare ``--screenshot`` is followed by an option-like token
+    or end of argv, insert the ``__DEFAULT__`` sentinel; the command body
+    translates ``__DEFAULT__`` → True. CliRunner bypasses preprocessing, so
+    these tests go through main() with sys.argv mocked — same pattern as
+    TestNegativeCoordinates.
+    """
+
+    def _run(self, argv_rest):
+        """Invoke main() with sys.argv=[prog, *argv_rest], _cmd patched in the
+        observe module. Returns (exit_code, list_of_(method, params))."""
+        calls: list = []
+
+        def capture(ctx, method, **params):
+            calls.append((method, params))
+            return ""
+
+        with patch("agent_windows.cli.commands.observe._cmd", side_effect=capture):
+            old = sys.argv
+            sys.argv = ["agent-windows-python"] + argv_rest
+            code = 0
+            try:
+                main()
+            except SystemExit as e:
+                code = e.code if isinstance(e.code, int) else 1
+            finally:
+                sys.argv = old
+        return code, calls
+
+    def test_absent_sends_no_screenshot_key(self):
+        """`ground X` (no --screenshot) → daemon params have no `screenshot`."""
+        code, calls = self._run(["ground", "X"])
+        assert code == 0
+        assert calls == [("ground", {"description": "X"})]
+
+    def test_bare_screenshot_sends_true(self):
+        """`ground X --screenshot` (bare) → screenshot=True (default save path).
+
+        Preprocessing inserts ``__DEFAULT__``; the command body translates it
+        to True. Without preprocessing, Typer/Click would exit 2 'option
+        requires an argument'.
+        """
+        code, calls = self._run(["ground", "X", "--screenshot"])
+        assert code == 0, "bare --screenshot must not exit 2"
+        assert calls == [("ground", {"description": "X", "screenshot": True})]
+
+    def test_screenshot_with_path_sends_path_string(self):
+        """`ground X --screenshot PATH` → screenshot="PATH"."""
+        code, calls = self._run(["ground", "X", "--screenshot", "C:/p.png"])
+        assert code == 0
+        assert calls == [("ground", {"description": "X", "screenshot": "C:/p.png"})]
+
+    def test_bare_screenshot_does_not_swallow_following_option(self):
+        """`ground X --screenshot --single-pass` → both screenshot=True AND
+        single_pass=True. Without preprocessing, Click would consume
+        `--single-pass` as the value of `--screenshot`."""
+        code, calls = self._run(["ground", "X", "--screenshot", "--single-pass"])
+        assert code == 0
+        assert calls == [("ground", {"description": "X", "screenshot": True,
+                                     "single_pass": True})]
+
+    def test_screenshot_equals_form_unaffected(self):
+        """`--screenshot=PATH` is handled natively by Click (no preprocessing
+        needed); the value flows through as a path string."""
+        code, calls = self._run(["ground", "X", "--screenshot=C:/p.png"])
+        assert code == 0
+        assert calls == [("ground", {"description": "X", "screenshot": "C:/p.png"})]
+
+    def test_single_pass_alone_still_works(self):
+        """`ground X --single-pass` (no --screenshot) → no screenshot key."""
+        code, calls = self._run(["ground", "X", "--single-pass"])
+        assert code == 0
+        assert calls == [("ground", {"description": "X", "single_pass": True})]
 
 
 # ── system commands (app/fs/clipboard/process) ───────────────────────

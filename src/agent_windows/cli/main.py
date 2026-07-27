@@ -33,25 +33,80 @@ _COORD_CMDS = frozenset({
 # flag. No legal option here starts with a digit (they're letters: -s/-o/...).
 _NEG_NUMBER_RE = re.compile(r"-\d+(?:\.\d+)?$")
 
+# ── Optional-value flag support (T6) ──────────────────────────────────
+# Commands with flags that take an OPTIONAL value (``--flag`` alone = default
+# sentinel; ``--flag VALUE`` = the value). Maps command name → the bare long
+# flag tokens that need this treatment. Typer's bundled Click fork
+# (typer._click) drops the ``flag_value`` parameter on Option, so there is no
+# native way to express "optional-value flag" in a Typer command — Click would
+# either error "option requires an argument" (bare flag) or swallow the next
+# option-like token as the value (``--screenshot --single-pass`` →
+# screenshot="--single-pass"). main() works around this by inserting the
+# ``__DEFAULT__`` sentinel after a bare flag when the next token is missing or
+# option-like; the command body translates ``__DEFAULT__`` back to ``True``.
+# The native Rust launcher mirrors this in commands.rs (Task 7).
+_DEFAULT_FLAG_VALUE = "__DEFAULT__"
+_OPTIONAL_VALUE_FLAGS: dict[str, frozenset[str]] = {
+    "ground": frozenset({"--screenshot"}),
+}
+
 
 def _preprocess_argv(argv: list[str]) -> list[str]:
-    """Mark negative-number tokens on coordinate commands so Click parses them
-    as positionals instead of rejecting them as unknown options.
+    """Rewrite argv for command-specific edge cases Click/Typer can't express
+    natively. Scoped to specific commands so unrelated commands (fs/shell/
+    config, etc.) pass through untouched.
 
-    Scoped to ``_COORD_CMDS`` (argv[1]) so other commands — fs/shell/config, and
-    value-taking options like ``--monitor -1`` — are passed through untouched.
-    Stops at a literal ``--`` (Click's raw-positional sentinel) to preserve its
-    native semantics. Returns a new list; never mutates the caller's argv.
+    Two passes today:
+
+    1. Negative-coordinate marking (C1): on coordinate commands, a leading
+       ``-<digits>`` token is marked so Click sees a non-option positional.
+    2. Optional-value flag sentinel (T6): on commands in
+       ``_OPTIONAL_VALUE_FLAGS``, a bare ``--flag`` followed by an option-like
+       token (or end of argv) is given the ``__DEFAULT__`` sentinel so the
+       command body can map it back to ``True``.
+
+    Stops at a literal ``--`` (Click's raw-positional sentinel) in both passes
+    to preserve its native semantics. Returns a new list; never mutates the
+    caller's argv.
     """
-    if len(argv) < 2 or argv[1] not in _COORD_CMDS:
+    if len(argv) < 2:
         return argv
+    cmd = argv[1]
     out = list(argv)
-    for i in range(2, len(out)):
-        if out[i] == "--":
-            break  # everything after `--` is already a positional to Click
-        if _NEG_NUMBER_RE.fullmatch(out[i]):
-            from agent_windows.cli.commands.input import _NEG_COORD_MARKER
-            out[i] = _NEG_COORD_MARKER + out[i]
+
+    # Pass 1: negative-coordinate marking.
+    if cmd in _COORD_CMDS:
+        for i in range(2, len(out)):
+            if out[i] == "--":
+                break  # everything after `--` is already a positional to Click
+            if _NEG_NUMBER_RE.fullmatch(out[i]):
+                from agent_windows.cli.commands.input import _NEG_COORD_MARKER
+                out[i] = _NEG_COORD_MARKER + out[i]
+
+    # Pass 2: optional-value flag sentinel. Walk with a while-loop because we
+    # may insert tokens. A single ``-`` is stdin, not an option, so only treat
+    # tokens starting with ``-`` and length > 1 as option-like (matches Click's
+    # _flag_needs_value check in _click/parser.py).
+    optional_flags = _OPTIONAL_VALUE_FLAGS.get(cmd)
+    if optional_flags:
+        i = 2
+        while i < len(out):
+            tok = out[i]
+            if tok == "--":
+                break
+            if tok in optional_flags:
+                next_tok = out[i + 1] if i + 1 < len(out) else None
+                looks_option_like = (
+                    next_tok is not None
+                    and len(next_tok) > 1
+                    and next_tok.startswith("-")
+                )
+                if next_tok is None or looks_option_like:
+                    out.insert(i + 1, _DEFAULT_FLAG_VALUE)
+                    i += 2  # skip the sentinel we just inserted
+                    continue
+            i += 1
+
     return out
 
 
