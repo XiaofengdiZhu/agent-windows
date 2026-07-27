@@ -54,14 +54,13 @@ def _screenshot(params: dict) -> dict[str, Any]:
 
     # TODO #14: optional annotation overlay. Detection boxes are drawn in
     # virtual-desktop SCREEN coordinates (from the UIA tree), so annotation
-    # requires a capture spanning the WHOLE virtual screen — a bbox/selector/
-    # monitor crop would misalign the boxes, and dxcam's default no-bbox grab
-    # only covers the primary monitor. So when annotating we ignore any
-    # bbox/selector/monitor (warn) and capture the full virtual-screen rect
-    # explicitly. That bbox spans monitors → dxcam can't resolve it and the
-    # backend chain falls through to mss/pillow, which DO use virtual-screen
-    # coords. (Single-monitor setups still capture correctly.) Annotation is
-    # checked BEFORE the normal capture so only one capture happens.
+    # needs the capture to span a KNOWN region whose top-left (origin) lets us
+    # translate each box into image pixels: a bbox/selector/monitor scope →
+    # capture that region with origin = its top-left; NO scope → capture the
+    # FULL virtual screen with origin=(0,0). (dxcam's default no-bbox grab is
+    # primary-only, which would misalign boxes on a multi-monitor desktop —
+    # hence the explicit full-screen capture when no scope is given.) Annotation
+    # is checked alongside the normal capture so only one capture happens.
     #
     # use_annotation may arrive as a string ("true"/"false") — some MCP clients
     # serialize bool params as strings. Raw bool("false") is True, so coerce via
@@ -80,12 +79,7 @@ def _screenshot(params: dict) -> dict[str, Any]:
     do_annotate = raw_annotate is True or (
         isinstance(raw_annotate, str) and raw_annotate.lower() == "true"
     )
-    if do_annotate:
-        if bbox or selector or monitor >= 0:
-            annotate_warn = " [annotation requires full screen; bbox/selector/monitor ignored]"
-        bbox = None
-        selector = ""
-        monitor = -1
+    if do_annotate and not (bbox or selector or monitor >= 0):
         vscreen = get_virtual_screen_rect()  # (left, top, width, height)
         image = capture_screenshot(
             bbox=(vscreen[0], vscreen[1],
@@ -116,8 +110,23 @@ def _screenshot(params: dict) -> dict[str, Any]:
             timeout=cfg.get("timeout", 10),
         ).get("interactive_elements", [])
         grid = (wgrid, hgrid) if (wgrid > 0 or hgrid > 0) else None
-        # annotate_screenshot saves its own copy; reassign image+path below.
-        annotated_path = annotate_screenshot(image, elements, grid_lines=grid)
+        # origin = top-left of the captured region in virtual-desktop coords, so
+        # annotate_screenshot can translate element boxes (vdesktop coords) into
+        # image pixels.
+        if annotation_fullscreen:
+            origin = (0, 0)
+        elif bbox:
+            origin = (int(bbox[0]), int(bbox[1]))
+        else:
+            # monitor scope — derive its top-left (capture used monitor=).
+            try:
+                mb = _monitor_bbox(monitor)
+                origin = (mb[0], mb[1])
+            except Exception:
+                origin = (0, 0)
+        annotated_path = annotate_screenshot(
+            image, elements, grid_lines=grid, origin=origin,
+        )
         # Reload the saved annotated image so downstream scale/region math uses it.
         from PIL import Image
         with Image.open(annotated_path) as ai:

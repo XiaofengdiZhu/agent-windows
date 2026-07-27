@@ -254,31 +254,6 @@ class TestScreenshotAnnotation:
             HANDLERS["screenshot"]({"use_annotation": "false"})
         m_ann.assert_not_called()
 
-    def test_bbox_overridden_with_warning(self, tmp_path):
-        """Annotation needs the full screen; a --bbox/--selector is dropped with a
-        warning rather than misaligning the boxes on a cropped capture."""
-        from agent_windows.daemon.router import HANDLERS
-
-        with self._patch_capture() as m_cap, \
-                patch("agent_windows.core.tree.get_tree_snapshot",
-                      return_value={"interactive_elements": []}), \
-                patch("agent_windows.utils.config.load_config",
-                      return_value={}), \
-                patch("agent_windows.core.screenshot.get_virtual_screen_rect",
-                      return_value=(0, 0, 1920, 1080)), \
-                self._patch_annotate(tmp_path)[0]:
-            r = HANDLERS["screenshot"]({
-                "use_annotation": True,
-                "bbox": [0, 0, 50, 50],
-            })
-        # Annotation short-circuits the initial capture: exactly ONE capture
-        # of the full virtual screen (no double capture), bbox ignored.
-        assert m_cap.call_count == 1
-        assert m_cap.call_args.kwargs.get("bbox") == (0, 0, 1920, 1080)
-        assert "annotation requires full screen" in r["output"]
-        # Region is reported as the full virtual screen, not a primary-monitor guess.
-        assert r["region"] == [0, 0, 1920, 1080]
-
     def test_annotation_captures_full_virtual_screen(self, tmp_path):
         """Annotation must capture the WHOLE virtual screen (multi-display aware),
         not dxcam's primary-only default — boxes use virtual-desktop coords."""
@@ -350,6 +325,70 @@ class TestScreenshotAnnotation:
                 patch("agent_windows.core.screenshot.annotate_screenshot") as m_ann:
             HANDLERS["screenshot"]({})
         m_ann.assert_not_called()
+
+
+# ── annotate honors bbox/selector/monitor scope (Task 3) ────────────
+
+
+def test_screenshot_annotate_with_bbox_passes_origin(monkeypatch, tmp_path):
+    """annotate + bbox captures that bbox and passes origin=(bbox.left,bbox.top)."""
+    from agent_windows.daemon.handlers import screenshot as h
+    from PIL import Image
+
+    img = Image.new("RGB", (400, 400))
+    annotate_calls = {}
+    capture_calls = {}
+    # annotate_screenshot must return a real file path — the handler reloads it
+    # via Image.open to refresh `image` for downstream scale/region math.
+    ann_path = tmp_path / "annotated.png"
+
+    def _annotate(image, elements, grid_lines=None, origin=(0, 0), **kw):
+        annotate_calls.update(origin=origin)
+        Image.new("RGB", image.size, (1, 2, 3)).save(ann_path)
+        return ann_path
+
+    monkeypatch.setattr("agent_windows.core.screenshot.capture_screenshot",
+                        lambda monitor=-1, bbox=None: capture_calls.__setitem__("bbox", bbox) or img)
+    monkeypatch.setattr("agent_windows.core.screenshot.annotate_screenshot", _annotate)
+    monkeypatch.setattr("agent_windows.core.tree.get_tree_snapshot",
+                        lambda **kw: {"interactive_elements": []})
+    monkeypatch.setattr("agent_windows.core.screenshot.save_and_cleanup",
+                        lambda image, output_path=None: output_path or "saved.png")
+    monkeypatch.setattr("agent_windows.utils.config.load_config", lambda: {})
+
+    h._screenshot({"use_annotation": True, "bbox": [100, 100, 500, 500]})
+
+    assert capture_calls["bbox"] == (100, 100, 500, 500)   # honored, not cleared
+    assert annotate_calls["origin"] == (100, 100)           # top-left of the scope
+
+
+def test_screenshot_annotate_no_scope_uses_full_screen_origin_zero(monkeypatch, tmp_path):
+    """annotate with no scope still captures full virtual screen, origin=(0,0)."""
+    from agent_windows.daemon.handlers import screenshot as h
+    from PIL import Image
+
+    img = Image.new("RGB", (1920, 1080))
+    annotate_calls = {}
+    ann_path = tmp_path / "annotated.png"
+
+    def _annotate(image, elements, grid_lines=None, origin=(0, 0), **kw):
+        annotate_calls.update(origin=origin)
+        Image.new("RGB", image.size, (1, 2, 3)).save(ann_path)
+        return ann_path
+
+    monkeypatch.setattr("agent_windows.core.screenshot.capture_screenshot",
+                        lambda monitor=-1, bbox=None: img)
+    monkeypatch.setattr("agent_windows.core.screenshot.get_virtual_screen_rect",
+                        lambda: (0, 0, 1920, 1080))
+    monkeypatch.setattr("agent_windows.core.screenshot.annotate_screenshot", _annotate)
+    monkeypatch.setattr("agent_windows.core.tree.get_tree_snapshot",
+                        lambda **kw: {"interactive_elements": []})
+    monkeypatch.setattr("agent_windows.core.screenshot.save_and_cleanup",
+                        lambda image, output_path=None: output_path or "saved.png")
+    monkeypatch.setattr("agent_windows.utils.config.load_config", lambda: {})
+
+    h._screenshot({"use_annotation": True})
+    assert annotate_calls["origin"] == (0, 0)
 
 
 class TestPerCallScaleOverride:
