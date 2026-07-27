@@ -87,7 +87,7 @@
     { "name": "multi_edit", "description": "Type into multiple fields in one call." },
     { "name": "multi_select", "description": "Click multiple targets in one call." },
     { "name": "notify", "description": "Show a Windows toast notification." },
-    { "name": "observe", "description": "Combined observation: snapshot + screenshot (+ optional visual grounding), returned as text." },
+    { "name": "observe", "description": "Combined observation: snapshot + screenshot returned as text; use_annotation overlays a numbered @eN box per interactive element." },
     { "name": "ping", "description": "Daemon health check (single IPC round-trip)." },
     { "name": "pixel_at", "description": "Read the color at a screen point; with match, return is_match within tolerance. Deterministic, no vision-model call." },
     { "name": "process_kill", "description": "Kill a process by PID (int) or name (str)." },
