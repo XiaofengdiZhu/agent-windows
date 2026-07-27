@@ -1,4 +1,4 @@
-"""Observe handler: combined snapshot + screenshot + grounding."""
+"""Observe handler: combined snapshot + screenshot (always both)."""
 
 import dataclasses
 from typing import Any
@@ -39,38 +39,28 @@ def _run_sub(method: str, params: dict) -> tuple[str, dict | None]:
 
 @handler("observe")
 def _observe(params: dict) -> dict[str, Any]:
-    """Combined observation: snapshot + screenshot + grounding.
+    """Combined observation: snapshot + screenshot (always both).
 
-    Each sub-command runs through route_request so a failure in one (e.g. a
-    grounding API error) surfaces its specific JSON-RPC code inline rather than
-    collapsing the whole observe into DAEMON_INTERNAL_ERROR. (ARCH3-01)
+    The bundle is observe's reason to exist — for a single piece call
+    ``snapshot``/``screenshot`` directly. Each sub-command runs through
+    route_request so a failure surfaces its specific JSON-RPC code inline
+    rather than collapsing into DAEMON_INTERNAL_ERROR. (ARCH3-01)
 
-    Failure reporting (F3, round 2): the result carries a structured ``errors``
-    list of ``{"method", "code", "message"}`` for every sub-command that failed,
-    so a programmatic caller can detect partial/total failure without grepping
-    ``output``. A *partial* failure (some sub-commands succeeded) still returns
-    200-OK with ``output`` + ``errors`` — the useful parts remain actionable.
-    But if *every* requested sub-command failed, observe raises (→
-    DAEMON_INTERNAL_ERROR) rather than returning 200-OK, since there is no
-    useful output and a success response would mislead callers that branch on
-    the JSON-RPC error code / a structured field.
+    Optional ``use_annotation`` (width/height_reference_line) is forwarded to
+    the screenshot sub-call so observe can return a numbered-box image (@eN)
+    alongside the snapshot's table — one call yields "image + text index".
+
+    Failure reporting: the result carries a structured ``errors`` list of
+    ``{"method", "code", "message"}`` for every sub-command that failed, so a
+    programmatic caller can detect partial/total failure. A *partial* failure
+    still returns 200-OK with ``output`` + ``errors``; if *both* sub-commands
+    failed, observe raises (→ DAEMON_INTERNAL_ERROR) — no useful output.
     """
     parts: list[str] = []
     errors: list[dict] = []
-    requested = 0  # how many sub-commands were asked for (for the all-failed check)
 
-    want_snapshot = params.get("snapshot", False)
-    want_screenshot = params.get("screenshot", False)
-    ground_desc = params.get("ground", "")
-
-    if not want_snapshot and not want_screenshot and not ground_desc:
-        want_snapshot = True
-        want_screenshot = True
-
-    # Optional multi-display filter (TODO #9-B): forward to the snapshot sub-
-    # call (which clips windows/elements/cursor) and crop the screenshot to the
-    # selected displays' union bbox. parse_display_selection raises ValueError
-    # on a bad selection (→ INVALID_PARAMS). No display param → no filtering.
+    # Optional multi-display filter: forward to snapshot (clips windows/
+    # elements/cursor) and crop the screenshot to the union bbox. (TODO #9-B)
     from agent_windows.core.display import (
         parse_display_selection, get_display_union_bbox,
     )
@@ -84,46 +74,32 @@ def _observe(params: dict) -> dict[str, Any]:
             union.left, union.top, union.right, union.bottom
         ]
 
-    def _append(method: str, sub_params: dict, *, sep: bool = True) -> None:
-        nonlocal requested
-        requested += 1
+    # Optional annotation → forward to the screenshot sub-call.
+    raw_annotate = params.get("use_annotation")
+    if raw_annotate is True or (
+        isinstance(raw_annotate, str) and raw_annotate.lower() == "true"
+    ):
+        screenshot_params["use_annotation"] = True
+        wgrid = int(params.get("width_reference_line", 0) or 0)
+        hgrid = int(params.get("height_reference_line", 0) or 0)
+        if wgrid > 0:
+            screenshot_params["width_reference_line"] = wgrid
+        if hgrid > 0:
+            screenshot_params["height_reference_line"] = hgrid
+
+    def _append(method: str, sub_params: dict) -> None:
         text, error = _run_sub(method, sub_params)
-        if sep and parts:
+        if parts:
             parts.append("---\n")
         parts.append(text)
         if error is not None:
             errors.append(error)
 
-    if want_snapshot:
-        _append("snapshot", snapshot_params)
+    _append("snapshot", snapshot_params)
+    _append("screenshot", screenshot_params)
 
-    if want_screenshot:
-        _append("screenshot", screenshot_params)
-
-    if ground_desc:
-        # NOTE: ground operates on the FULL desktop (ground_element has no bbox
-        # scope yet), so its coordinates may fall outside the selected display(s)
-        # when `display` is set. Surface that inline so the agent doesn't trust
-        # a grounding hit that's off the scoped screenshot/snapshot. (B-2)
-        if display is not None:
-            # Mirror the old layout exactly: a "---\n" between the preceding
-            # parts and the note (when parts is non-empty), then the note (which
-            # itself ends in "---\n"), then the ground text with NO extra sep.
-            if parts:
-                parts.append("---\n")
-            parts.append(
-                "[grounding performed against the full desktop; display filter "
-                "applies only to snapshot/screenshot above]\n---\n"
-            )
-            _append("ground", {"description": ground_desc}, sep=False)
-        else:
-            _append("ground", {"description": ground_desc})
-
-    # Every requested sub-command failed → no useful output. Raise rather than
-    # return 200-OK so programmatic callers see a JSON-RPC error. The full
-    # per-sub breakdown is embedded for diagnostics. (A single-sub observe
-    # just reports that one failure.)
-    if requested > 0 and len(errors) == requested:
+    # Both sub-commands failed → no useful output → raise (don't return 200-OK).
+    if len(errors) == 2:
         detail = "; ".join(f"{e['method']}: {e['message']}" for e in errors)
         raise RuntimeError(f"observe failed — every sub-command failed ({detail})")
 

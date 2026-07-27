@@ -16,7 +16,6 @@ import pytest
 from PIL import Image
 
 from agent_windows.daemon.router import HANDLERS
-from agent_windows.ipc.protocol import INVALID_PARAMS
 
 
 def _fake_image(w=100, h=80):
@@ -445,7 +444,8 @@ class TestCleanupHandler:
 
 class TestObserveHandler:
     def test_defaults_to_snapshot_and_screenshot(self):
-        """No flags → both snapshot + screenshot run."""
+        """No flags → both snapshot + screenshot run (observe is always a
+        bundle now; the snapshot/screenshot/ground toggles are gone)."""
         with patch.dict(HANDLERS, {
             "snapshot": MagicMock(return_value={"output": "SNAP"}),
             "screenshot": MagicMock(return_value={"output": "SHOT"}),
@@ -455,109 +455,17 @@ class TestObserveHandler:
         assert "SHOT" in r["output"]
         assert "---" in r["output"]  # separator between the two
 
-    def test_snapshot_only(self):
-        with patch.dict(HANDLERS, {"snapshot": MagicMock(return_value={"output": "SNAP"})}):
-            r = HANDLERS["observe"]({"snapshot": True})
-        assert r["output"] == "SNAP"
-
-    def test_screenshot_only(self):
-        with patch.dict(HANDLERS, {"screenshot": MagicMock(return_value={"output": "SHOT"})}):
-            r = HANDLERS["observe"]({"screenshot": True})
-        assert r["output"] == "SHOT"
-
-    def test_separator_only_between_parts(self):
-        """No leading/trailing '---' when a single part is requested."""
-        with patch.dict(HANDLERS, {"snapshot": MagicMock(return_value={"output": "ONLY"})}):
-            r = HANDLERS["observe"]({"snapshot": True})
-        assert not r["output"].startswith("---")
-
-    def test_ground_registered_appends(self):
-        ground_mock = MagicMock(return_value={"output": "G"})
-        with patch.dict(HANDLERS, {
-            "snapshot": MagicMock(return_value={"output": "S"}),
-            "screenshot": MagicMock(return_value={"output": "T"}),
-            "ground": ground_mock,
-        }):
-            r = HANDLERS["observe"]({"ground": "the button"})
-        assert "G" in r["output"]
-        ground_mock.assert_called_once_with({"description": "the button"})
-
-    def test_ground_only(self):
-        with patch.dict(HANDLERS, {"ground": MagicMock(return_value={"output": "G"})}):
-            r = HANDLERS["observe"]({"ground": "x"})
-        assert r["output"] == "G"
-
-    def test_ground_separator_positioning(self):
-        """ground is the 2nd+ part → preceded by '---'."""
-        with patch.dict(HANDLERS, {
-            "snapshot": MagicMock(return_value={"output": "S"}),
-            "ground": MagicMock(return_value={"output": "G"}),
-        }):
-            r = HANDLERS["observe"]({"snapshot": True, "ground": "x"})
-        # S, then separator, then G
-        assert r["output"].index("S") < r["output"].index("---") < r["output"].index("G")
-
-    def test_sub_command_error_surfaces_inline_not_internal_error(self):
-        """ARCH3-01: a failing sub-command surfaces its message inline rather
-        than collapsing the whole observe into DAEMON_INTERNAL_ERROR. observe
-        runs each sub-command via route_request, so a ValueError in a handler
-        maps to INVALID_PARAMS and is reported inline (not raised)."""
-        # ground raises ValueError ("description is required") → INVALID_PARAMS
-        def ground_boom(_params):
-            raise ValueError("grounding API key missing")
-
-        with patch.dict(HANDLERS, {
-            "snapshot": MagicMock(return_value={"output": "SNAP"}),
-            "ground": ground_boom,
-        }):
-            r = HANDLERS["observe"]({"snapshot": True, "ground": "x"})
-        # The snapshot still appears; the ground failure is noted inline.
-        assert "SNAP" in r["output"]
-        assert "ground failed" in r["output"]
-        assert "grounding API key missing" in r["output"]
-
     def test_all_sub_commands_failing_raises(self):
         """F3 (round 2): if EVERY requested sub-command fails, observe raises
         (→ DAEMON_INTERNAL_ERROR via the router) rather than returning 200-OK.
-        A success response with only inline failure notes would mislead callers
-        that branch on the JSON-RPC error code / a structured field."""
+        observe always runs exactly snapshot+screenshot now, so both failing
+        is the all-failed case."""
         with patch.dict(HANDLERS, {
             "snapshot": MagicMock(side_effect=ValueError("no UIA")),
             "screenshot": MagicMock(side_effect=RuntimeError("no backend")),
         }):
             with pytest.raises(RuntimeError, match="every sub-command failed"):
                 HANDLERS["observe"]({})
-
-    def test_single_sub_command_failing_raises(self):
-        """A single requested sub-command that fails is the all-failed case too
-        — observe raises rather than return an empty 200-OK."""
-        with patch.dict(HANDLERS, {
-            "snapshot": MagicMock(side_effect=RuntimeError("no UIA")),
-        }):
-            with pytest.raises(RuntimeError, match="every sub-command failed"):
-                HANDLERS["observe"]({"snapshot": True})
-
-    def test_partial_failure_returns_output_and_structured_errors(self):
-        """F3 (round 2): a PARTIAL failure returns 200-OK with both the useful
-        ``output`` AND a structured ``errors`` list of {method, code, message},
-        so a programmatic caller can detect the failure without grepping output."""
-        def ground_boom(_params):
-            raise ValueError("grounding API key missing")
-
-        with patch.dict(HANDLERS, {
-            "snapshot": MagicMock(return_value={"output": "SNAP"}),
-            "ground": ground_boom,
-        }):
-            r = HANDLERS["observe"]({"snapshot": True, "ground": "x"})
-        # Output still carries the useful part + inline note.
-        assert "SNAP" in r["output"]
-        # Structured errors field present, describing the ground failure.
-        assert "errors" in r
-        assert len(r["errors"]) == 1
-        err = r["errors"][0]
-        assert err["method"] == "ground"
-        assert err["code"] == INVALID_PARAMS  # ValueError → -32602
-        assert "grounding API key missing" in err["message"]
 
     def test_all_success_has_no_errors_field(self):
         """When nothing failed, the result omits the errors field entirely
