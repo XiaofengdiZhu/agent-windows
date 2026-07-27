@@ -17,7 +17,12 @@ MAX_PROMPT_LEN = 8000
 
 @handler("ground")
 def _ground(params: dict) -> dict[str, Any]:
-    """Visual grounding: locate element coordinates."""
+    """Visual grounding: locate element coordinates.
+
+    ``screenshot`` gates the marked screenshot: absent → no save (coords only);
+    ``true`` → save to the default dir; a path string → save there. Mirrors the
+    CLI ``--screenshot [PATH]`` surface; MCP always passes a value (agent UX).
+    """
     from agent_windows.core.grounding import ground_element
 
     description = params.get("description", "")
@@ -28,21 +33,40 @@ def _ground(params: dict) -> dict[str, Any]:
             f"description length {len(description)} exceeds the "
             f"{MAX_DESC_LEN}-character maximum")
 
-    result = ground_element(description, single_pass=params.get("single_pass"))
+    raw_shot = params.get("screenshot")
+    if raw_shot is None:
+        mark, out_path = False, None
+    elif raw_shot is True or (isinstance(raw_shot, str) and raw_shot == ""):
+        mark, out_path = True, None
+    elif isinstance(raw_shot, str):
+        mark, out_path = True, raw_shot
+    else:
+        raise ValueError("screenshot must be true or a path string")
+
+    result = ground_element(
+        description,
+        single_pass=params.get("single_pass"),
+        mark_screenshot=mark,
+        output_path=out_path,
+    )
+    shot_path = result.get("screenshot_path", "")
+
+    lines = [
+        "## Grounding Result",
+        f'Target: "{description}"',
+        f"Coordinate: ({result['x']}, {result['y']})",
+        f"Confidence: {result['confidence']}",
+        f"Method: {result['method']}",
+    ]
+    if shot_path:
+        lines.append(f"Screenshot: {shot_path} (marked)")
     return {
-        "output": (
-            f"## Grounding Result\n"
-            f"Target: \"{description}\"\n"
-            f"Coordinate: ({result['x']}, {result['y']})\n"
-            f"Confidence: {result['confidence']}\n"
-            f"Method: {result['method']}\n"
-            f"Screenshot: {result['screenshot_path']} (marked)"
-        ),
+        "output": "\n".join(lines),
         "x": result["x"],
         "y": result["y"],
         "confidence": result["confidence"],
         "method": result["method"],
-        "screenshot_path": result["screenshot_path"],
+        "screenshot_path": shot_path,
     }
 
 

@@ -135,3 +135,39 @@ class TestVisionInputLengthCap:
                 {"prompt": "x" * vision.MAX_PROMPT_LEN})
         mock_ask.assert_called_once()
 
+
+# ── Three-state ``screenshot`` param on the ``ground`` handler ──────────
+
+
+def test_ground_handler_screenshot_three_states(monkeypatch):
+    from agent_windows.daemon.handlers import vision as v
+
+    calls = {}
+
+    def fake_ground(description, screenshot=None, single_pass=None,
+                    mark_screenshot=False, output_path=None):
+        calls.update(mark=mark_screenshot, out=output_path)
+        return {"x": 1, "y": 2, "confidence": "high", "method": "visual",
+                "screenshot_path": "p.png" if mark_screenshot else ""}
+
+    monkeypatch.setattr("agent_windows.core.grounding.ground_element", fake_ground)
+
+    # absent → no mark
+    r0 = v._ground({"description": "x"})
+    assert calls == {"mark": False, "out": None}
+    assert "Screenshot:" not in r0["output"]
+    assert r0["screenshot_path"] == ""
+
+    # True → default path
+    r1 = v._ground({"description": "x", "screenshot": True})
+    assert calls == {"mark": True, "out": None}
+    assert "Screenshot: p.png (marked)" in r1["output"]
+
+    # <str> → that path
+    r2 = v._ground({"description": "x", "screenshot": "/tmp/a.png"})
+    assert calls == {"mark": True, "out": "/tmp/a.png"}
+
+    # "" normalizes to True (default path) — MCP clients may send "".
+    r3 = v._ground({"description": "x", "screenshot": ""})
+    assert calls == {"mark": True, "out": None}
+
