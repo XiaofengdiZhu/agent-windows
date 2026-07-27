@@ -193,3 +193,53 @@ class TestSinglePassGrounding:
             result = ground_element("a button", screenshot=Image.new("RGB", (1920, 1080)))
         assert mock_call.call_count == 1
         assert result["method"] == "visual-single-pass"
+
+
+def test_ground_element_mark_gate(monkeypatch):
+    """mark_screenshot=False (default) skips the save; True saves; output_path overrides path.
+
+    Two minimal deviations from the task brief, required for the test to verify
+    REAL behavior on Windows (the brief's environment):
+    - Image is 1000x1000, not 100x100: model space defaults to 1000x1000, so a
+      1000x1000 source maps 1:1 and the verbatim coordinate assertion (50,50)
+      holds. With a 100x100 source the model's (50,50) scales to physical (5,5).
+    - ``validate_write_path`` is patched as a passthrough: on Windows the real
+      validator resolves ``/tmp/x.png`` to ``D:\\tmp\\x.png`` (different string),
+      which would break the verbatim path assertion. The validator's own behavior
+      is covered in tests/test_filesystem.py; this test exercises the save gate.
+    """
+    from agent_windows.core import grounding as g
+    from PIL import Image
+
+    save_calls = []
+    monkeypatch.setattr(
+        g, "_save_marked_screenshot",
+        lambda image, x, y, description, output_path=None:
+            save_calls.append((output_path, x, y)) or (output_path or "default.png"),
+    )
+    monkeypatch.setattr(g, "call_vision_model", lambda *a, **k: "POINT:50,50")
+    monkeypatch.setattr(g, "load_config", lambda: {"vlm": {"enabled": True}})
+    # validate_write_path is imported lazily from agent_windows.core.filesystem
+    # inside ground_element; patch it on its source module so the from-import
+    # picks up the passthrough.
+    monkeypatch.setattr(
+        "agent_windows.core.filesystem.validate_write_path", lambda p: p,
+    )
+    img = Image.new("RGB", (1000, 1000))
+
+    # Default: no mark → no save call, empty path.
+    r1 = g.ground_element("x", screenshot=img)
+    assert save_calls == []
+    assert r1["screenshot_path"] == ""
+    assert r1["x"] == 50 and r1["y"] == 50
+
+    # mark=True → default path.
+    r2 = g.ground_element("x", screenshot=img, mark_screenshot=True)
+    assert len(save_calls) == 1
+    assert save_calls[0][0] is None
+    assert r2["screenshot_path"] == "default.png"
+
+    # mark=True + output_path → that path.
+    r3 = g.ground_element("x", screenshot=img, mark_screenshot=True, output_path="/tmp/x.png")
+    assert save_calls[-1][0] == "/tmp/x.png"
+    assert r3["screenshot_path"] == "/tmp/x.png"

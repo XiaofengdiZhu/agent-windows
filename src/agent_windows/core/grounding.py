@@ -52,6 +52,8 @@ def ground_element(
     description: str,
     screenshot: Image.Image | None = None,
     single_pass: bool | None = None,
+    mark_screenshot: bool = False,
+    output_path: str | None = None,
 ) -> dict[str, Any]:
     """Locate an element by visual description using two-pass grounding.
 
@@ -62,6 +64,11 @@ def ground_element(
             of two (~2x faster, ~half the cost) at the cost of click precision.
             When ``None`` (default), reads ``vlm.single_pass`` from config;
             an explicit ``True``/``False`` overrides the config for this call. (H-07)
+        mark_screenshot: If True, save a crosshair-marked screenshot and return
+            its path in ``screenshot_path``. False (default) skips the save —
+            the caller only gets coordinates, no disk write.
+        output_path: With mark_screenshot=True, save to this path (validated
+            against the filesystem blacklist). None → default screenshot dir.
 
     Returns:
         Dict with: coordinate (x,y), confidence, method, screenshot_path.
@@ -71,6 +78,13 @@ def ground_element(
 
     if not ground_config.get("enabled", True):
         raise RuntimeError("Visual grounding is disabled in config")
+
+    # L-06: validate a user-supplied output path before any image work or the
+    # vision API call, so a marked screenshot can't be dropped into the install
+    # tree — and a bad path fails fast instead of after a paid call.
+    if output_path:
+        from agent_windows.core.filesystem import validate_write_path
+        output_path = str(validate_write_path(output_path))
 
     # Capture screenshot if not provided
     if screenshot is None:
@@ -172,15 +186,21 @@ def ground_element(
 
     logger.info("Final coordinate: (%d, %d) [%s, %s]", final_x, final_y, confidence, method)
 
-    # Save marked screenshot
-    marked_path = _save_marked_screenshot(screenshot, final_x, final_y, description)
+    # Save marked screenshot only when requested (mark_screenshot gate).
+    if mark_screenshot:
+        marked_path = _save_marked_screenshot(
+            screenshot, final_x, final_y, description, output_path=output_path,
+        )
+        screenshot_path = str(marked_path)
+    else:
+        screenshot_path = ""
 
     return {
         "x": final_x,
         "y": final_y,
         "confidence": confidence,
         "method": method,
-        "screenshot_path": str(marked_path),
+        "screenshot_path": screenshot_path,
     }
 
 
@@ -189,8 +209,14 @@ def _save_marked_screenshot(
     x: int,
     y: int,
     description: str,
+    output_path: str | None = None,
 ) -> Path:
-    """Save a copy of the screenshot with a crosshair marker at the coordinate."""
+    """Save a copy of the screenshot with a crosshair marker at the coordinate.
+
+    Args:
+        output_path: Save to this path. If None, auto-generates under the
+            screenshot dir. (Caller has already blacklist-validated it.)
+    """
     from PIL import ImageDraw
 
     marked = image.copy()
@@ -202,9 +228,12 @@ def _save_marked_screenshot(
     draw.line([(x, y - size), (x, y + size)], fill="red", width=2)
     draw.ellipse([(x - 4, y - 4), (x + 4, y + 4)], outline="red", width=2)
 
-    save_dir = get_screenshot_save_dir()
-    timestamp = int(time.time() * 1000)
-    path = save_dir / f"grounding-{timestamp}.png"
+    if output_path:
+        path = Path(output_path)
+    else:
+        save_dir = get_screenshot_save_dir()
+        timestamp = int(time.time() * 1000)
+        path = save_dir / f"grounding-{timestamp}.png"
 
     return save_and_cleanup(marked, output_path=str(path))
 
