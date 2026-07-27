@@ -12,12 +12,25 @@ from agent_windows.mcp._call import _call, _as_bool
 from agent_windows.mcp.tools.observation import _image_from_result
 
 
-def ground_fn(description: str, single_pass: bool | str = False) -> list:
-    """Locate an element by natural-language description; returns coords + marked image."""
+def ground_fn(
+    description: str,
+    single_pass: bool | str = False,
+    output: str | None = None,
+) -> list:
+    """Locate an element by natural-language description; returns coords + marked image.
+
+    MCP always marks the screenshot (agent sees the grounding landing point).
+    ``output`` overrides the save path (default dir when None). On failure the
+    daemon returns no screenshot_path and this falls back to text-only.
+    """
     if not description:
         raise ValueError("description is required")
+    # Map to the daemon's three-state `screenshot` param: always mark; output
+    # → custom path, else True (default dir).
+    screenshot: bool | str = True if output is None else output
     result = _call("ground", description=description,
-                   single_pass=_as_bool(single_pass) or None)
+                   single_pass=_as_bool(single_pass) or None,
+                   screenshot=screenshot)
     return _image_from_result(result, "screenshot_path")
 
 
@@ -56,11 +69,13 @@ def register(mcp) -> None:
         "Keywords: ground, find element, locate, where is, click point, visual "
         "search. Uses the configured vision model (vlm.* in config.toml). "
         "Set single_pass=True for one API call (~2x faster, lower precision). "
-        "Precision is ~±100px; prefer snapshot for named controls."
+        "Precision is ~±100px; prefer snapshot for named controls. "
+        "output=<path> saves the marked screenshot there (default dir otherwise)."
     ), annotations=ToolAnnotations(title="Ground", readOnlyHint=True,
                                    idempotentHint=False, openWorldHint=False))
-    def _ground(description: str, single_pass: bool | str = False) -> list:
-        return ground_fn(description=description, single_pass=single_pass)
+    def _ground(description: str, single_pass: bool | str = False,
+                output: str | None = None) -> list:
+        return ground_fn(description=description, single_pass=single_pass, output=output)
 
     @mcp.tool(name="detect", description=(
         "Detect multiple targets matching a description and return a bounding "

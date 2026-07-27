@@ -190,25 +190,29 @@ def snapshot_diff_fn(
 
 
 def observe_fn(
-    snapshot: bool = False,
-    screenshot: bool = False,
-    ground: str = "",
     display: list[int] | None = None,
+    use_annotation: bool | str | None = None,
+    width_reference_line: int | None = None,
+    height_reference_line: int | None = None,
 ) -> str:
-    """Combined snapshot + screenshot (+ optional grounding). Defaults to both
-    snapshot and screenshot when none are requested.
+    """Combined snapshot + screenshot, returned as text. Add use_annotation=True
+    for a numbered @eN-box image alongside the snapshot's table.
 
-    Returns the combined text (the daemon's observe handler concatenates the
-    sub-results into ``output``). The screenshot is saved to disk by the
-    daemon and its path is embedded in the text; to get the image *rendered*
-    by the client, call ``screenshot`` directly (its result carries the path
-    as a structured field we can attach as an Image)."""
-    if not snapshot and not screenshot and not ground:
-        snapshot = True
-        screenshot = True
+    For a client-rendered image, call ``screenshot`` directly (this tool's
+    screenshot path is embedded in text). On failure returns a retryable error
+    string instead of raising. (TODO #12)
+    """
+    params: dict[str, Any] = {}
+    if display is not None:
+        params["display"] = display
+    if use_annotation is not None:
+        params["use_annotation"] = use_annotation
+        if width_reference_line:
+            params["width_reference_line"] = width_reference_line
+        if height_reference_line:
+            params["height_reference_line"] = height_reference_line
     try:
-        result = _call("observe", snapshot=snapshot, screenshot=screenshot,
-                       ground=ground, display=display)
+        result = _call("observe", **params)
         return str(result.get("output", ""))
     except (RuntimeError, OSError) as e:
         logger.warning("observe tool failed", exc_info=True)
@@ -385,19 +389,29 @@ def register(mcp) -> None:
                                 display=display)
 
     @mcp.tool(name="observe", description=(
-        "Combined observation: snapshot + screenshot (+ optional visual "
-        "grounding), returned as text. With no flags, returns both the UIA "
-        "tree and a screenshot description. "
+        "Combined observation: snapshot + screenshot, returned as text. "
         "Keywords: observe, look at screen, inspect desktop, snapshot, screenshot, "
-        "understand UI. Pass ground='the taskbar' to also locate an element by "
-        "description. For a client-rendered image, call `screenshot` directly "
-        "(this tool's screenshot path is embedded in text)."
+        "understand UI. Set use_annotation=True to overlay a numbered @eN box on "
+        "each interactive element (mirrors screenshot's annotation). "
+        "display=[0] (or [0,1] multi-display union) scopes both. For a client-"
+        "rendered image, call `screenshot` directly."
     ), annotations=ToolAnnotations(title="Observe", readOnlyHint=True,
                                    idempotentHint=True, openWorldHint=False))
-    def _observe(snapshot: bool = False, screenshot: bool = False,
-                 ground: str = "", display: list[int] | None = None) -> str:
-        return observe_fn(snapshot=snapshot, screenshot=screenshot,
-                          ground=ground, display=display)
+    def _observe(display: list[int] | None = None,
+                 use_annotation: Annotated[bool | str | None, Field(
+                     description="Overlay a numbered @eN box per interactive element (matching snapshot refs).",
+                 )] = None,
+                 width_reference_line: Annotated[int | None, Field(
+                     description="With use_annotation: draw this many vertical reference lines. 0 = none.",
+                     ge=0,
+                 )] = None,
+                 height_reference_line: Annotated[int | None, Field(
+                     description="With use_annotation: draw this many horizontal reference lines. 0 = none.",
+                     ge=0,
+                 )] = None) -> str:
+        return observe_fn(display=display, use_annotation=use_annotation,
+                          width_reference_line=width_reference_line,
+                          height_reference_line=height_reference_line)
 
     @mcp.tool(name="get_text", description=(
         "Return the text/name of a UIA element identified by its @eN selector "

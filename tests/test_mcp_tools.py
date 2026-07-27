@@ -227,12 +227,34 @@ def test_snapshot_diff_fn_returns_retryable_text_on_failure():
     assert "UIA failed" in out
 
 
-def test_observe_fn_defaults_to_snapshot_plus_screenshot():
+def test_observe_fn_defaults_to_no_flags_daemon_always_runs_both():
+    """Task 8: observe_fn no longer carries snapshot/screenshot/ground flags —
+    the daemon always runs both (Task 5 slimmed the handler). Calling with no
+    args forwards an empty param set; the bundle is observe's reason to exist."""
     with patch.object(obs, "_call", return_value={"output": "x"}) as m:
         out = obs.observe_fn()
-    sent = m.call_args.kwargs
-    assert sent["snapshot"] is True and sent["screenshot"] is True
+    m.assert_called_once_with("observe")
     assert out == "x"
+
+
+def test_observe_fn_forwards_annotation_params():
+    """use_annotation + grid params forward to _call; display passes through.
+    Task 8 mirrors screenshot's annotation surface. Grid params only ride along
+    when use_annotation is set (matches daemon observe handler)."""
+    with patch.object(obs, "_call", return_value={"output": "x"}) as m:
+        obs.observe_fn(display=[0], use_annotation=True,
+                       width_reference_line=4, height_reference_line=3)
+    m.assert_called_once_with("observe", display=[0], use_annotation=True,
+                              width_reference_line=4, height_reference_line=3)
+
+
+def test_observe_fn_drops_grid_params_without_use_annotation():
+    """width/height_reference_line are only forwarded when use_annotation is
+    truthy — passing them alone (no use_annotation) drops them, mirroring the
+    daemon handler's gate."""
+    with patch.object(obs, "_call", return_value={"output": "x"}) as m:
+        obs.observe_fn(width_reference_line=4)
+    m.assert_called_once_with("observe")
 
 
 # ── error resilience (TODO #12): failures return retryable text, not raise ──
@@ -296,6 +318,29 @@ def test_ground_fn_forwards_single_pass_as_bool():
     sent = m.call_args.kwargs
     assert sent["single_pass"] is True
     assert sent["description"] == "taskbar"
+
+
+def test_ground_fn_default_marks_screenshot_true():
+    """Task 8: MCP ground always marks — output=None maps to daemon screenshot=True
+    (default save dir). CLI/MCP asymmetry is intentional (CLI defaults terse)."""
+    with patch.object(vis, "_call",
+                      return_value={"output": "g", "screenshot_path": "p"}) as m, \
+         patch("pathlib.Path.read_bytes", return_value=_PNG):
+        vis.ground_fn(description="taskbar")
+    sent = m.call_args.kwargs
+    assert sent["screenshot"] is True
+
+
+def test_ground_fn_output_string_maps_to_screenshot_path():
+    """output=<path> maps to daemon screenshot=<path> (custom save location).
+    The three-state contract (None=no save, True=default dir, str=path) lives
+    in the daemon handler; MCP always supplies a value here."""
+    with patch.object(vis, "_call",
+                      return_value={"output": "g", "screenshot_path": "p"}) as m, \
+         patch("pathlib.Path.read_bytes", return_value=_PNG):
+        vis.ground_fn(description="taskbar", output="C:\\marked.png")
+    sent = m.call_args.kwargs
+    assert sent["screenshot"] == "C:\\marked.png"
 
 
 def test_detect_fn_forwards_max_targets_and_image_path():
