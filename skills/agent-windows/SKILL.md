@@ -70,16 +70,15 @@ agent-windows shortcut ctrl+s
 
 Three observation tools, each suited to different needs:
 
-### observe — Combined (default: snapshot + screenshot)
+### observe — Combined (snapshot + screenshot)
 
 ```bash
-agent-windows observe                    # snapshot + screenshot
-agent-windows observe --snapshot         # snapshot only
-agent-windows observe --screenshot       # screenshot only
-agent-windows observe --ground "Submit"  # snapshot + screenshot + visual grounding
+agent-windows observe                    # snapshot + screenshot (always both)
+agent-windows observe --annotate         # + numbered @eN boxes on the screenshot
+agent-windows observe -d 0               # scope both to display 0
 ```
 
-Output includes: Desktop State (cursor, resolution), Windows table, Accessibility Tree, Interactive Elements table.
+Output includes: Desktop State (cursor, resolution), Windows table, Accessibility Tree, Interactive Elements table. For an individual piece use `snapshot`/`screenshot` directly; for visual grounding use `ground`.
 
 ### snapshot — UIA Tree Only
 
@@ -112,11 +111,11 @@ agent-windows screenshot                 # Full screen
 agent-windows screenshot -s @e3          # Crop to UIA element
 agent-windows screenshot --bbox 100,200,500,400  # Crop to region
 agent-windows screenshot -o shot.png     # Save to file
-agent-windows screenshot --annotate      # Overlay numbered @eN boxes on full screen
+agent-windows screenshot --annotate      # Overlay numbered @eN boxes (full screen by default)
 agent-windows screenshot --annotate --grid-w 4 --grid-h 4  # Annotated + % reference grid
 ```
 
-> `--annotate` re-captures the **full screen** (all displays) and draws a numbered box per interactive element from a fresh snapshot, so the `@eN` labels line up with the current `snapshot`/`observe` table. `--bbox`/`-s`/`--monitor` are ignored (warned) when annotating. Use `--grid-w N`/`--grid-h N` to draw `N` evenly-spaced reference lines with `X%`/`Y%` labels to sanity-check coordinates.
+> `--annotate` draws a numbered box per interactive element from a fresh snapshot, so the `@eN` labels line up with the current `snapshot`/`observe` table. With no scope it captures the **full virtual screen** (all displays); pass `--bbox`/`-s`/`--monitor` to annotate just that region (boxes translate into the scoped capture). Use `--grid-w N`/`--grid-h N` to draw `N` evenly-spaced reference lines with `X%`/`Y%` labels to sanity-check coordinates.
 
 ### Decision Matrix
 

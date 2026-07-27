@@ -95,11 +95,11 @@ Full flags and examples live in the [Command Reference](skills/agent-windows/ref
 ### Observation
 | Command | Description |
 |---------|-------------|
-| `observe` | Combined observation (snapshot + screenshot + optional grounding) |
+| `observe` | Combined observation (snapshot + screenshot; `--annotate` overlays `@eN` boxes) |
 | `snapshot` | UIA accessibility tree; `--window`/`--active` scope to one window |
 | `list-displays` | List displays (index, primary, resolution, rect, work area, device) for `-d N` |
 | `screenshot` | Screen capture; crop, annotate `@eN` boxes, overlay grid |
-| `ground` | Visual coordinate grounding (`--single-pass`: 1 API call, faster, lower precision) |
+| `ground` | Visual coordinate grounding (`--screenshot [PATH]` marks the hit; `--single-pass`: faster, lower precision) |
 | `detect` | Multi-target bounding box detection |
 | `find-image` | Locate a saved template image on screen — deterministic, no vision model |
 | `pixel-at` | Read the color at a screen point; `--match` judges state by color — deterministic |

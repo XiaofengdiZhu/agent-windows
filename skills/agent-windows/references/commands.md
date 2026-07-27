@@ -12,21 +12,20 @@ For conceptual guidance (when to use which command, interaction priorities, work
 
 ### observe
 
-Combined observation: snapshot + screenshot + optional visual grounding.
+Combined observation: snapshot + screenshot (always both — the bundle). For individual control use `snapshot`/`screenshot`; for visual grounding use `ground`.
 
 ```bash
-agent-windows observe [--snapshot] [--screenshot] [--ground DESC]
-agent-windows observe -d 0                  # scope everything to display 0
+agent-windows observe                          # snapshot + screenshot
+agent-windows observe --annotate               # + numbered @eN boxes on the screenshot
+agent-windows observe -d 0                     # scope both to display 0
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `--snapshot` | bool | `false` | Include UIA tree snapshot |
-| `--screenshot` | bool | `false` | Include screenshot |
-| `--ground` | str | `""` | Visual grounding with element description |
+| `--annotate` | bool | `false` | Overlay numbered `@eN` boxes on the screenshot (mirrors `screenshot --annotate`) |
+| `--grid-w` | int | `0` | With `--annotate`: draw N vertical reference lines (X% labels) |
+| `--grid-h` | int | `0` | With `--annotate`: draw N horizontal reference lines (Y% labels) |
 | `--display` / `-d` | list[int] | `[]` | Limit snapshot data to the given display index(es), repeatable; the screenshot is cropped to the selected displays' union. Omit for the full desktop. |
-
-When no flags are given, defaults to `--snapshot --screenshot`.
 
 `--display` scopes the snapshot (windows/elements/cursor, see `snapshot`) and crops the screenshot to the union of the selected display(s).
 
@@ -95,13 +94,13 @@ agent-windows screenshot --annotate --grid-w 3 --grid-h 3   # + 3×3 reference g
 | `--monitor` | int | `-1` | Monitor index (-1 = all monitors) |
 | `--selector` / `-s` | str | `""` | UIA element ref (e.g. `@e3`) |
 | `--bbox` | str | `""` | Crop region: `x1,y1,x2,y2` |
-| `--annotate` | bool | `false` | Overlay numbered `@eN` detection boxes for each interactive element (requires full screen; ignores `--bbox`/`--selector`/`--monitor`) |
+| `--annotate` | bool | `false` | Overlay numbered `@eN` detection boxes for each interactive element; honors `--bbox`/`--selector`/`--monitor` (boxes translate into the scoped capture) |
 | `--grid-w` | int | `0` | With `--annotate`: draw N vertical reference lines with X% edge labels |
 | `--grid-h` | int | `0` | With `--annotate`: draw N horizontal reference lines with Y% edge labels |
 
 `--selector` resolves the element's bounding box and crops to it. `--bbox` specifies pixel coordinates directly. If both given, `--selector` takes priority.
 
-`--annotate` draws a numbered box around each interactive element matching the snapshot's `@eN` refs, so you can visually map a ref to its on-screen location. Add `--grid-w`/`--grid-h` to overlay a reference lattice with percentage labels at each line — useful for estimating coordinates when reasoning about element positions. **`--grid-w`/`--grid-h` only take effect with `--annotate` — they are ignored (silently) otherwise.** Annotation requires the full-screen capture (boxes use screen coordinates), so a `--bbox`/`--selector`/`--monitor` is dropped with a warning when `--annotate` is set.
+`--annotate` draws a numbered box around each interactive element matching the snapshot's `@eN` refs, so you can visually map a ref to its on-screen location. Add `--grid-w`/`--grid-h` to overlay a reference lattice with percentage labels at each line — useful for estimating coordinates when reasoning about element positions. **`--grid-w`/`--grid-h` only take effect with `--annotate` — they are ignored (silently) otherwise.** With no scope, annotation captures the full virtual screen so boxes line up across multi-monitor desktops; pass `--bbox`/`--selector`/`--monitor` to annotate just that region (element boxes translate into the scoped capture via the region's top-left origin).
 
 **Output**: `{output, path, width, height, coord_scale, backend, region}`
 
@@ -109,19 +108,22 @@ agent-windows screenshot --annotate --grid-w 3 --grid-h 3   # + 3×3 reference g
 
 ### ground
 
-Visual model grounding: locate element coordinates from a description.
+Visual model grounding: locate element coordinates from a description. Coordinates are always returned; `--screenshot` gates whether a marked image is saved.
 
 ```bash
-agent-windows ground "Submit button"
-agent-windows ground "Submit button" --single-pass   # 1 API call, ~2x faster, lower precision
+agent-windows ground "Submit button"                       # coords only (no disk write)
+agent-windows ground "Submit button" --screenshot          # + marked screenshot (default path)
+agent-windows ground "Submit button" --screenshot C:\m.png # + marked screenshot to path
+agent-windows ground "Submit button" --single-pass         # 1 API call, ~2x faster, lower precision
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `description` | str | **required** | Element description to locate |
+| `--screenshot` | str | _absent_ | Save a crosshair-marked screenshot: bare = default save path, `PATH` = custom path, omitted = no disk write (coords only). The bare form is filled in by argv preprocessing (the bundled Click fork cannot express optional-value flags natively). |
 | `--single-pass` | bool | `false` | Skip the fine-pass API call: one round-trip instead of two (faster, lower cost) at the cost of precision — coarse coordinate only. Overrides config `vlm.single_pass` for this call. |
 
-**Output**: `{output, x, y, confidence, method, screenshot_path}`
+**Output**: `{output, x, y, confidence, method, screenshot_path}`. `screenshot_path` is empty unless `--screenshot` is given (CLI); the MCP `ground` tool always attaches a marked image and exposes `output` (not `--screenshot`) for a custom path.
 
 Precision: ±~100 px. Uses a two-pass coarse-to-fine strategy. Prefer `snapshot` for UIA-visible elements.
 

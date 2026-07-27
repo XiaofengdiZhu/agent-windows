@@ -26,7 +26,11 @@ Locates one element by natural-language description using a two-pass coarse-to-f
 agent-windows ground "the Submit button"
 agent-windows ground "打印图标"
 agent-windows ground "the search box in the top-right corner"
+agent-windows ground "the print icon" --screenshot         # + marked screenshot (default path)
+agent-windows ground "the print icon" --screenshot out.png # ...saved to a custom path
 ```
+
+By default `ground` returns coordinates only — **no screenshot is written to disk**. Pass `--screenshot` (bare) to save a crosshair-marked image at the default path, or `--screenshot PATH` for a custom location. The MCP `ground` tool always attaches a marked image (no flag needed); its `output` parameter overrides the save path.
 
 **How it works**:
 1. Captures a screenshot.
@@ -48,7 +52,7 @@ agent-windows ground "the print icon" --single-pass   # fast, coarse-only
 | `y` | int | Y coordinate (physical pixels) |
 | `confidence` | str | `"high"`, `"medium"`, or `"low"` |
 | `method` | str | `"visual-two-pass"`, `"visual-two-pass-drift"`, `"visual-single-pass"`, or `"visual-coarse-only"` |
-| `screenshot_path` | str | Path to the annotated screenshot |
+| `screenshot_path` | str | Path to the marked screenshot (empty when `--screenshot` is omitted on the CLI; always populated for the MCP `ground` tool) |
 
 **Usage with click**:
 

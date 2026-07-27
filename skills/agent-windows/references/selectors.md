@@ -10,7 +10,7 @@ The index is positional — `@e3` always means "the third interactive element in
 
 ## Snapshot Output Format
 
-A typical `observe` or `snapshot` output has four sections. Below is a real `observe --snapshot` run (File Explorer on Windows) — note the non-round coordinates, Chinese names, and multi-window layout you'll commonly see in practice:
+A typical `observe` or `snapshot` output has four sections. Below is a real `observe` run (File Explorer on Windows) — note the non-round coordinates, Chinese names, and multi-window layout you'll commonly see in practice:
 
 ```
 ## Desktop State
