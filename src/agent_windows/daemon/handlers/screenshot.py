@@ -128,7 +128,10 @@ def _screenshot(params: dict) -> dict[str, Any]:
             try:
                 mb = _monitor_bbox(monitor)
                 origin = (mb[0], mb[1])
-            except Exception:
+            except (ValueError, OSError):
+                # _monitor_bbox raises ValueError (index out of range) or surfaces
+                # OSError from the EnumDisplayMonitors ctypes call; fall back to
+                # (0,0) rather than letting unrelated errors through silently.
                 origin = (0, 0)
         annotated_path = annotate_screenshot(
             image, elements, grid_lines=grid, origin=origin,
