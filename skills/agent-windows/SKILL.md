@@ -75,10 +75,11 @@ Three observation tools, each suited to different needs:
 ```bash
 agent-windows observe                    # snapshot + screenshot (always both)
 agent-windows observe --annotate         # + numbered @eN boxes on the screenshot
+agent-windows observe --interactive-only # trim snapshot text to the @eN table (token savings)
 agent-windows observe -d 0               # scope both to display 0
 ```
 
-Output includes: Desktop State (cursor, resolution), Windows table, Accessibility Tree, Interactive Elements table. For an individual piece use `snapshot`/`screenshot` directly; for visual grounding use `ground`.
+Output includes: Desktop State (cursor, resolution), Windows table, Accessibility Tree, Interactive Elements table. `--interactive-only` drops the Windows table + Accessibility Tree, leaving Desktop State + the Interactive Elements table (token savings; the screenshot is unaffected). For an individual piece use `snapshot`/`screenshot` directly; for visual grounding use `ground`.
 
 ### snapshot — UIA Tree Only
 
@@ -88,9 +89,10 @@ agent-windows snapshot --window "记事本"          # scope by title substring
 agent-windows snapshot --window notepad           # ...or process name (title→process fallback)
 agent-windows snapshot --window 0x1a2b            # ...or HWND (decimal or 0xHEX)
 agent-windows snapshot --active                   # foreground window only
+agent-windows snapshot --interactive-only         # just the @eN table (token savings)
 ```
 
-Returns a structured text view of the UIA accessibility tree. Contains the **Interactive Elements table** with `@eN` refs and their bounding box coordinates. This is the primary way to find clickable targets.
+Returns a structured text view of the UIA accessibility tree. Contains the **Interactive Elements table** with `@eN` refs and their bounding box coordinates. This is the primary way to find clickable targets. `--interactive-only` drops the Windows table + Accessibility Tree, returning just Desktop State + the `@eN` table — ~4x shorter, ideal when you only need actionable refs.
 
 `--window` / `--active` scope the traversal to a single top-level window — use when one large window (browser, IDE, complex dialog) would otherwise flood the output. `--window V` resolves as HWND (`12345` / `0x1a2b`), title substring (case-insensitive), then process name, mirroring `app switch`; first match wins and a warning is printed when multiple match. In single-window mode `@eN` restarts at `@e1` and maps to that window's subtree, written to the same 2s cache slot — so an immediate `click @e1` / `get-text @e1` lines up with the subtree, no cross-window mapping. `--window` and `--active` are mutually exclusive.
 

@@ -17,6 +17,7 @@ Combined observation: snapshot + screenshot (always both — the bundle). For in
 ```bash
 agent-windows observe                          # snapshot + screenshot
 agent-windows observe --annotate               # + numbered @eN boxes on the screenshot
+agent-windows observe --interactive-only       # trim snapshot text to the @eN table
 agent-windows observe -d 0                     # scope both to display 0
 ```
 
@@ -26,6 +27,7 @@ agent-windows observe -d 0                     # scope both to display 0
 | `--grid-w` | int | `0` | With `--annotate`: draw N vertical reference lines (X% labels) |
 | `--grid-h` | int | `0` | With `--annotate`: draw N horizontal reference lines (Y% labels) |
 | `--display` / `-d` | list[int] | `[]` | Limit snapshot data to the given display index(es), repeatable; the screenshot is cropped to the selected displays' union. Omit for the full desktop. |
+| `--interactive-only` | bool | `false` | Drop the Windows table + Accessibility Tree from the snapshot text; keep Desktop State + the @eN table (token savings). The screenshot is unaffected. |
 
 `--display` scopes the snapshot (windows/elements/cursor, see `snapshot`) and crops the screenshot to the union of the selected display(s).
 
@@ -45,6 +47,7 @@ agent-windows snapshot --window "记事本"            # scope by title substrin
 agent-windows snapshot --window notepad             # ...or process name (title→process fallback)
 agent-windows snapshot --window 0x1a2b              # ...or HWND (decimal or 0xHEX)
 agent-windows snapshot --active                     # foreground window only
+agent-windows snapshot --interactive-only           # just the @eN table (token savings)
 ```
 
 | Parameter | Type | Default | Description |
@@ -52,6 +55,7 @@ agent-windows snapshot --active                     # foreground window only
 | `--display` / `-d` | list[int] | `[]` | Limit windows/interactive-elements/cursor to the given display index(es), repeatable (e.g. `-d 0 -d 1`). Omit for the full desktop. |
 | `--window` | str | `""` | Scope to one top-level window. `VALUE` is an HWND (decimal `12345` or `0xHEX`), a title substring (case-insensitive), or a process name — title misses fall back to process match, same as `app switch`. First match wins; multiple matches print a `⚠ Matched N windows ...` warning at the top (pass the HWND for determinism). Zero matches → `INVALID_PARAMS` (`Window not found`). |
 | `--active` | bool | `false` | Scope to the foreground window (`GetForegroundWindow`). Mutually exclusive with `--window` (both given → `INVALID_PARAMS`). |
+| `--interactive-only` | bool | `false` | Drop the Windows table + Accessibility Tree; return only Desktop State + the @eN Interactive Elements table (token savings). |
 
 Uses config `tree.max_depth` (default 15), `tree.max_elements` (default 200), `tree.timeout` (default 10s), `tree.include_invisible`, `tree.include_offscreen`.
 
