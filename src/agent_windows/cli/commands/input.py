@@ -32,41 +32,62 @@ def parse_coord(raw: str) -> int:
     return int(raw.removeprefix(_NEG_COORD_MARKER))
 
 
-def _xy_or_selector(coords: list[int] | None, selector: str) -> dict:
-    """Assemble the coordinate params for a mouse command. (TODO #13)
-
-    ``--selector @eN`` overrides positional ``X Y``. Exactly one must be given.
-    Returns ``{"selector": s}`` or ``{"x": .., "y": ..}`` — ready to splat into
-    ``_cmd`` alongside the command's other params.
+def _target_token(raw: str) -> str:
+    """Positional parser for mouse-command targets: strip the negative-coord
+    marker (added by ``_preprocess_argv``) and return the raw token — either an
+    ``@eN`` element ref or a numeric coordinate string. ``_xy_or_selector``
+    classifies and int-parses; ``parse_coord`` stays for ``drag``'s 4 int args.
     """
-    if selector:
-        return {"selector": selector}
-    if coords and len(coords) == 1:
+    return raw.removeprefix(_NEG_COORD_MARKER)
+
+
+def _xy_or_selector(tokens: list[str] | None) -> dict:
+    """Assemble the target for a mouse command: a single ``@eN`` element ref OR
+    two ``X Y`` coordinates. ``@eN`` is a first-class positional — detected by
+    its ``@e`` prefix, no ``--selector`` flag needed (matches expand/collapse/
+    get-text/element-state/wait, which already take ``@eN`` bare). Exactly one
+    form may be given; mixing is rejected. Returns ``{"selector": s}`` or
+    ``{"x": .., "y": ..}`` — ready to splat into ``_cmd``.
+    """
+    if not tokens:
+        raise typer.BadParameter("provide an @eN selector or X Y coordinates")
+    sels = [t for t in tokens if t.startswith("@e")]
+    nums = [t for t in tokens if not t.startswith("@e")]
+    if sels and nums:
+        raise typer.BadParameter("an @eN selector cannot be combined with X Y coordinates")
+    if sels:
+        if len(sels) != 1:
+            raise typer.BadParameter("expected a single @eN selector")
+        return {"selector": sels[0]}
+    if len(nums) == 1:
         # The likely user mistake: typed one number, forgot the second.
         raise typer.BadParameter("expected X Y (two coordinates); got one")
-    if not coords or len(coords) != 2:
-        raise typer.BadParameter("provide X Y coordinates, or --selector")
-    return {"x": coords[0], "y": coords[1]}
+    if len(nums) != 2:
+        raise typer.BadParameter("expected X Y (two coordinates)")
+    try:
+        return {"x": int(nums[0]), "y": int(nums[1])}
+    except ValueError:
+        raise typer.BadParameter("coordinates must be integers")
 
 
 @app.command()
 def click(
     ctx: typer.Context,
-    coords: list[int] = typer.Argument(None, parser=parse_coord, help="X Y coordinates (omit with --selector)"),
-    selector: str = typer.Option("", "--selector", "-s", help="Element ref (@eN); overrides X Y"),
+    target: list[str] = typer.Argument(None, parser=_target_token,
+                                       help="@eN element ref OR X Y coordinates"),
     right: bool = typer.Option(False, "--right", help="Right-click"),
     double: bool = typer.Option(False, "--double", help="Double-click"),
     background: bool = typer.Option(False, "--background",
                                     help="No-focus-steal click via UIA pattern (Invoke/Toggle/Select); "
                                          "left single-click only, errors if unsupported"),
 ) -> None:
-    """Mouse click at (X, Y) or at an element (@eN via --selector).
+    """Mouse click at (X, Y) or at an element (@eN).
 
     --background delivers the click through the element's UIA pattern without
     stealing foreground (no flash) — works on UWP/WinUI3/packaged apps. Errors
     with BACKGROUND_UNAVAILABLE (-1007) if the element has no invokable pattern.
     """
-    _cmd(ctx, "click", **_xy_or_selector(coords, selector),
+    _cmd(ctx, "click", **_xy_or_selector(target),
          right=right, double=double, background=background)
 
 
@@ -99,67 +120,67 @@ def type_text(
 @app.command()
 def scroll(
     ctx: typer.Context,
-    coords: list[int] = typer.Argument(None, parser=parse_coord, help="X Y coordinates (omit with --selector)"),
-    selector: str = typer.Option("", "--selector", "-s", help="Element ref (@eN); overrides X Y"),
+    target: list[str] = typer.Argument(None, parser=_target_token,
+                                       help="@eN element ref OR X Y coordinates"),
     direction: str = typer.Option("down", "--direction", help="Scroll direction: up/down"),
     amount: int = typer.Option(3, "--amount", help="Scroll amount"),
 ) -> None:
-    """Scroll at (X, Y) or at an element (@eN via --selector)."""
-    _cmd(ctx, "scroll", **_xy_or_selector(coords, selector),
+    """Scroll at (X, Y) or at an element (@eN)."""
+    _cmd(ctx, "scroll", **_xy_or_selector(target),
          direction=direction, amount=amount)
 
 
 @app.command()
 def move(
     ctx: typer.Context,
-    coords: list[int] = typer.Argument(None, parser=parse_coord, help="X Y coordinates (omit with --selector)"),
-    selector: str = typer.Option("", "--selector", "-s", help="Element ref (@eN); overrides X Y"),
+    target: list[str] = typer.Argument(None, parser=_target_token,
+                                       help="@eN element ref OR X Y coordinates"),
 ) -> None:
-    """Move mouse to (X, Y) or to an element (@eN via --selector)."""
-    _cmd(ctx, "move", **_xy_or_selector(coords, selector))
+    """Move mouse to (X, Y) or to an element (@eN)."""
+    _cmd(ctx, "move", **_xy_or_selector(target))
 
 
 @app.command()
 def dblclick(
     ctx: typer.Context,
-    coords: list[int] = typer.Argument(None, parser=parse_coord, help="X Y coordinates (omit with --selector)"),
-    selector: str = typer.Option("", "--selector", "-s", help="Element ref (@eN); overrides X Y"),
+    target: list[str] = typer.Argument(None, parser=_target_token,
+                                       help="@eN element ref OR X Y coordinates"),
     right: bool = typer.Option(False, "--right", help="Right-button double-click"),
 ) -> None:
-    """Double-click at (X, Y) or at an element (@eN via --selector)."""
-    _cmd(ctx, "dblclick", **_xy_or_selector(coords, selector), right=right)
+    """Double-click at (X, Y) or at an element (@eN)."""
+    _cmd(ctx, "dblclick", **_xy_or_selector(target), right=right)
 
 
 @app.command()
 def hover(
     ctx: typer.Context,
-    coords: list[int] = typer.Argument(None, parser=parse_coord, help="X Y coordinates (omit with --selector)"),
-    selector: str = typer.Option("", "--selector", "-s", help="Element ref (@eN); overrides X Y"),
+    target: list[str] = typer.Argument(None, parser=_target_token,
+                                       help="@eN element ref OR X Y coordinates"),
 ) -> None:
-    """Hover at (X, Y) or at an element (@eN via --selector)."""
-    _cmd(ctx, "hover", **_xy_or_selector(coords, selector))
+    """Hover at (X, Y) or at an element (@eN)."""
+    _cmd(ctx, "hover", **_xy_or_selector(target))
 
 
 @app.command(name="mouse-down")
 def mouse_down(
     ctx: typer.Context,
-    coords: list[int] = typer.Argument(None, parser=parse_coord, help="X Y coordinates (omit with --selector)"),
-    selector: str = typer.Option("", "--selector", "-s", help="Element ref (@eN); overrides X Y"),
+    target: list[str] = typer.Argument(None, parser=_target_token,
+                                       help="@eN element ref OR X Y coordinates"),
     button: str = typer.Option("left", "--button", help="Mouse button: left, right, middle"),
 ) -> None:
-    """Press and hold mouse button at (X, Y) or at an element (@eN via --selector)."""
-    _cmd(ctx, "mouse_down", **_xy_or_selector(coords, selector), button=button)
+    """Press and hold mouse button at (X, Y) or at an element (@eN)."""
+    _cmd(ctx, "mouse_down", **_xy_or_selector(target), button=button)
 
 
 @app.command(name="mouse-up")
 def mouse_up(
     ctx: typer.Context,
-    coords: list[int] = typer.Argument(None, parser=parse_coord, help="X Y coordinates (omit with --selector)"),
-    selector: str = typer.Option("", "--selector", "-s", help="Element ref (@eN); overrides X Y"),
+    target: list[str] = typer.Argument(None, parser=_target_token,
+                                       help="@eN element ref OR X Y coordinates"),
     button: str = typer.Option("left", "--button", help="Mouse button: left, right, middle"),
 ) -> None:
-    """Release mouse button at (X, Y) or at an element (@eN via --selector)."""
-    _cmd(ctx, "mouse_up", **_xy_or_selector(coords, selector), button=button)
+    """Release mouse button at (X, Y) or at an element (@eN)."""
+    _cmd(ctx, "mouse_up", **_xy_or_selector(target), button=button)
 
 
 @app.command()

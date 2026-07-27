@@ -135,23 +135,24 @@ class TestInputCommands:
         assert method == "key_up"
         assert params == {"keys": "ctrl+shift+a"}
 
-    # ── --selector / -s (TODO #13) ─────────────────────────────────────
+    # ── @eN selector positional / X Y coords ───────────────────────────
 
     @patch("agent_windows.cli.commands.input._cmd")
-    def test_click_selector_overrides_coords(self, mock_cmd):
-        """--selector @eN sends selector param; no x/y in params."""
-        result = runner.invoke(app, ["click", "--selector", "@e3", "--right"])
+    def test_click_selector_param(self, mock_cmd):
+        """@eN as a bare positional sends selector param; no x/y in params."""
+        result = runner.invoke(app, ["click", "@e3", "--right"])
         assert result.exit_code == 0
         _, params = _cmd_calls(mock_cmd)[0]
         assert params == {"selector": "@e3", "right": True, "double": False, "background": False}
 
     @patch("agent_windows.cli.commands.input._cmd")
-    def test_click_short_flag_selector(self, mock_cmd):
-        """-s is the short alias for --selector."""
-        runner.invoke(app, ["click", "-s", "@e2"])
-        _, params = _cmd_calls(mock_cmd)[0]
-        assert params["selector"] == "@e2"
-        assert "x" not in params
+    def test_click_legacy_selector_flags_rejected(self, mock_cmd):
+        """--selector/-s were removed (hard-break); Typer rejects them as unknown
+        options (non-zero exit) and never reaches _cmd."""
+        for argv_ in (["click", "-s", "@e2"], ["click", "--selector", "@e3"]):
+            result = runner.invoke(app, argv_)
+            assert result.exit_code != 0, f"{argv_}: expected rejection"
+        mock_cmd.assert_not_called()
 
     @patch("agent_windows.cli.commands.input._cmd")
     def test_click_coords_still_work_without_selector(self, mock_cmd):
@@ -176,7 +177,7 @@ class TestInputCommands:
 
     @patch("agent_windows.cli.commands.input._cmd")
     def test_scroll_selector(self, mock_cmd):
-        runner.invoke(app, ["scroll", "-s", "@e5", "--direction", "up"])
+        runner.invoke(app, ["scroll", "@e5", "--direction", "up"])
         _, params = _cmd_calls(mock_cmd)[0]
         assert params == {"selector": "@e5", "direction": "up", "amount": 3}
 
@@ -350,8 +351,8 @@ class TestNegativeCoordinates:
         assert params["x"] == 100 and params["y"] == 200
 
     def test_selector_still_works_via_main(self):
-        """--selector/-s path is unaffected by preprocessing."""
-        code, calls = self._run(["click", "-s", "@e2"],
+        """@eN bare-positional path is unaffected by preprocessing."""
+        code, calls = self._run(["click", "@e2"],
                                 "agent_windows.cli.commands.input")
         assert code == 0
         _, params = calls[0]

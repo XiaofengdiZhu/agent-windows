@@ -483,22 +483,38 @@ fn opt_float(p: &ParsedArgs, names: &[&str], default: f64) -> Result<f64, ParseE
     }
 }
 
-fn parse_xy(rest: &[String], method: &str) -> Result<Action, ParseError> {
-    // `--selector/-s @eN` overrides X Y (mirrors input.py:_xy_or_selector). The
-    // selector must start with "@e"; an empty/bare value is treated as a bad
-    // selector so the daemon surfaces a clear ELEMENT_NOT_FOUND rather than the
-    // launcher silently sending an empty string.
-    let p = ParsedArgs::parse(rest, &["selector", "s"]);
-    if let Some(sel) = p.value(&["selector", "s"]) {
-        if sel.is_empty() {
-            return Err(invalid("--selector/-s requires an @eN ref"));
+/// Reject the removed `--selector`/`-s` flag on mouse commands. `@eN` is now a
+/// bare positional (prefix-detected), so the flag is redundant; silently ignoring
+/// it (ParsedArgs treats unknown `-flags` as presence) would hide the mistake, so
+/// we error instead — mirroring `parse_observe`'s legacy-flag rejection. Python
+/// (Typer) rejects unknown options automatically; this brings the launcher to parity.
+fn reject_legacy_selector(rest: &[String]) -> Result<(), ParseError> {
+    for a in rest {
+        if a == "-s" || a == "--selector" || a.starts_with("--selector=") {
+            return Err(invalid(
+                "--selector/-s was removed; pass the @eN ref as a bare positional \
+                 (e.g. `click @e3`)",
+            ));
         }
+    }
+    Ok(())
+}
+
+fn parse_xy(rest: &[String], method: &str) -> Result<Action, ParseError> {
+    // `@eN` as a bare positional overrides X Y (mirrors input.py:_xy_or_selector).
+    // @eN is prefix-detected — no --selector flag (matches expand/collapse/get-text/
+    // element-state/wait, which already take @eN bare). A stale/unknown ref surfaces
+    // a clear ELEMENT_NOT_FOUND from the daemon.
+    reject_legacy_selector(rest)?;
+    let p = ParsedArgs::parse(rest, &[]);
+    let first = p.pos(0, "target")?;
+    if first.starts_with("@e") {
         return Ok(Action::Call {
             method: method.into(),
-            params: json!({ "selector": sel }),
+            params: json!({ "selector": first }),
         });
     }
-    let x: i64 = p.pos(0, "x")?.parse().map_err(|_| invalid("x must be an integer"))?;
+    let x: i64 = first.parse().map_err(|_| invalid("x must be an integer"))?;
     let y: i64 = p.pos(1, "y")?.parse().map_err(|_| invalid("y must be an integer"))?;
     Ok(Action::Call {
         method: method.into(),
@@ -507,15 +523,16 @@ fn parse_xy(rest: &[String], method: &str) -> Result<Action, ParseError> {
 }
 
 fn parse_xy_opts(rest: &[String], method: &str, flags: &[&str]) -> Result<Action, ParseError> {
-    let p = ParsedArgs::parse(rest, &["selector", "s"]);
+    // @eN bare positional → selector; else X Y coords (mirrors input.py). No
+    // --selector flag — @eN is prefix-detected (see parse_xy).
+    reject_legacy_selector(rest)?;
+    let p = ParsedArgs::parse(rest, &[]);
     let mut params = Map::new();
-    if let Some(sel) = p.value(&["selector", "s"]) {
-        if sel.is_empty() {
-            return Err(invalid("--selector/-s requires an @eN ref"));
-        }
-        params.insert("selector".into(), sel.into());
+    let first = p.pos(0, "target")?;
+    if first.starts_with("@e") {
+        params.insert("selector".into(), first.into());
     } else {
-        let x: i64 = p.pos(0, "x")?.parse().map_err(|_| invalid("x must be an integer"))?;
+        let x: i64 = first.parse().map_err(|_| invalid("x must be an integer"))?;
         let y: i64 = p.pos(1, "y")?.parse().map_err(|_| invalid("y must be an integer"))?;
         params.insert("x".into(), x.into());
         params.insert("y".into(), y.into());
@@ -527,15 +544,16 @@ fn parse_xy_opts(rest: &[String], method: &str, flags: &[&str]) -> Result<Action
 }
 
 fn parse_mouse_button(rest: &[String], method: &str) -> Result<Action, ParseError> {
-    let p = ParsedArgs::parse(rest, &["button", "selector", "s"]);
+    // @eN bare positional → selector; else X Y coords (see parse_xy). --button
+    // stays a value opt.
+    reject_legacy_selector(rest)?;
+    let p = ParsedArgs::parse(rest, &["button"]);
     let mut params = Map::new();
-    if let Some(sel) = p.value(&["selector", "s"]) {
-        if sel.is_empty() {
-            return Err(invalid("--selector/-s requires an @eN ref"));
-        }
-        params.insert("selector".into(), sel.into());
+    let first = p.pos(0, "target")?;
+    if first.starts_with("@e") {
+        params.insert("selector".into(), first.into());
     } else {
-        let x: i64 = p.pos(0, "x")?.parse().map_err(|_| invalid("x must be an integer"))?;
+        let x: i64 = first.parse().map_err(|_| invalid("x must be an integer"))?;
         let y: i64 = p.pos(1, "y")?.parse().map_err(|_| invalid("y must be an integer"))?;
         params.insert("x".into(), x.into());
         params.insert("y".into(), y.into());
@@ -575,19 +593,20 @@ fn parse_drag(rest: &[String]) -> Result<Action, ParseError> {
 }
 
 fn parse_scroll(rest: &[String]) -> Result<Action, ParseError> {
-    let p = ParsedArgs::parse(rest, &["direction", "amount", "selector", "s"]);
+    // @eN bare positional → selector; else X Y coords (see parse_xy). --direction
+    // and --amount stay value opts.
+    reject_legacy_selector(rest)?;
+    let p = ParsedArgs::parse(rest, &["direction", "amount"]);
     let direction = p.value(&["direction"]).unwrap_or("down").to_string();
     let amount: i64 = opt_int(&p, &["amount"], 3)?;
-    if let Some(sel) = p.value(&["selector", "s"]) {
-        if sel.is_empty() {
-            return Err(invalid("--selector/-s requires an @eN ref"));
-        }
+    let first = p.pos(0, "target")?;
+    if first.starts_with("@e") {
         return Ok(Action::Call {
             method: "scroll".into(),
-            params: json!({ "selector": sel, "direction": direction, "amount": amount }),
+            params: json!({ "selector": first, "direction": direction, "amount": amount }),
         });
     }
-    let x: i64 = p.pos(0, "x")?.parse().map_err(|_| invalid("x must be an integer"))?;
+    let x: i64 = first.parse().map_err(|_| invalid("x must be an integer"))?;
     let y: i64 = p.pos(1, "y")?.parse().map_err(|_| invalid("y must be an integer"))?;
     Ok(Action::Call {
         method: "scroll".into(),
@@ -1555,10 +1574,10 @@ mod tests {
     #[test]
     fn missing_argument_typed() {
         let g = GlobalFlags::default();
-        // `click` needs x/y positionals.
+        // `click` needs a target (@eN or x/y positionals).
         let e = parse(&argv(&["click"]), &g).unwrap_err();
         assert_eq!(e.type_name(), "missing_argument");
-        assert!(e.message().contains("x"));
+        assert!(e.message().contains("target"));
     }
 
     #[test]
@@ -2141,10 +2160,10 @@ mod tests {
     }
 
     #[test]
-    fn mouse_commands_accept_selector_override() {
+    fn mouse_commands_accept_bare_selector() {
         let g = GlobalFlags::default();
-        // click -s @e3 → selector, no x/y
-        match parse(&argv(&["click", "-s", "@e3"]), &g) {
+        // click @e3 → selector, no x/y
+        match parse(&argv(&["click", "@e3"]), &g) {
             Ok(Action::Call { method, params }) => {
                 assert_eq!(method, "click");
                 assert_eq!(params["selector"], "@e3");
@@ -2152,24 +2171,24 @@ mod tests {
             }
             other => panic!("got {:?}", other),
         }
-        // click --selector @e3 --right → selector + right flag
-        match parse(&argv(&["click", "--selector", "@e3", "--right"]), &g) {
+        // click @e3 --right → selector + right flag
+        match parse(&argv(&["click", "@e3", "--right"]), &g) {
             Ok(Action::Call { params, .. }) => {
                 assert_eq!(params["selector"], "@e3");
                 assert_eq!(params["right"], true);
             }
             other => panic!("got {:?}", other),
         }
-        // click --background forwards the background flag (UIA bypass path)
-        match parse(&argv(&["click", "-s", "@e3", "--background"]), &g) {
+        // click @e3 --background forwards the background flag (UIA bypass path)
+        match parse(&argv(&["click", "@e3", "--background"]), &g) {
             Ok(Action::Call { params, .. }) => {
                 assert_eq!(params["selector"], "@e3");
                 assert_eq!(params["background"], true);
             }
             other => panic!("got {:?}", other),
         }
-        // click without --background → background absent/false (default foreground)
-        match parse(&argv(&["click", "-s", "@e3"]), &g) {
+        // click @e3 without --background → background false (default foreground)
+        match parse(&argv(&["click", "@e3"]), &g) {
             Ok(Action::Call { params, .. }) => {
                 assert_eq!(params["background"], false);
             }
@@ -2184,31 +2203,35 @@ mod tests {
             }
             other => panic!("got {:?}", other),
         }
-        // mouse-down -s @e3 --button right
-        match parse(&argv(&["mouse-down", "-s", "@e3", "--button", "right"]), &g) {
+        // mouse-down @e3 --button right
+        match parse(&argv(&["mouse-down", "@e3", "--button", "right"]), &g) {
             Ok(Action::Call { params, .. }) => {
                 assert_eq!(params["selector"], "@e3");
                 assert_eq!(params["button"], "right");
             }
             other => panic!("got {:?}", other),
         }
-        // scroll -s @e3 --direction up
-        match parse(&argv(&["scroll", "-s", "@e3", "--direction", "up"]), &g) {
+        // scroll @e3 --direction up
+        match parse(&argv(&["scroll", "@e3", "--direction", "up"]), &g) {
             Ok(Action::Call { params, .. }) => {
                 assert_eq!(params["selector"], "@e3");
                 assert_eq!(params["direction"], "up");
             }
             other => panic!("got {:?}", other),
         }
-        // hover / move / dblclick / mouse-up also take selector
+        // hover / move / dblclick / mouse-up also take a bare @eN
         for cmd in &["hover", "move", "dblclick", "mouse-up"] {
-            match parse(&argv(&[cmd, "-s", "@e1"]), &g) {
+            match parse(&argv(&[cmd, "@e1"]), &g) {
                 Ok(Action::Call { params, .. }) => assert_eq!(params["selector"], "@e1"),
                 other => panic!("{}: got {:?}", cmd, other),
             }
         }
-        // empty selector → invalid_value
-        let e = parse(&argv(&["click", "-s", ""]), &g).unwrap_err();
+        // removed --selector/-s is rejected (hard-break), not silently dropped
+        assert!(parse(&argv(&["click", "-s", "@e3"]), &g).is_err());
+        assert!(parse(&argv(&["click", "--selector", "@e3"]), &g).is_err());
+        assert!(parse(&argv(&["click", "--selector=@e3"]), &g).is_err());
+        // a non-@e, non-integer target → invalid_value
+        let e = parse(&argv(&["click", "abc"]), &g).unwrap_err();
         assert_eq!(e.type_name(), "invalid_value");
     }
 
