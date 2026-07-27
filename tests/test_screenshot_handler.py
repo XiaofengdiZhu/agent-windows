@@ -391,6 +391,41 @@ def test_screenshot_annotate_no_scope_uses_full_screen_origin_zero(monkeypatch, 
     assert annotate_calls["origin"] == (0, 0)
 
 
+def test_screenshot_annotate_no_scope_uses_vscreen_top_left_origin(monkeypatch, tmp_path):
+    """annotate with no scope on a multi-monitor layout (vscreen top-left != (0,0))
+    passes origin=(vscreen.left, vscreen.top) so element boxes drawn in virtual-
+    desktop coords translate correctly into the captured image's pixel space.
+    Regression for Fix 1: previously hardcoded (0,0), shifting boxes by the
+    vscreen offset on layouts like (-1920, 0, 3840, 1080)."""
+    from agent_windows.daemon.handlers import screenshot as h
+    from PIL import Image
+
+    img = Image.new("RGB", (3840, 1080))
+    annotate_calls = {}
+    ann_path = tmp_path / "annotated.png"
+
+    def _annotate(image, elements, grid_lines=None, origin=(0, 0), **kw):
+        annotate_calls.update(origin=origin)
+        Image.new("RGB", image.size, (1, 2, 3)).save(ann_path)
+        return ann_path
+
+    monkeypatch.setattr("agent_windows.core.screenshot.capture_screenshot",
+                        lambda monitor=-1, bbox=None: img)
+    # Mirror test_region_full_virtual_screen_as_edges: monitor left of primary
+    # makes vscreen.top-left (-1920, 0) instead of (0, 0).
+    monkeypatch.setattr("agent_windows.core.screenshot.get_virtual_screen_rect",
+                        lambda: (-1920, 0, 3840, 1080))
+    monkeypatch.setattr("agent_windows.core.screenshot.annotate_screenshot", _annotate)
+    monkeypatch.setattr("agent_windows.core.tree.get_tree_snapshot",
+                        lambda **kw: {"interactive_elements": []})
+    monkeypatch.setattr("agent_windows.core.screenshot.save_and_cleanup",
+                        lambda image, output_path=None: output_path or "saved.png")
+    monkeypatch.setattr("agent_windows.utils.config.load_config", lambda: {})
+
+    h._screenshot({"use_annotation": True})
+    assert annotate_calls["origin"] == (-1920, 0)
+
+
 class TestPerCallScaleOverride:
     """TODO #15b: per-call scale/max_width/max_height override the config defaults."""
 

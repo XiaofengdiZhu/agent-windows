@@ -57,10 +57,13 @@ def _screenshot(params: dict) -> dict[str, Any]:
     # needs the capture to span a KNOWN region whose top-left (origin) lets us
     # translate each box into image pixels: a bbox/selector/monitor scope →
     # capture that region with origin = its top-left; NO scope → capture the
-    # FULL virtual screen with origin=(0,0). (dxcam's default no-bbox grab is
-    # primary-only, which would misalign boxes on a multi-monitor desktop —
-    # hence the explicit full-screen capture when no scope is given.) Annotation
-    # is checked alongside the normal capture so only one capture happens.
+    # FULL virtual screen with origin = its top-left (vscreen.left, vscreen.top),
+    # which is (0,0) only on a single-monitor layout — on multi-monitor layouts
+    # vscreen.top-left is non-zero (e.g. (-1920, 0) for a monitor left of primary),
+    # and using (0,0) would shift every box by that offset. (dxcam's default
+    # no-bbox grab is primary-only, which would misalign boxes on a multi-monitor
+    # desktop — hence the explicit full-screen capture when no scope is given.)
+    # Annotation is checked alongside the normal capture so only one capture happens.
     #
     # use_annotation may arrive as a string ("true"/"false") — some MCP clients
     # serialize bool params as strings. Raw bool("false") is True, so coerce via
@@ -114,7 +117,10 @@ def _screenshot(params: dict) -> dict[str, Any]:
         # annotate_screenshot can translate element boxes (vdesktop coords) into
         # image pixels.
         if annotation_fullscreen:
-            origin = (0, 0)
+            # Full virtual-screen capture: origin is the virtual-screen top-left
+            # (NOT (0,0)!) so boxes in virtual-desktop coords translate correctly
+            # into image pixels on multi-monitor layouts (vscreen.left/top != 0).
+            origin = (vscreen[0], vscreen[1])
         elif bbox:
             origin = (int(bbox[0]), int(bbox[1]))
         else:
