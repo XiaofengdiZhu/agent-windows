@@ -514,7 +514,7 @@ def annotate_screenshot(
     lattice with edge-percentage labels.
 
     Args:
-        image: PIL Image (full-screen capture; boxes use screen coords).
+        image: PIL Image (boxes use screen/virtual-desktop coords).
         elements: ElementInfo list (only items with a bbox are drawn). The Nth
             drawn box is labeled ``@e{N}`` to match the snapshot's refs.
         grid_lines: ``(width_divisions, height_divisions)`` — draw that many

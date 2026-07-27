@@ -90,7 +90,7 @@ def screenshot(
     annotate: bool = typer.Option(
         False, "--annotate",
         help="Overlay numbered detection boxes (@eN) for each interactive element; "
-             "honors --bbox/--selector/--monitor/--display (boxes translate to the scope)"),
+             "honors --bbox/--selector/--monitor (boxes translate to the scope)"),
     grid_w: int = typer.Option(
         0, "--grid-w",
         help="With --annotate: draw N vertical reference lines (X%% labels)"),
