@@ -390,3 +390,90 @@ class TestDxcamBypassForVirtualScreen:
         assert result is not None
         assert result[0] == 0  # output_idx 0
 
+
+class TestAnnotateOriginTranslation:
+    """annotate_screenshot(origin=...) translates element bboxes (virtual-desktop
+    coords) by -origin so numbered @eN boxes land correctly on a scoped capture
+    whose top-left is not (0,0) — e.g. a single-display or bbox crop. Task 1
+    (β-core foundation): later screenshot/observe handlers pass
+    origin=(region.left, region.top) when annotating a scoped capture."""
+
+    def test_origin_translates_boxes_by_negative_origin(self, monkeypatch):
+        """Boxes shift by -origin: with origin=(50,50), an element at
+        (100,100,150,150) is drawn at (50,50,100,100); with origin=(0,0) it
+        stays at (100,100,150,150). The two drawn regions are disjoint, so each
+        origin must draw its own band and leave the other band empty.
+
+        Robustness note: the brief's exact-pixel assertions picked y=75, which
+        is above the un-translated box's y-range (y>=100) and so could not prove
+        the origin=(0,0) case. Instead we scan a column band INSIDE each box's
+        y-range — directly proving translation without pixel-placement
+        ambiguity from outline width or label-badge rendering.
+        """
+        from agent_windows.core import screenshot as ss
+
+        BG = (128, 128, 128)
+        img = _solid_image(200, 200, BG)
+        el = _el(100, 100, 150, 150)  # virtual-desktop coords
+        captured: dict = {}
+        monkeypatch.setattr(
+            ss, "save_and_cleanup",
+            lambda marked, output_path=None: captured.__setitem__("img", marked)
+            or (output_path or "p.png"),
+        )
+
+        # origin=(50,50): box (100,100,150,150) → drawn at (50,50,100,100).
+        ss.annotate_screenshot(img, [el], origin=(50, 50))
+        translated = captured["img"]
+        # Translated left-border column x=50 carries drawn pixels across the
+        # box's y-range [50, 99]; the un-translated location (x=100, y=[100,149])
+        # is still background.
+        translated_band = [translated.getpixel((50, y)) for y in range(50, 100)]
+        assert any(p != BG for p in translated_band), \
+            "translated box left border not drawn at x=50"
+        old_band = [translated.getpixel((100, y)) for y in range(100, 150)]
+        assert all(p == BG for p in old_band), \
+            "un-translated box location should be empty under origin=(50,50)"
+
+        # origin=(0,0) default: box stays at (100,100,150,150).
+        captured.clear()
+        ss.annotate_screenshot(img, [el])
+        default = captured["img"]
+        default_band = [default.getpixel((100, y)) for y in range(100, 150)]
+        assert any(p != BG for p in default_band), \
+            "default-origin box left border not drawn at x=100"
+        translated_empty = [default.getpixel((50, y)) for y in range(50, 100)]
+        assert all(p == BG for p in translated_empty), \
+            "translated location should be empty under default origin"
+
+    def test_origin_default_is_zero_zero(self):
+        """Omitting origin is identical to origin=(0,0) — existing callers
+        (screenshot/observe --annotate) keep their pre-Task-1 behavior."""
+        from agent_windows.core import screenshot as ss
+        import inspect
+
+        sig = inspect.signature(ss.annotate_screenshot)
+        assert sig.parameters["origin"].default == (0, 0)
+
+    def test_origin_shifts_box_partly_off_capture(self, monkeypatch):
+        """An element whose translated bbox extends past the captured image's
+        left edge is clamped on-canvas (existing clamp logic now applies to the
+        translated coords), preserving the @eN label visibility guarantee."""
+        from agent_windows.core import screenshot as ss
+
+        BG = (128, 128, 128)
+        img = _solid_image(100, 100, BG)
+        # Element at virtual-desktop (10, 10, 60, 60); capture origin=(30, 30)
+        # → translated box top-left at (-20, -20): clamped to (0, 0).
+        el = _el(10, 10, 60, 60)
+        captured: dict = {}
+        monkeypatch.setattr(
+            ss, "save_and_cleanup",
+            lambda marked, output_path=None: captured.__setitem__("img", marked)
+            or (output_path or "p.png"),
+        )
+        ss.annotate_screenshot(img, [el], origin=(30, 30))
+        marked = captured["img"]
+        # Clamped top-left (0,0)+padding must carry the @e1 badge / box border.
+        assert marked.getpixel((0, 0)) != BG
+

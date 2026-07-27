@@ -502,6 +502,7 @@ def annotate_screenshot(
     elements: list,
     grid_lines: tuple[int, int] | None = None,
     output_path: str | Path | None = None,
+    origin: tuple[int, int] = (0, 0),
     box_color: str = "yellow",
     grid_color: str = "cyan",
 ) -> Path:
@@ -519,6 +520,12 @@ def annotate_screenshot(
         grid_lines: ``(width_divisions, height_divisions)`` — draw that many
             vertical / horizontal lines. None or (0, 0) skips the grid.
         output_path: Save path. If None, auto-generates.
+        origin: ``(x0, y0)`` top-left of the captured region in virtual-desktop
+            coords. Element bboxes are virtual-desktop screen coords, so each
+            box is translated by ``(-x0, -y0)`` before drawing — this lets
+            annotation honor a bbox/monitor/display scope instead of forcing a
+            full virtual-screen capture. Default ``(0, 0)`` = full virtual screen
+            (unchanged behavior).
         box_color: Detection-box outline color.
         grid_color: Grid-line color.
 
@@ -530,6 +537,7 @@ def annotate_screenshot(
     marked = image.copy()
     draw = ImageDraw.Draw(marked)
     img_w, img_h = image.size
+    ox, oy = origin
 
     try:
         font = ImageFont.load_default(size=14)
@@ -537,18 +545,19 @@ def annotate_screenshot(
         font = ImageFont.load_default()
 
     # Numbered detection boxes — 1-based to match snapshot @eN refs. Element
-    # bboxes are virtual-desktop screen coords; on multi-display setups an
-    # element may extend past the captured image edge (or sit partly off-screen
-    # with negative origin). Clamp each box to the image bounds and skip boxes
-    # with no on-image area, so the box + its @eN label are always visible.
+    # bboxes are virtual-desktop screen coords; translate by -origin so a scoped
+    # capture (non-(0,0) origin) lands boxes correctly. Then clamp each box to
+    # the image bounds and skip boxes with no on-image area — a translated box
+    # may extend past the captured edge (or sit partly off-screen with negative
+    # coords), so the box + its @eN label stay visible on-canvas.
     for i, el in enumerate(elements, 1):
         if not getattr(el, "bbox", None):
             continue
         b = el.bbox
-        x1 = max(0, b.left)
-        y1 = max(0, b.top)
-        x2 = min(img_w, b.right)
-        y2 = min(img_h, b.bottom)
+        x1 = max(0, b.left - ox)
+        y1 = max(0, b.top - oy)
+        x2 = min(img_w, b.right - ox)
+        y2 = min(img_h, b.bottom - oy)
         if x2 <= x1 or y2 <= y1:
             continue  # box is entirely outside the captured image
         draw.rectangle([(x1, y1), (x2 - 1, y2 - 1)], outline=box_color, width=2)
