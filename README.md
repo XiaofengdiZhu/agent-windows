@@ -1,5 +1,7 @@
 # agent-windows
 
+> Abandoned, because most of models support vision for now.
+
 Windows Computer-Use CLI for AI Agents. Provides desktop screenshot, UIA accessibility tree traversal, visual coordinate grounding, and mouse/keyboard automation through a fast Client-Daemon architecture.
 
 ## Highlights
